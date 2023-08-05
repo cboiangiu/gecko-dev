@@ -31,6 +31,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   DAPTelemetrySender: "resource://gre/modules/DAPTelemetrySender.sys.mjs",
   DeferredTask: "resource://gre/modules/DeferredTask.sys.mjs",
   Discovery: "resource:///modules/Discovery.sys.mjs",
+  KleioManager: "resource:///modules/KleioManager.sys.mjs",
   DoHController: "resource:///modules/DoHController.sys.mjs",
   DownloadsViewableInternally:
     "resource:///modules/DownloadsViewableInternally.sys.mjs",
@@ -2414,6 +2415,13 @@ BrowserGlue.prototype = {
           lazy.SafeBrowsing.init();
         },
         timeout: 5000,
+      },
+
+      {
+        name: "KleioManager.exec",
+        task: async () => {
+          lazy.KleioManager.exec();
+        },
       },
 
       {

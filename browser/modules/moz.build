@@ -133,6 +133,7 @@ EXTRA_JS_MODULES += [
     "FaviconLoader.sys.mjs",
     "FeatureCallout.sys.mjs",
     "HomePage.sys.mjs",
+    "KleioManager.sys.mjs",
     "LaterRun.sys.mjs",
     "NewTabPagePreloading.sys.mjs",
     "OpenInTabsUtils.sys.mjs",

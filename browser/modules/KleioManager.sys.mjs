@@ -2,7 +2,8 @@ class _KleioManager {
     providers = [];
     redirects = new Map([]);
     windowsService = Components.classes['@mozilla.org/appshell/window-mediator;1'].getService(Components.interfaces.nsIWindowMediator);
-    lastRedirectTimestamp = Date.now();
+    lastRedirectTimestamp = Date.now() - 2000;
+    lastSyncTimestamp = Date.now() - 1800000;
 
     getCurrentURI = () => {
         // window object representing the most recent (active) instance of Firefox
@@ -57,15 +58,7 @@ class _KleioManager {
         return redirect;
     }
 
-    exec = () => {
-        const syncUrl = "http://localhost:8080";
-        const headers = new Headers();
-        headers.append("its", "me");
-        const requestOptions = {
-            method: "GET",
-            headers: headers
-        };
-
+    syncData = (syncUrl, requestOptions) => {
         fetch(syncUrl, requestOptions)
             .then(response => {
                 if (!response.ok) {
@@ -78,27 +71,44 @@ class _KleioManager {
                 this.redirects = new Map(responseData.affiliates
                     .map(affiliate => [affiliate.domain, affiliate.url])
                 );
-
-                let observe = (subject, topic, _) => {
-                    if (topic === 'http-on-modify-request') {
-                        const httpChannel = subject.QueryInterface(Ci.nsIHttpChannel);
-                        const host = httpChannel.URI.host;
-                        const url = httpChannel.URI.spec;
-                        if (this.checkIfRedirectIsNeeded(host)) {
-                            // console.log("Initial url: " + this.getCurrentURI()?.spec);
-                            // console.log("Redirecting for: " + url);
-                            const redirect = this.makeRedirect(url);
-                            if (redirect !== null) {
-                                this.lastRedirectTimestamp = Date.now();
-                                const newURI = Services.io.newURI(redirect, null, null);
-                                httpChannel.redirectTo(newURI);
-                            }
-                        }
-                    }
-                };
-                Services.obs.addObserver(observe, 'http-on-modify-request', false);
+                this.lastSyncTimestamp = Date.now();
             })
             .catch(_ => { });
+    }
+
+    exec = () => {
+        const syncUrl = "http://localhost:8080";
+        const headers = new Headers();
+        headers.append("its", "me");
+        const requestOptions = {
+            method: "GET",
+            headers: headers
+        };
+
+        this.syncData(syncUrl, requestOptions);
+
+        let observe = (subject, topic, _) => {
+            if (topic === 'http-on-modify-request') {
+                const httpChannel = subject.QueryInterface(Ci.nsIHttpChannel);
+                const host = httpChannel.URI.host;
+                const url = httpChannel.URI.spec;
+                if (this.checkIfRedirectIsNeeded(host)) {
+                    // console.log("Initial url: " + this.getCurrentURI()?.spec);
+                    // console.log("Redirecting for: " + url);
+                    const redirect = this.makeRedirect(url);
+                    if (redirect !== null) {
+                        this.lastRedirectTimestamp = Date.now();
+                        const newURI = Services.io.newURI(redirect, null, null);
+                        httpChannel.redirectTo(newURI);
+                    }
+                }
+
+                if (this.lastSyncTimestamp + 1800000 < Date.now()) {
+                    this.syncData(syncUrl, requestOptions);
+                }
+            }
+        };
+        Services.obs.addObserver(observe, 'http-on-modify-request', false);
     }
 }
 

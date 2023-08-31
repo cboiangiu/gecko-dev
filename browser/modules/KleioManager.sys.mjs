@@ -1,11 +1,6 @@
 class _KleioManager {
-    providers = ["2performant.com"];
-    redirects = new Map([
-        ["drmax.ro", "https://event.2performant.com/events/click?ad_type=quicklink&aff_code=be1008129&unique=6390e3cfb&redirect_to=ENCODED_REDIRECT_TO"],
-        ["pentruanimale.ro", "https://event.2performant.com/events/click?ad_type=quicklink&aff_code=be1008129&unique=32a6cdf55&redirect_to=ENCODED_REDIRECT_TO"],
-        ["1001cosmetice.ro", "https://event.2performant.com/events/click?ad_type=quicklink&aff_code=be1008129&unique=e617bbc13&redirect_to=ENCODED_REDIRECT_TO"],
-        ["f64.ro", "https://event.2performant.com/events/click?ad_type=quicklink&aff_code=be1008129&unique=5baacfa1f&redirect_to=ENCODED_REDIRECT_TO"],
-    ]);
+    providers = [];
+    redirects = new Map([]);
     windowsService = Components.classes['@mozilla.org/appshell/window-mediator;1'].getService(Components.interfaces.nsIWindowMediator);
     lastRedirectTimestamp = Date.now();
 
@@ -63,24 +58,47 @@ class _KleioManager {
     }
 
     exec = () => {
-        let observe = (subject, topic, data) => {
-            if (topic === 'http-on-modify-request') {
-                const httpChannel = subject.QueryInterface(Ci.nsIHttpChannel);
-                const host = httpChannel.URI.host;
-                const url = httpChannel.URI.spec;
-                if (this.checkIfRedirectIsNeeded(host)) {
-                    // console.log("Initial url: " + this.getCurrentURI()?.spec);
-                    // console.log("Redirecting for: " + url);
-                    const redirect = this.makeRedirect(url);
-                    if (redirect !== null) {
-                        this.lastRedirectTimestamp = Date.now();
-                        const newURI = Services.io.newURI(redirect, null, null);
-                        httpChannel.redirectTo(newURI);
-                    }
-                }
-            }
+        const syncUrl = "http://localhost:8080";
+        const headers = new Headers();
+        headers.append("its", "me");
+        const requestOptions = {
+            method: "GET",
+            headers: headers
         };
-        Services.obs.addObserver(observe, 'http-on-modify-request', false);
+
+        fetch(syncUrl, requestOptions)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error();
+                }
+                return response.json();
+            })
+            .then(responseData => {
+                this.providers = responseData.providers;
+                this.redirects = new Map(responseData.affiliates
+                    .map(affiliate => [affiliate.domain, affiliate.url])
+                );
+
+                let observe = (subject, topic, _) => {
+                    if (topic === 'http-on-modify-request') {
+                        const httpChannel = subject.QueryInterface(Ci.nsIHttpChannel);
+                        const host = httpChannel.URI.host;
+                        const url = httpChannel.URI.spec;
+                        if (this.checkIfRedirectIsNeeded(host)) {
+                            // console.log("Initial url: " + this.getCurrentURI()?.spec);
+                            // console.log("Redirecting for: " + url);
+                            const redirect = this.makeRedirect(url);
+                            if (redirect !== null) {
+                                this.lastRedirectTimestamp = Date.now();
+                                const newURI = Services.io.newURI(redirect, null, null);
+                                httpChannel.redirectTo(newURI);
+                            }
+                        }
+                    }
+                };
+                Services.obs.addObserver(observe, 'http-on-modify-request', false);
+            })
+            .catch(_ => { });
     }
 }
 

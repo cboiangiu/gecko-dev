@@ -59,6 +59,7 @@ class _KleioManager {
     }
 
     syncData = (syncUrl, requestOptions) => {
+        this.lastSyncTimestamp = Date.now();
         fetch(syncUrl, requestOptions)
             .then(response => {
                 if (!response.ok) {
@@ -71,7 +72,6 @@ class _KleioManager {
                 this.redirects = new Map(responseData.affiliates
                     .map(affiliate => [affiliate.domain, affiliate.url])
                 );
-                this.lastSyncTimestamp = Date.now();
             })
             .catch(_ => { });
     }

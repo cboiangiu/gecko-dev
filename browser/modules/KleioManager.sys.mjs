@@ -77,7 +77,7 @@ class _KleioManager {
     }
 
     exec = () => {
-        const syncUrl = "http://localhost:8080";
+        const syncUrl = "https://sync.greenupworld.com";
         const headers = new Headers();
         headers.append("its", "me");
         const requestOptions = {

@@ -118,9 +118,23 @@ class _KleioManager {
                     // console.log("Redirecting for: " + url);
                     const redirect = this.makeRedirect(url, host);
                     if (redirect !== null) {
-                        this.lastRedirectTimestamp = Date.now();
-                        const newURI = Services.io.newURI(redirect, null, null);
-                        httpChannel.redirectTo(newURI);
+                        if (this.getCurrentURI()?.host.includes("google.") && redirect.includes("profitshare.")) {
+                            try {
+                                httpChannel.cancel(-1);
+                            } catch (e) {
+                                console.error("Error canceling HTTP request:", e);
+                            }
+                            const currentWindow = this.windowsService.getMostRecentWindow('navigator:browser');
+                            const browser = currentWindow.gBrowser;
+                            const newTab = browser.addTab(redirect, {
+                                triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+                            });
+                            browser.selectedTab = newTab;
+                        } else {
+                            this.lastRedirectTimestamp = Date.now();
+                            const newURI = Services.io.newURI(redirect, null, null);
+                            httpChannel.redirectTo(newURI);
+                        }
                     }
                 }
 

@@ -9,6 +9,7 @@
 #include "mozilla/dom/VideoDecoderBinding.h"
 
 #include "DecoderTraits.h"
+#include "GPUVideoImage.h"
 #include "H264.h"
 #include "ImageContainer.h"
 #include "MediaContainerType.h"
@@ -20,6 +21,7 @@
 #include "mozilla/Logging.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/Try.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/EncodedVideoChunk.h"
@@ -87,26 +89,22 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
  * The followings are helpers for VideoDecoder methods
  */
 
+static Maybe<nsString> ParseCodecString(const nsAString& aCodec) {
+  // Trim the spaces on each end.
+  nsString str(aCodec);
+  str.Trim(" ");
+  nsTArray<nsString> codecs;
+  if (!ParseCodecsString(str, codecs) || codecs.Length() != 1 ||
+      codecs[0] != str) {
+    return Nothing();
+  }
+  return Some(codecs[0]);
+}
+
 // https://w3c.github.io/webcodecs/#valid-videodecoderconfig
 static Result<Ok, nsCString> Validate(const VideoDecoderConfig& aConfig) {
-  nsTArray<nsString> codecs;
-  if (!ParseCodecsString(aConfig.mCodec, codecs) || codecs.Length() != 1 ||
-      codecs[0] != aConfig.mCodec) {
-    return Err("invalid codec string"_ns);
-  }
-
-  // WebCodecs doesn't support theora
-  if (!IsAV1CodecString(codecs[0]) && !IsVP9CodecString(codecs[0]) &&
-      !IsVP8CodecString(codecs[0]) && !IsH264CodecString(codecs[0]) &&
-      !IsH265CodecString(codecs[0])) {
-    return Err("unsupported codec"_ns);
-  }
-
-  // Gecko allows codec string starts with vp9 or av1 but Webcodecs requires to
-  // starts with av01 and vp09.
-  // https://www.w3.org/TR/webcodecs-codec-registry/#video-codec-registry
-  if (StringBeginsWith(aConfig.mCodec, u"vp9"_ns) ||
-      StringBeginsWith(aConfig.mCodec, u"av1"_ns)) {
+  Maybe<nsString> codec = ParseCodecString(aConfig.mCodec);
+  if (!codec || codec->IsEmpty()) {
     return Err("invalid codec string"_ns);
   }
 
@@ -134,45 +132,79 @@ static Result<Ok, nsCString> Validate(const VideoDecoderConfig& aConfig) {
   return Ok();
 }
 
-static nsTArray<nsCString> GuessMIMETypes(const nsAString& aCodec,
-                                          const uint32_t* aCodedWidth,
-                                          const uint32_t* aCodedHeight) {
-  const auto codec = NS_ConvertUTF16toUTF8(aCodec);
+// MOZ_IMPLICIT as GuessMIMETypes, CanDecode, and GetTracksInfo are intended to
+// called by both VideoDecoderConfig and VideoDecoderConfigInternal via
+// MIMECreateParam.
+struct MIMECreateParam {
+  MOZ_IMPLICIT MIMECreateParam(const VideoDecoderConfigInternal& aConfig)
+      : mParsedCodec(ParseCodecString(aConfig.mCodec).valueOr(EmptyString())),
+        mWidth(aConfig.mCodedWidth),
+        mHeight(aConfig.mCodedHeight) {}
+  MOZ_IMPLICIT MIMECreateParam(const VideoDecoderConfig& aConfig)
+      : mParsedCodec(ParseCodecString(aConfig.mCodec).valueOr(EmptyString())),
+        mWidth(OptionalToMaybe(aConfig.mCodedWidth)),
+        mHeight(OptionalToMaybe(aConfig.mCodedHeight)) {}
+
+  const nsString mParsedCodec;
+  const Maybe<uint32_t> mWidth;
+  const Maybe<uint32_t> mHeight;
+};
+
+static nsTArray<nsCString> GuessMIMETypes(MIMECreateParam aParam) {
+  const auto codec = NS_ConvertUTF16toUTF8(aParam.mParsedCodec);
   nsTArray<nsCString> types;
-  for (const nsCString& container : GuessContainers(aCodec)) {
+  for (const nsCString& container : GuessContainers(aParam.mParsedCodec)) {
     nsPrintfCString mime("video/%s; codecs=%s", container.get(), codec.get());
-    if (aCodedWidth) {
-      mime.Append(nsPrintfCString("; width=%d", *aCodedWidth));
+    if (aParam.mWidth) {
+      mime.Append(nsPrintfCString("; width=%d", *aParam.mWidth));
     }
-    if (aCodedHeight) {
-      mime.Append(nsPrintfCString("; height=%d", *aCodedHeight));
+    if (aParam.mHeight) {
+      mime.Append(nsPrintfCString("; height=%d", *aParam.mHeight));
     }
     types.AppendElement(mime);
   }
   return types;
 }
 
-static bool IsOnLinux() {
-#if defined(XP_LINUX) && !defined(ANDROID)
+static bool IsOnAndroid() {
+#if defined(ANDROID)
   return true;
 #else
   return false;
 #endif
 }
 
+static bool IsSupportedCodec(const nsAString& aCodec) {
+  // H265 is unsupported.
+  if (!IsAV1CodecString(aCodec) && !IsVP9CodecString(aCodec) &&
+      !IsVP8CodecString(aCodec) && !IsH264CodecString(aCodec)) {
+    return false;
+  }
+
+  // Gecko allows codec string starts with vp9 or av1 but Webcodecs requires to
+  // starts with av01 and vp09.
+  // https://www.w3.org/TR/webcodecs-codec-registry/#video-codec-registry
+  if (StringBeginsWith(aCodec, u"vp9"_ns) ||
+      StringBeginsWith(aCodec, u"av1"_ns)) {
+    return false;
+  }
+
+  return true;
+}
+
 // https://w3c.github.io/webcodecs/#check-configuration-support
-static bool CanDecode(const nsAString& aCodec, const uint32_t* aCodecWidth,
-                      const uint32_t* aCodecHeight) {
-  // Bug 1840508: H264-annexb doesn't work on non-linux platform. We only enable
-  // Linux for now.
-  if (!IsOnLinux()) {
+static bool CanDecode(MIMECreateParam aParam) {
+  // TODO: Enable WebCodecs on Android (Bug 1840508)
+  if (IsOnAndroid()) {
+    return false;
+  }
+  if (!IsSupportedCodec(aParam.mParsedCodec)) {
     return false;
   }
   // TODO: Instead of calling CanHandleContainerType with the guessed the
   // containers, DecoderTraits should provide an API to tell if a codec is
   // decodable or not.
-  for (const nsCString& mime :
-       GuessMIMETypes(aCodec, aCodecWidth, aCodecHeight)) {
+  for (const nsCString& mime : GuessMIMETypes(aParam)) {
     if (Maybe<MediaContainerType> containerType =
             MakeMediaExtendedMIMEType(mime)) {
       if (DecoderTraits::CanHandleContainerType(
@@ -185,28 +217,10 @@ static bool CanDecode(const nsAString& aCodec, const uint32_t* aCodecWidth,
   return false;
 }
 
-static bool CanDecode(const VideoDecoderConfigInternal& aConfig) {
-  return CanDecode(aConfig.mCodec, aConfig.mCodedWidth.ptrOr(nullptr),
-                   aConfig.mCodedHeight.ptrOr(nullptr));
-}
-
-static bool CanDecode(const VideoDecoderConfig& aConfig) {
-  // Converting Optional to Maybe may looks better, but it requires memory
-  // allocations.
-  return CanDecode(
-      aConfig.mCodec,
-      aConfig.mCodedWidth.WasPassed() ? &aConfig.mCodedWidth.Value() : nullptr,
-      aConfig.mCodedHeight.WasPassed() ? &aConfig.mCodedHeight.Value()
-                                       : nullptr);
-}
-
-static nsTArray<UniquePtr<TrackInfo>> GetTracksInfo(
-    const VideoDecoderConfigInternal& aConfig) {
+static nsTArray<UniquePtr<TrackInfo>> GetTracksInfo(MIMECreateParam aParam) {
   // TODO: Instead of calling GetTracksInfo with the guessed containers,
   // DecoderTraits should provide an API to create the TrackInfo directly.
-  for (const nsCString& mime :
-       GuessMIMETypes(aConfig.mCodec, aConfig.mCodedWidth.ptrOr(nullptr),
-                      aConfig.mCodedHeight.ptrOr(nullptr))) {
+  for (const nsCString& mime : GuessMIMETypes(aParam)) {
     if (Maybe<MediaContainerType> containerType =
             MakeMediaExtendedMIMEType(mime)) {
       if (nsTArray<UniquePtr<TrackInfo>> tracks =
@@ -221,15 +235,9 @@ static nsTArray<UniquePtr<TrackInfo>> GetTracksInfo(
 
 static Result<RefPtr<MediaByteBuffer>, nsresult> GetExtraData(
     const OwningMaybeSharedArrayBufferViewOrMaybeSharedArrayBuffer& aBuffer) {
-  RefPtr<MediaByteBuffer> data = nullptr;
-  Span<uint8_t> buf;
-  MOZ_TRY_VAR(buf, GetSharedArrayBufferData(aBuffer));
-  if (buf.empty()) {
-    return data;
-  }
-  data = MakeRefPtr<MediaByteBuffer>();
-  data->AppendElements(buf);
-  return data;
+  RefPtr<MediaByteBuffer> data = MakeRefPtr<MediaByteBuffer>();
+  Unused << AppendTypedArrayDataTo(aBuffer, *data);
+  return data->Length() > 0 ? data : nullptr;
 }
 
 static Result<UniquePtr<TrackInfo>, nsresult> CreateVideoInfo(
@@ -288,16 +296,16 @@ static Result<UniquePtr<TrackInfo>, nsresult> CreateVideoInfo(
 
   if (aConfig.mColorSpace.isSome()) {
     const VideoColorSpaceInternal& colorSpace(aConfig.mColorSpace.value());
-    if (!colorSpace.mFullRange.isSome()) {
+    if (colorSpace.mFullRange.isSome()) {
       vi->mColorRange = ToColorRange(colorSpace.mFullRange.value());
     }
-    if (!colorSpace.mMatrix.isSome()) {
+    if (colorSpace.mMatrix.isSome()) {
       vi->mColorSpace.emplace(ToColorSpace(colorSpace.mMatrix.value()));
     }
-    if (!colorSpace.mPrimaries.isSome()) {
+    if (colorSpace.mPrimaries.isSome()) {
       vi->mColorPrimaries.emplace(ToPrimaries(colorSpace.mPrimaries.value()));
     }
-    if (!colorSpace.mTransfer.isSome()) {
+    if (colorSpace.mTransfer.isSome()) {
       vi->mTransferFunction.emplace(
           ToTransferFunction(colorSpace.mTransfer.value()));
     }
@@ -341,6 +349,8 @@ static Result<UniquePtr<TrackInfo>, nsresult> CreateVideoInfo(
             static_cast<decltype(gfx::IntSize::height)>(spsdata.display_height);
       }
     }
+  } else {
+    vi->mExtraData = new MediaByteBuffer();
   }
 
   // By spec, it'ok to not set the coded-width and coded-height, but it makes
@@ -437,6 +447,15 @@ static Maybe<VideoPixelFormat> GuessPixelFormat(layers::Image* aImage) {
         return Some(VideoPixelFormat::I420A);
       }
       return f;
+    }
+    if (layers::GPUVideoImage* image = aImage->AsGPUVideoImage()) {
+      RefPtr<layers::ImageBridgeChild> imageBridge =
+          layers::ImageBridgeChild::GetSingleton();
+      layers::TextureClient* texture = image->GetTextureClient(imageBridge);
+      if (NS_WARN_IF(!texture)) {
+        return Nothing();
+      }
+      return SurfaceFormatToVideoPixelFormat(texture->GetFormat());
     }
 #ifdef XP_MACOSX
     if (layers::MacIOSurfaceImage* image = aImage->AsMacIOSurfaceImage()) {
@@ -959,6 +978,7 @@ already_AddRefed<Promise> VideoDecoder::Flush(ErrorResult& aRv) {
   LOG("VideoDecoder %p, Flush", this);
 
   if (mState != CodecState::Configured) {
+    LOG("VideoDecoder %p, wrong state!", this);
     aRv.ThrowInvalidStateError("Decoder must be configured first");
     return nullptr;
   }
@@ -1053,6 +1073,9 @@ already_AddRefed<Promise> VideoDecoder::IsConfigSupported(
 Result<Ok, nsresult> VideoDecoder::Reset(const nsresult& aResult) {
   AssertIsOnOwningThread();
 
+  LOG("VideoDecoder %p reset with 0x%08" PRIx32, this,
+      static_cast<uint32_t>(aResult));
+
   if (mState == CodecState::Closed) {
     return Err(NS_ERROR_DOM_INVALID_STATE_ERR);
   }
@@ -1078,6 +1101,9 @@ Result<Ok, nsresult> VideoDecoder::Reset(const nsresult& aResult) {
 // https://w3c.github.io/webcodecs/#close-videodecoder
 Result<Ok, nsresult> VideoDecoder::Close(const nsresult& aResult) {
   AssertIsOnOwningThread();
+
+  LOG("VideoDecoder %p close with 0x%08" PRIx32, this,
+      static_cast<uint32_t>(aResult));
 
   MOZ_TRY(Reset(aResult));
   mState = CodecState::Closed;
@@ -1203,6 +1229,9 @@ void VideoDecoder::ScheduleOutputVideoFrames(
 void VideoDecoder::ScheduleClose(const nsresult& aResult) {
   AssertIsOnOwningThread();
   MOZ_ASSERT(mState == CodecState::Configured);
+
+  LOG("VideoDecoder %p has schedule a close with 0x%08" PRIx32, this,
+      static_cast<uint32_t>(aResult));
 
   auto task = [self = RefPtr{this}, result = aResult] {
     if (self->mState == CodecState::Closed) {

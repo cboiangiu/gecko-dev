@@ -35,6 +35,12 @@ ChromeUtils.defineESModuleGetters(lazy, {
   sinon: "resource://testing-common/Sinon.sys.mjs",
 });
 
+ChromeUtils.defineLazyGetter(this, "PlacesFrecencyRecalculator", () => {
+  return Cc["@mozilla.org/places/frecency-recalculator;1"].getService(
+    Ci.nsIObserver
+  ).wrappedJSObject;
+});
+
 async function addTopSites(url) {
   for (let i = 0; i < 5; i++) {
     await PlacesTestUtils.addVisits(url);
@@ -84,13 +90,9 @@ function _assertGleanTelemetry(telemetryName, expectedExtraList) {
   }
 }
 
-async function ensureQuickSuggestInit({
-  merinoSuggestions = undefined,
-  config = undefined,
-} = {}) {
+async function ensureQuickSuggestInit({ ...args } = {}) {
   return lazy.QuickSuggestTestUtils.ensureQuickSuggestInit({
-    config,
-    merinoSuggestions,
+    ...args,
     remoteSettingsResults: [
       {
         type: "data",
@@ -253,6 +255,15 @@ async function initSapTest() {
   /* import-globals-from head-sap.js */
   Services.scriptloader.loadSubScript(
     "chrome://mochitests/content/browser/browser/components/urlbar/tests/engagementTelemetry/browser/head-sap.js",
+    this
+  );
+  await setup();
+}
+
+async function initSearchEngineDefaultIdTest() {
+  /* import-globals-from head-search_engine_default_id.js */
+  Services.scriptloader.loadSubScript(
+    "chrome://mochitests/content/browser/browser/components/urlbar/tests/engagementTelemetry/browser/head-search_engine_default_id.js",
     this
   );
   await setup();

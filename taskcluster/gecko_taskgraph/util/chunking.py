@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 here = os.path.abspath(os.path.dirname(__file__))
 resolver = TestResolver.from_environment(cwd=here, loader_cls=TestManifestLoader)
 
+TEST_VARIANTS = {}
+if os.path.exists(os.path.join(GECKO, "taskcluster", "ci", "test", "variants.yml")):
+    TEST_VARIANTS = load_yaml(GECKO, "taskcluster", "ci", "test", "variants.yml")
+
 
 def guess_mozinfo_from_task(task, repo=""):
     """Attempt to build a mozinfo dict from a task definition.
@@ -38,6 +42,7 @@ def guess_mozinfo_from_task(task, repo=""):
         A dict that can be used as a mozinfo replacement.
     """
     setting = task["test-setting"]
+    runtime_keys = setting["runtime"].keys()
     arch = setting["platform"]["arch"]
     p_os = setting["platform"]["os"]
 
@@ -46,7 +51,6 @@ def guess_mozinfo_from_task(task, repo=""):
         "bits": 32 if "32" in arch else 64,
         "ccov": setting["build"].get("ccov", False),
         "debug": setting["build"]["type"] in ("debug", "debug-isolated-process"),
-        "headless": "-headless" in task["test-name"],
         "tsan": setting["build"].get("tsan", False),
         "nightly_build": repo in ["mozilla-central", "autoland", "try", ""],  # trunk
     }
@@ -99,25 +103,25 @@ def guess_mozinfo_from_task(task, repo=""):
             info["os_version"] = new_ver
             break
 
-    test_variants = load_yaml(GECKO, "taskcluster", "ci", "test", "variants.yml")
-    for variant in test_variants:
-        tag = test_variants[variant]["suffix"]
-        value = variant in setting["runtime"].keys()
+    for variant in TEST_VARIANTS:
+        tag = TEST_VARIANTS[variant].get("mozinfo", "")
+        if tag == "":
+            continue
 
-        if tag == "1proc":
-            tag = "e10s"
+        value = variant in runtime_keys
+
+        if variant == "1proc":
             value = not value
-        if tag == "fis":
-            tag = "fission"
+        elif "fission" in variant:
             value = any(
-                "1proc" not in key or "no-fission" not in key
-                for key in setting["runtime"].keys()
+                "1proc" not in key or "no-fission" not in key for key in runtime_keys
             )
-        if tag == "xorigin":
-            value = any("xorigin" in key for key in setting["runtime"].keys())
+            if "no-fission" not in variant:
+                value = not value
+        elif tag == "xorigin":
+            value = any("xorigin" in key for key in runtime_keys)
 
         info[tag] = value
-
     return info
 
 
@@ -153,18 +157,19 @@ def chunk_manifests(suite, platform, chunks, manifests):
         A list of length `chunks` where each item contains a list of manifests
         that run in that chunk.
     """
-    manifests = set(manifests)
+    ini_manifests = set([x.replace(".toml", ".ini") for x in manifests])
 
     if "web-platform-tests" not in suite:
         runtimes = {
-            k: v for k, v in get_runtimes(platform, suite).items() if k in manifests
+            k: v for k, v in get_runtimes(platform, suite).items() if k in ini_manifests
         }
-        return [
-            c[1]
-            for c in chunk_by_runtime(None, chunks, runtimes).get_chunked_manifests(
-                manifests
+        retVal = []
+        for c in chunk_by_runtime(None, chunks, runtimes).get_chunked_manifests(
+            ini_manifests
+        ):
+            retVal.append(
+                [m if m in manifests else m.replace(".ini", ".toml") for m in c[1]]
             )
-        ]
 
     # Keep track of test paths for each chunk, and the runtime information.
     chunked_manifests = [[] for _ in range(chunks)]

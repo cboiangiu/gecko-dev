@@ -13,10 +13,11 @@
 
 #include "js/Array.h"  // JS::GetArrayLength
 #include "js/CompilationAndEvaluation.h"
+#include "js/ColumnNumber.h"  // JS::ColumnNumberZeroOrigin, JS::ColumnNumberOneOrigin
 #include "js/ContextOptions.h"        // JS::ContextOptionsRef
+#include "js/ErrorReport.h"           // JSErrorBase
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/Modules.h"  // JS::FinishDynamicModuleImport, JS::{G,S}etModuleResolveHook, JS::Get{ModulePrivate,ModuleScript,RequestedModule{s,Specifier,SourcePos}}, JS::SetModule{DynamicImport,Metadata}Hook
-#include "js/OffThreadScriptCompilation.h"
 #include "js/PropertyAndElement.h"  // JS_DefineProperty, JS_GetElement
 #include "js/SourceText.h"
 #include "mozilla/BasePrincipal.h"
@@ -221,7 +222,8 @@ JSString* ModuleLoaderBase::ImportMetaResolveImpl(
     if (result.isErr()) {
       JS::Rooted<JS::Value> error(aCx);
       nsresult rv = loader->HandleResolveFailure(
-          aCx, script, specifier, result.unwrapErr(), 0, 0, &error);
+          aCx, script, specifier, result.unwrapErr(), 0,
+          JS::ColumnNumberZeroOrigin::zero(), &error);
       if (NS_FAILED(rv)) {
         JS_ReportOutOfMemory(aCx);
         return nullptr;
@@ -316,7 +318,8 @@ bool ModuleLoaderBase::HostImportModuleDynamically(
   if (result.isErr()) {
     JS::Rooted<JS::Value> error(aCx);
     nsresult rv = loader->HandleResolveFailure(
-        aCx, script, specifier, result.unwrapErr(), 0, 0, &error);
+        aCx, script, specifier, result.unwrapErr(), 0,
+        JS::ColumnNumberZeroOrigin::zero(), &error);
     if (NS_FAILED(rv)) {
       JS_ReportOutOfMemory(aCx);
       return false;
@@ -643,7 +646,8 @@ nsresult ModuleLoaderBase::CreateModuleScript(ModuleLoadRequest* aRequest) {
     }
 
     RefPtr<ModuleScript> moduleScript =
-        new ModuleScript(aRequest->mFetchOptions, aRequest->mBaseURL);
+        new ModuleScript(aRequest->ReferrerPolicy(), aRequest->mFetchOptions,
+                         aRequest->mBaseURL);
     aRequest->mModuleScript = moduleScript;
 
     if (!module) {
@@ -698,7 +702,8 @@ nsresult ModuleLoaderBase::GetResolveFailureMessage(ResolveError aError,
 
 nsresult ModuleLoaderBase::HandleResolveFailure(
     JSContext* aCx, LoadedScript* aScript, const nsAString& aSpecifier,
-    ResolveError aError, uint32_t aLineNumber, uint32_t aColumnNumber,
+    ResolveError aError, uint32_t aLineNumber,
+    JS::ColumnNumberZeroOrigin aColumnNumber,
     JS::MutableHandle<JS::Value> aErrorOut) {
   JS::Rooted<JSString*> filename(aCx);
   if (aScript) {
@@ -723,8 +728,8 @@ nsresult ModuleLoaderBase::HandleResolveFailure(
   }
 
   if (!JS::CreateError(aCx, JSEXN_TYPEERR, nullptr, filename, aLineNumber,
-                       aColumnNumber, nullptr, string, JS::NothingHandleValue,
-                       aErrorOut)) {
+                       JS::ColumnNumberOneOrigin(aColumnNumber), nullptr,
+                       string, JS::NothingHandleValue, aErrorOut)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -819,7 +824,7 @@ nsresult ModuleLoaderBase::ResolveRequestedModules(
     auto result = loader->ResolveModuleSpecifier(ms, specifier);
     if (result.isErr()) {
       uint32_t lineNumber = 0;
-      uint32_t columnNumber = 0;
+      JS::ColumnNumberZeroOrigin columnNumber;
       JS::GetRequestedModuleSourcePos(cx, moduleRecord, i, &lineNumber,
                                       &columnNumber);
 
@@ -1196,42 +1201,12 @@ nsresult ModuleLoaderBase::InitDebuggerDataForModuleGraph(
 }
 
 void ModuleLoaderBase::ProcessDynamicImport(ModuleLoadRequest* aRequest) {
-  // Instantiate and evaluate the imported module.
-  // See: https://tc39.es/ecma262/#sec-ContinueDynamicImport
-  //
-  // Since this is specced as happening on promise resolution (step 8) this must
-  // at least run as part of a microtask. We don't create the unobservable
-  // promise.
-
-  class DynamicImportMicroTask : public mozilla::MicroTaskRunnable {
-   public:
-    explicit DynamicImportMicroTask(ModuleLoadRequest* aRequest)
-        : MicroTaskRunnable(), mRequest(aRequest) {}
-
-    virtual void Run(mozilla::AutoSlowOperation& aAso) override {
-      mRequest->mLoader->InstantiateAndEvaluateDynamicImport(mRequest);
-      mRequest = nullptr;
-    }
-
-    virtual bool Suppressed() override {
-      return mRequest->mLoader->mGlobalObject->IsInSyncOperation();
-    }
-
-   private:
-    RefPtr<ModuleLoadRequest> mRequest;
-  };
-
-  MOZ_ASSERT(aRequest->mLoader == this);
-
   if (!aRequest->mModuleScript) {
     FinishDynamicImportAndReject(aRequest, NS_ERROR_FAILURE);
     return;
   }
 
-  CycleCollectedJSContext* context = CycleCollectedJSContext::Get();
-  RefPtr<DynamicImportMicroTask> runnable =
-      new DynamicImportMicroTask(aRequest);
-  context->DispatchToMicroTask(do_AddRef(runnable));
+  InstantiateAndEvaluateDynamicImport(aRequest);
 }
 
 void ModuleLoaderBase::InstantiateAndEvaluateDynamicImport(
@@ -1284,7 +1259,7 @@ nsresult ModuleLoaderBase::EvaluateModuleInContext(
   ModuleLoadRequest* request = aRequest->AsModuleRequest();
   MOZ_ASSERT(request->mModuleScript);
   MOZ_ASSERT_IF(request->HasScriptLoadContext(),
-                !request->GetScriptLoadContext()->mOffThreadToken);
+                !request->GetScriptLoadContext()->mCompileOrDecodeTask);
 
   ModuleScript* moduleScript = request->mModuleScript;
   if (moduleScript->HasErrorToRethrow()) {

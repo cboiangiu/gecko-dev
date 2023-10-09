@@ -231,7 +231,7 @@ bool GlobalObject::initMapIteratorProto(JSContext* cx,
     return false;
   }
   if (!JS_DefineFunctions(cx, proto, MapIteratorObject::methods) ||
-      !DefineToStringTag(cx, proto, cx->names().MapIterator)) {
+      !DefineToStringTag(cx, proto, cx->names().Map_Iterator_)) {
     return false;
   }
   global->initBuiltinProto(ProtoKind::MapIteratorProto, proto);
@@ -504,9 +504,7 @@ const JSPropertySpec MapObject::staticProperties[] = {
 };
 
 const JSFunctionSpec MapObject::staticMethods[] = {
-#ifdef NIGHTLY_BUILD
     JS_SELF_HOSTED_FN("groupBy", "MapGroupBy", 2, 0),
-#endif
     JS_FS_END,
 };
 
@@ -1105,7 +1103,7 @@ bool GlobalObject::initSetIteratorProto(JSContext* cx,
     return false;
   }
   if (!JS_DefineFunctions(cx, proto, SetIteratorObject::methods) ||
-      !DefineToStringTag(cx, proto, cx->names().SetIterator)) {
+      !DefineToStringTag(cx, proto, cx->names().Set_Iterator_)) {
     return false;
   }
   global->initBuiltinProto(ProtoKind::SetIteratorProto, proto);

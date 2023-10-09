@@ -152,10 +152,10 @@ class DOMIntersectionObserver final : public nsISupports,
       const Document& aDocument, const nsINode* aRoot,
       const StyleRect<LengthPercentage>* aRootMargin);
 
-  enum class IgnoreContentVisibility : bool { No, Yes };
+  enum class IsContentVisibilityObserver : bool { No, Yes };
   static IntersectionOutput Intersect(
       const IntersectionInput&, Element&,
-      IgnoreContentVisibility = IgnoreContentVisibility::No);
+      IsContentVisibilityObserver = IsContentVisibilityObserver::No);
   // Intersects with a given rect, already relative to the root frame.
   static IntersectionOutput Intersect(const IntersectionInput&, const nsRect&);
 
@@ -185,7 +185,7 @@ class DOMIntersectionObserver final : public nsISupports,
   Variant<RefPtr<dom::IntersectionCallback>, NativeCallback> mCallback;
   RefPtr<nsINode> mRoot;
   StyleRect<LengthPercentage> mRootMargin;
-  nsTArray<double> mThresholds;
+  AutoTArray<double, 1> mThresholds;
 
   // These hold raw pointers which are explicitly cleared by UnlinkTarget().
   //
@@ -195,7 +195,7 @@ class DOMIntersectionObserver final : public nsISupports,
   nsTHashSet<Element*> mObservationTargetSet;
 
   nsTArray<RefPtr<DOMIntersectionObserverEntry>> mQueuedEntries;
-  bool mConnected;
+  bool mConnected = false;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(DOMIntersectionObserver,

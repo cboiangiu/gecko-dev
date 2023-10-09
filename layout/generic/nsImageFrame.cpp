@@ -485,8 +485,7 @@ void nsImageFrame::DisconnectMap() {
 #endif
 }
 
-void nsImageFrame::DestroyFrom(nsIFrame* aDestructRoot,
-                               PostDestroyData& aPostDestroyData) {
+void nsImageFrame::Destroy(DestroyContext& aContext) {
   MaybeSendIntrinsicSizeAndRatioToEmbedder(Nothing(), Nothing());
 
   if (mReflowCallbackPosted) {
@@ -524,7 +523,7 @@ void nsImageFrame::DestroyFrom(nsIFrame* aDestructRoot,
     BrokenImageIcon::RemoveObserver(this);
   }
 
-  nsAtomicContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
+  nsAtomicContainerFrame::Destroy(aContext);
 }
 
 void nsImageFrame::DeinitOwnedRequest() {
@@ -1452,10 +1451,9 @@ nsIFrame::SizeComputationResult nsImageFrame::ComputeSize(
 }
 
 Element* nsImageFrame::GetMapElement() const {
-  nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
-  return imageLoader ? static_cast<nsImageLoadingContent*>(imageLoader.get())
-                           ->FindImageMap()
-                     : nullptr;
+  return IsForImageLoadingContent()
+             ? nsImageLoadingContent::FindImageMap(mContent->AsElement())
+             : nullptr;
 }
 
 // get the offset into the content area of the image where aImg starts if it is
@@ -1809,7 +1807,7 @@ void nsImageFrame::DisplayAltText(nsPresContext* aPresContext,
 struct nsRecessedBorder : public nsStyleBorder {
   explicit nsRecessedBorder(nscoord aBorderWidth) {
     for (const auto side : AllPhysicalSides()) {
-      BorderColorFor(side) = StyleColor::BLACK;
+      BorderColorFor(side) = StyleColor::Black();
       mBorder.Side(side) = aBorderWidth;
       // Note: use SetBorderStyle here because we want to affect
       // mComputedBorder

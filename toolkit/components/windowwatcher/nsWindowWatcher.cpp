@@ -502,9 +502,10 @@ nsWindowWatcher::OpenWindowWithRemoteTab(nsIRemoteTab* aRemoteTab,
   if (parentBC) {
     RefPtr<Element> browserElement = parentBC->Top()->GetEmbedderElement();
     if (browserElement && browserElement->GetOwnerGlobal() &&
-        browserElement->GetOwnerGlobal()->AsInnerWindow()) {
-      parentWindowOuter =
-          browserElement->GetOwnerGlobal()->AsInnerWindow()->GetOuterWindow();
+        browserElement->GetOwnerGlobal()->GetAsInnerWindow()) {
+      parentWindowOuter = browserElement->GetOwnerGlobal()
+                              ->GetAsInnerWindow()
+                              ->GetOuterWindow();
     }
 
     isFissionWindow = parentBC->UseRemoteSubframes();
@@ -1277,6 +1278,12 @@ nsresult nsWindowWatcher::OpenWindowInternal(
         context && context->HasValidTransientUserGestureActivation());
     if (parentBC) {
       loadState->SetTriggeringSandboxFlags(parentBC->GetSandboxFlags());
+    }
+
+    if (parentInnerWin) {
+      loadState->SetTriggeringWindowId(parentInnerWin->WindowID());
+      loadState->SetTriggeringStorageAccess(
+          parentInnerWin->UsingStorageAccess());
     }
 
     if (subjectPrincipal) {

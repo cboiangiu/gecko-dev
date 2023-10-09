@@ -35,7 +35,7 @@ linux64-binutils:
         toolchain-artifact: public/build/binutils.tar.zst
     fetches:
         fetch:
-            - binutils-2.36.1
+            - binutils-2.41
         toolchain:
             - linux64-toolchain-sysroot
 
@@ -187,7 +187,7 @@ macosx64-custom-car:
     treeherder:
         symbol: TM(custom-car)
     worker:
-        max-run-time: 28800
+        max-run-time: 30000
     run:
         script: build-custom-car.sh
         arguments: [
@@ -209,7 +209,7 @@ macosx64-custom-car:
         toolchain-artifact: public/build/car_macosx.tar.zst
     fetches:
         toolchain:
-            - MacOSX13.3.sdk
+            - MacOSX14.0.sdk
 
 linux64-custom-car:
     description: "Custom chromium-as-release build for Linux"

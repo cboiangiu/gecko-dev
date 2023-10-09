@@ -11,6 +11,7 @@
 
 #include "mozilla/dom/KeySystemNames.h"
 #include "mozilla/EMEUtils.h"
+#include "mozilla/StaticPrefs_media.h"
 #include "mozilla/KeySystemConfig.h"
 #include "MFCDMProxy.h"
 #include "MFMediaEngineUtils.h"
@@ -317,6 +318,20 @@ MFCDMParent::MFCDMParent(const nsAString& aKeySystem,
       mManagerThread, this, &MFCDMParent::SendOnSessionKeyExpiration);
 }
 
+void MFCDMParent::ShutdownCDM() {
+  AssertOnManagerThread();
+  if (!mCDM) {
+    return;
+  }
+  auto rv = mCDM->SetPMPHostApp(nullptr);
+  if (FAILED(rv)) {
+    MFCDM_PARENT_LOG("Failed to clear PMP Host App, rv=%lx", rv);
+  }
+  SHUTDOWN_IF_POSSIBLE(mCDM);
+  mCDM = nullptr;
+  MFCDM_PARENT_LOG("Shutdown CDM completed");
+}
+
 void MFCDMParent::Destroy() {
   AssertOnManagerThread();
   mKeyMessageEvents.DisconnectAll();
@@ -329,12 +344,11 @@ void MFCDMParent::Destroy() {
     mPMPHostWrapper->Shutdown();
     mPMPHostWrapper = nullptr;
   }
-  if (mCDM) {
-    mCDM->SetPMPHostApp(nullptr);
-    SHUTDOWN_IF_POSSIBLE(mCDM);
-    mCDM = nullptr;
-  }
+  ShutdownCDM();
   mFactory = nullptr;
+  for (auto& iter : mSessions) {
+    iter.second->Close();
+  }
   mSessions.clear();
   mIPDLSelfRef = nullptr;
 }
@@ -466,17 +480,21 @@ mozilla::ipc::IPCResult MFCDMParent::RecvGetCapabilities(
   capabilities.distinctiveID() = KeySystemConfig::Requirement::Required;
 
   // TODO : check HW CDM creation
-  // TODO : add HEVC support?
   static nsTArray<KeySystemConfig::EMECodecString> kVideoCodecs({
       KeySystemConfig::EME_CODEC_H264,
       KeySystemConfig::EME_CODEC_VP8,
       KeySystemConfig::EME_CODEC_VP9,
+      KeySystemConfig::EME_CODEC_HEVC,
   });
   // Remember supported video codecs.
   // It will be used when collecting audio codec and encryption scheme
   // support.
   nsTArray<KeySystemConfig::EMECodecString> supportedVideoCodecs;
   for (auto& codec : kVideoCodecs) {
+    if (codec == KeySystemConfig::EME_CODEC_HEVC &&
+        !StaticPrefs::media_wmf_hevc_enabled()) {
+      continue;
+    }
     if (FactorySupports(mFactory, mKeySystem, codec,
                         KeySystemConfig::EMECodecString(""), nsString(u""),
                         aIsHWSecure)) {
@@ -722,7 +740,7 @@ already_AddRefed<MFCDMProxy> MFCDMParent::GetMFCDMProxy() {
   if (!mCDM) {
     return nullptr;
   }
-  RefPtr<MFCDMProxy> proxy = new MFCDMProxy(mCDM.Get());
+  RefPtr<MFCDMProxy> proxy = new MFCDMProxy(mCDM.Get(), mId);
   return proxy.forget();
 }
 

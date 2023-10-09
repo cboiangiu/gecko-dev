@@ -208,6 +208,7 @@ class ExternalRunnableWrapper final : public WorkerRunnable {
   virtual bool WorkerRun(JSContext* aCx,
                          WorkerPrivate* aWorkerPrivate) override {
     nsresult rv = mWrappedRunnable->Run();
+    mWrappedRunnable = nullptr;
     if (NS_FAILED(rv)) {
       if (!JS_IsExceptionPending(aCx)) {
         Throw(aCx, rv);
@@ -223,6 +224,7 @@ class ExternalRunnableWrapper final : public WorkerRunnable {
     if (doomed) {
       doomed->OnDiscard();
     }
+    mWrappedRunnable = nullptr;
     return NS_OK;
   }
 };
@@ -2452,6 +2454,12 @@ WorkerPrivate::WorkerPrivate(
       contentCreationOptions.setAlwaysUseFdlibm(
           ShouldResistFingerprinting(RFPTarget::JSMathFdlibm));
 
+      if (ShouldResistFingerprinting(RFPTarget::JSLocale)) {
+        nsCString locale = nsRFPService::GetSpoofedJSLocale();
+        chromeCreationOptions.setLocaleCopyZ(locale.get());
+        contentCreationOptions.setLocaleCopyZ(locale.get());
+      }
+
       // Check if it's a privileged addon executing in order to allow access
       // to SharedArrayBuffer
       if (mLoadInfo.mPrincipal) {
@@ -2812,8 +2820,7 @@ nsresult WorkerPrivate::GetLoadInfo(
         aParent->AssociatedBrowsingContextID();
     loadInfo.mStorageAccess = aParent->StorageAccess();
     loadInfo.mUseRegularPrincipal = aParent->UseRegularPrincipal();
-    loadInfo.mHasStorageAccessPermissionGranted =
-        aParent->HasStorageAccessPermissionGranted();
+    loadInfo.mUsingStorageAccess = aParent->UsingStorageAccess();
     loadInfo.mCookieJarSettings = aParent->CookieJarSettings();
     if (loadInfo.mCookieJarSettings) {
       loadInfo.mCookieJarSettingsArgs = aParent->CookieJarSettingsArgs();
@@ -2963,17 +2970,16 @@ nsresult WorkerPrivate::GetLoadInfo(
           globalWindow->GetBrowsingContext()->Id();
       loadInfo.mStorageAccess = StorageAllowedForWindow(globalWindow);
       loadInfo.mUseRegularPrincipal = document->UseRegularPrincipal();
-      loadInfo.mHasStorageAccessPermissionGranted =
-          document->HasStorageAccessPermissionGranted();
+      loadInfo.mUsingStorageAccess = document->UsingStorageAccess();
       loadInfo.mShouldResistFingerprinting =
           document->ShouldResistFingerprinting(
               RFPTarget::IsAlwaysEnabledForPrecompute);
 
       // This is an hack to deny the storage-access-permission for workers of
       // sub-iframes.
-      if (loadInfo.mHasStorageAccessPermissionGranted &&
+      if (loadInfo.mUsingStorageAccess &&
           StorageAllowedForDocument(document) != StorageAccess::eAllow) {
-        loadInfo.mHasStorageAccessPermissionGranted = false;
+        loadInfo.mUsingStorageAccess = false;
       }
       loadInfo.mIsThirdPartyContextToTopWindow =
           AntiTrackingUtils::IsThirdPartyWindow(globalWindow, nullptr);
@@ -3029,7 +3035,7 @@ nsresult WorkerPrivate::GetLoadInfo(
       loadInfo.mWindowID = UINT64_MAX;
       loadInfo.mStorageAccess = StorageAccess::eAllow;
       loadInfo.mUseRegularPrincipal = true;
-      loadInfo.mHasStorageAccessPermissionGranted = false;
+      loadInfo.mUsingStorageAccess = false;
       loadInfo.mCookieJarSettings =
           mozilla::net::CookieJarSettings::Create(loadInfo.mLoadingPrincipal);
       loadInfo.mShouldResistFingerprinting =
@@ -3083,9 +3089,8 @@ nsresult WorkerPrivate::GetLoadInfo(
     // well as the hasStoragePermission flag.
     nsCOMPtr<nsILoadInfo> channelLoadInfo = loadInfo.mChannel->LoadInfo();
     rv = channelLoadInfo->SetStoragePermission(
-        loadInfo.mHasStorageAccessPermissionGranted
-            ? nsILoadInfo::HasStoragePermission
-            : nsILoadInfo::NoStoragePermission);
+        loadInfo.mUsingStorageAccess ? nsILoadInfo::HasStoragePermission
+                                     : nsILoadInfo::NoStoragePermission);
     NS_ENSURE_SUCCESS(rv, rv);
 
     rv = loadInfo.SetPrincipalsAndCSPFromChannel(loadInfo.mChannel);
@@ -4117,7 +4122,7 @@ void WorkerPrivate::PropagateStorageAccessPermissionGrantedInternal() {
   auto data = mWorkerThreadAccessible.Access();
 
   mLoadInfo.mUseRegularPrincipal = true;
-  mLoadInfo.mHasStorageAccessPermissionGranted = true;
+  mLoadInfo.mUsingStorageAccess = true;
 
   WorkerGlobalScope* globalScope = GlobalScope();
   if (globalScope) {

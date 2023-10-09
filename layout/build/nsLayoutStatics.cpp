@@ -104,8 +104,6 @@
 #include "mozilla/dom/AbstractRange.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
-#include "mozilla/dom/U2FTokenManager.h"
-#include "mozilla/dom/WebAuthnController.h"
 #ifdef XP_WIN
 #  include "mozilla/dom/WinWebAuthnManager.h"
 #endif
@@ -258,9 +256,6 @@ nsresult nsLayoutStatics::Initialize() {
 
   // This must be initialized on the main-thread.
   mozilla::RemoteLazyInputStreamStorage::Initialize();
-
-  mozilla::dom::U2FTokenManager::Initialize();
-  mozilla::dom::WebAuthnController::Initialize();
 
 #ifdef XP_WIN
   mozilla::dom::WinWebAuthnManager::Initialize();

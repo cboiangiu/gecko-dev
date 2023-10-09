@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <type_traits>
 
+#include "mozilla/dom/RequestBinding.h"
 #include "nsIChannel.h"
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
@@ -395,14 +396,15 @@ nsresult GetModuleSecFlags(bool aIsTopLevel, nsIPrincipal* principal,
   // Step 9. If destination is "worker", "sharedworker", or "serviceworker",
   //         and the top-level module fetch flag is set, then set request's
   //         mode to "same-origin".
-  secFlags = aIsTopLevel
-                 ? nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED
-                 : nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_INHERITS_SEC_CONTEXT;
 
   // Step 8. Let request be a new request whose [...] mode is "cors" [...]
+  secFlags = aIsTopLevel ? nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED
+                         : nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT;
+
   // This implements the same Cookie settings as  nsContentSecurityManager's
   // ComputeSecurityFlags. The main difference is the line above, Step 9,
   // setting to same origin.
+
   if (aCredentials == RequestCredentials::Include) {
     secFlags |= nsILoadInfo::nsILoadInfo::SEC_COOKIES_INCLUDE;
   } else if (aCredentials == RequestCredentials::Same_origin) {
@@ -458,27 +460,14 @@ class ScriptExecutorRunnable final : public MainThreadWorkerSyncRunnable {
   nsresult Cancel() override;
 };
 
-template <typename Unit>
-static bool EvaluateSourceBuffer(JSContext* aCx,
-                                 const JS::CompileOptions& aOptions,
-                                 JS::loader::ClassicScript* aClassicScript,
-                                 JS::SourceText<Unit>& aSourceBuffer) {
-  static_assert(std::is_same<Unit, char16_t>::value ||
-                    std::is_same<Unit, Utf8Unit>::value,
-                "inferred units must be UTF-8 or UTF-16");
-
-  JS::Rooted<JSScript*> script(aCx, JS::Compile(aCx, aOptions, aSourceBuffer));
-
-  if (!script) {
-    return false;
-  }
-
+static bool EvaluateSourceBuffer(JSContext* aCx, JS::Handle<JSScript*> aScript,
+                                 JS::loader::ClassicScript* aClassicScript) {
   if (aClassicScript) {
-    aClassicScript->AssociateWithScript(script);
+    aClassicScript->AssociateWithScript(aScript);
   }
 
   JS::Rooted<JS::Value> unused(aCx);
-  return JS_ExecuteScript(aCx, script, &unused);
+  return JS_ExecuteScript(aCx, aScript, &unused);
 }
 
 WorkerScriptLoader::WorkerScriptLoader(
@@ -602,6 +591,10 @@ nsContentPolicyType WorkerScriptLoader::GetContentPolicyType(
     return mWorkerRef->Private()->ContentPolicyType();
   }
   if (aRequest->IsModuleRequest()) {
+    if (aRequest->AsModuleRequest()->IsDynamicImport()) {
+      return nsIContentPolicy::TYPE_INTERNAL_MODULE;
+    }
+
     // Implements the destination for Step 14 in
     // https://html.spec.whatwg.org/#worker-processing-model
     //
@@ -610,6 +603,7 @@ nsContentPolicyType WorkerScriptLoader::GetContentPolicyType(
     // "sharedworker".
     return nsIContentPolicy::TYPE_INTERNAL_WORKER_STATIC_MODULE;
   }
+  // For script imported in worker's importScripts().
   return nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS;
 }
 
@@ -652,15 +646,16 @@ already_AddRefed<ScriptLoadRequest> WorkerScriptLoader::CreateScriptLoadRequest(
   // is "not-parser-inserted", credentials mode is credentials mode, referrer
   // policy is the empty string, and fetch priority is "auto".
   RefPtr<ScriptFetchOptions> fetchOptions = new ScriptFetchOptions(
-      CORSMode::CORS_NONE, referrerPolicy, /* aNonce = */ u""_ns,
+      CORSMode::CORS_NONE, /* aNonce = */ u""_ns, RequestPriority::Auto,
       ParserMetadata::NotParserInserted, nullptr);
 
   RefPtr<ScriptLoadRequest> request = nullptr;
   // Bug 1817259 - For now the debugger scripts are always loaded a Classic.
   if (mWorkerRef->Private()->WorkerType() == WorkerType::Classic ||
       IsDebuggerScript()) {
-    request = new ScriptLoadRequest(ScriptKind::eClassic, uri, fetchOptions,
-                                    SRIMetadata(), nullptr,  // mReferrer
+    request = new ScriptLoadRequest(ScriptKind::eClassic, uri, referrerPolicy,
+                                    fetchOptions, SRIMetadata(),
+                                    nullptr,  // mReferrer
                                     loadContext);
   } else {
     // Implements part of "To fetch a worklet/module worker script graph"
@@ -692,7 +687,7 @@ already_AddRefed<ScriptLoadRequest> WorkerScriptLoader::CreateScriptLoadRequest(
 
     // Part of Step 2. This sets the Top-level flag to true
     request = new ModuleLoadRequest(
-        uri, fetchOptions, SRIMetadata(), referrer, loadContext,
+        uri, referrerPolicy, fetchOptions, SRIMetadata(), referrer, loadContext,
         true,  /* is top level */
         false, /* is dynamic import */
         moduleLoader, ModuleLoadRequest::NewVisitedSetForTopLevelImport(uri),
@@ -1146,9 +1141,28 @@ bool WorkerScriptLoader::EvaluateScript(JSContext* aCx,
       return false;
     }
 
+    // https://html.spec.whatwg.org/#run-a-worker
+    // if script's error to rethrow is non-null, then:
+    //    Queue a global task on the DOM manipulation task source given worker's
+    //    relevant global object to fire an event named error at worker.
+    //
+    // The event will be dispatched in CompileScriptRunnable.
+    if (request->mModuleScript->HasParseError()) {
+      // Here we assign an error code that is not a JS Exception, so
+      // CompileRunnable can dispatch the event.
+      mRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+      return false;
+    }
+
     // Implements To fetch a worklet/module worker script graph
     // Step 5. Fetch the descendants of and link result.
     if (!request->InstantiateModuleGraph()) {
+      return false;
+    }
+
+    if (request->mModuleScript->HasErrorToRethrow()) {
+      // See the comments when we check HasParseError() above.
+      mRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
       return false;
     }
 
@@ -1197,17 +1211,42 @@ bool WorkerScriptLoader::EvaluateScript(JSContext* aCx,
     } else {
       requestBaseURI = aRequest->mBaseURL;
     }
-    classicScript =
-        new JS::loader::ClassicScript(aRequest->mFetchOptions, requestBaseURI);
+    classicScript = new JS::loader::ClassicScript(
+        aRequest->ReferrerPolicy(), aRequest->mFetchOptions, requestBaseURI);
   }
 
-  bool successfullyEvaluated =
-      aRequest->IsUTF8Text()
-          ? EvaluateSourceBuffer(aCx, options, classicScript,
-                                 maybeSource.ref<JS::SourceText<Utf8Unit>>())
-          : EvaluateSourceBuffer(aCx, options, classicScript,
-                                 maybeSource.ref<JS::SourceText<char16_t>>());
+  JS::Rooted<JSScript*> script(aCx);
+  script = aRequest->IsUTF8Text()
+               ? JS::Compile(aCx, options,
+                             maybeSource.ref<JS::SourceText<Utf8Unit>>())
+               : JS::Compile(aCx, options,
+                             maybeSource.ref<JS::SourceText<char16_t>>());
+  if (!script) {
+    if (loadContext->IsTopLevel()) {
+      // This is a top-level worker script,
+      //
+      // https://html.spec.whatwg.org/#run-a-worker
+      // If script is null or if script's error to rethrow is non-null, then:
+      //   Queue a global task on the DOM manipulation task source given
+      //   worker's relevant global object to fire an event named error at
+      //   worker.
+      JS_ClearPendingException(aCx);
+      mRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    } else {
+      // This is a script which is loaded by importScripts().
+      //
+      // https://html.spec.whatwg.org/#import-scripts-into-worker-global-scope
+      // For each url in the resulting URL records:
+      //   Fetch a classic worker-imported script given url and settings object,
+      //   passing along performFetch if provided. If this succeeds, let script
+      //   be the result. Otherwise, rethrow the exception.
+      mRv.StealExceptionFromJSContext(aCx);
+    }
 
+    return false;
+  }
+
+  bool successfullyEvaluated = EvaluateSourceBuffer(aCx, script, classicScript);
   if (aRequest->IsCanceled()) {
     return false;
   }

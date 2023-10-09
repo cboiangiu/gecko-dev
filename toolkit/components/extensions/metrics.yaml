@@ -11,6 +11,36 @@ $tags:
   - 'WebExtensions :: General'
 
 extensions:
+  use_remote_pref:
+    type: boolean
+    expires: never
+    lifetime: application
+    description: >
+      Corresponds to the value of `extensions.webextensions.remote` pref.
+    notification_emails:
+      - addons-dev-internal@mozilla.com
+    bugs:
+      - https://bugzilla.mozilla.org/1850351/
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1850351#c2
+    data_sensitivity:
+      - technical
+
+  use_remote_policy:
+    type: boolean
+    expires: never
+    lifetime: application
+    description: >
+      Corresponds to the value of `WebExtensionPolicy.useRemoteWebExtensions`.
+    notification_emails:
+      - addons-dev-internal@mozilla.com
+    bugs:
+      - https://bugzilla.mozilla.org/1850351/
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1850351#c2
+    data_sensitivity:
+      - technical
+
   startup_cache_load_time:
     type: timespan
     time_unit: millisecond
@@ -28,30 +58,42 @@ extensions:
     data_sensitivity:
       - technical
     telemetry_mirror: EXTENSIONS_STARTUPCACHE_LOAD_TIME
+
   process_event:
     type: labeled_counter
     expires: never
     description: |
       Counters for how many times the extension process has crashed or been created.
+      The labels with "_fg" / "_bg" suffixes are only recorded in Android builds,
+      while the "created" and "crashed" labels are recorded on both Desktop and Android
+      builds. 
     lifetime: application
     notification_emails:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1830157/
+      - https://bugzilla.mozilla.org/1848223/
+      - https://bugzilla.mozilla.org/1850350/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1830157#c7
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1848223#c4
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1850350#c2
     data_sensitivity:
       - technical
     labels:
-      - crashed
-      - created
+      - crashed_bg
+      - crashed_fg
+      - created_bg
+      - created_fg
+      - crashed_over_threshold_bg
+      - crashed_over_threshold_fg
 
 extensions.apis.dnr:
 
   startup_cache_read_size:
     type: memory_distribution
     memory_unit: byte
-    expires: 120
+    expires: 126
     description: |
       Amount of data read from the DNR startup cache file.
     lifetime: application
@@ -59,6 +101,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:
@@ -68,7 +111,7 @@ extensions.apis.dnr:
   startup_cache_read_time:
     type: timing_distribution
     time_unit: millisecond
-    expires: 120
+    expires: 126
     description: |
       Amount of time it takes to read data into the DNR startup cache file.
     lifetime: application
@@ -76,6 +119,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:
@@ -85,7 +129,7 @@ extensions.apis.dnr:
   startup_cache_write_size:
     type: memory_distribution
     memory_unit: byte
-    expires: 120
+    expires: 126
     description: |
       Amount of data written to the DNR startup cache file.
     lifetime: application
@@ -93,6 +137,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:
@@ -102,7 +147,7 @@ extensions.apis.dnr:
   startup_cache_write_time:
     type: timing_distribution
     time_unit: millisecond
-    expires: 120
+    expires: 126
     description: |
       Amount of time it takes to write data into the DNR startup cache file.
     lifetime: application
@@ -110,6 +155,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:
@@ -118,7 +164,7 @@ extensions.apis.dnr:
 
   startup_cache_entries:
     type: labeled_counter
-    expires: 120
+    expires: 126
     description: |
       Counters for startup cache data hits or misses on initializating
       DNR rules for extensions loaded on application startup.
@@ -127,6 +173,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:
@@ -139,7 +186,7 @@ extensions.apis.dnr:
   validate_rules_time:
     type: timing_distribution
     time_unit: millisecond
-    expires: 120
+    expires: 126
     description: |
       Amount of time it takes to validate DNR rules of individual ruleset
       when dynamic or static rulesets have been loaded from disk.
@@ -148,6 +195,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:
@@ -157,7 +205,7 @@ extensions.apis.dnr:
   evaluate_rules_time:
     type: timing_distribution
     time_unit: millisecond
-    expires: 120
+    expires: 126
     description: |
       Amount of time it takes to evaluate DNR rules for one network request.
     lifetime: application
@@ -165,6 +213,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:
@@ -174,7 +223,7 @@ extensions.apis.dnr:
   evaluate_rules_count_max:
     type: quantity
     unit: rules
-    expires: 120
+    expires: 126
     description: |
       Max amount of DNR rules being evaluated.
     lifetime: ping
@@ -182,6 +231,7 @@ extensions.apis.dnr:
       - addons-dev-internal@mozilla.com
     bugs:
       - https://bugzilla.mozilla.org/1803363/
+      - https://bugzilla.mozilla.org/1850890/
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1803363#c11
     data_sensitivity:

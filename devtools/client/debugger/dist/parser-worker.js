@@ -30492,10 +30492,6 @@
       return locations.map(parser);
     }
 
-    function generateWhitespace(length) {
-      return Array.from(new Array(length + 1)).join(" ");
-    }
-
     function calcLineAndColumn(source, index) {
       const lines = source.substring(0, index).split(newLines);
       const line = lines.length;
@@ -30513,7 +30509,8 @@
         line,
         column,
         // prepend whitespace for scripts that do not start on the first column
-        source: generateWhitespace(column) + location.source,
+        // NOTE: `column` is 1-based
+        source: " ".repeat(column - 1) + location.source,
       });
     }
 
@@ -41730,10 +41727,6 @@
         symbols.imports.push(getImportDeclarationSymbol(path.node));
       }
 
-      if (lib$3.isObjectProperty(path)) {
-        symbols.objectProperties.push(getObjectPropertySymbol(path));
-      }
-
       if (lib$3.isMemberExpression(path) || lib$3.isOptionalMemberExpression(path)) {
         symbols.memberExpressions.push(getMemberExpressionSymbol(path));
       }
@@ -41763,7 +41756,6 @@
         functions: [],
         callExpressions: [],
         memberExpressions: [],
-        objectProperties: [],
         comments: [],
         identifiers: [],
         classes: [],
@@ -41968,7 +41960,7 @@
       }
     }
 
-    function getSymbols(sourceId) {
+    function getInternalSymbols(sourceId) {
       if (symbolDeclarations.has(sourceId)) {
         const symbols = symbolDeclarations.get(sourceId);
         if (symbols) {
@@ -41980,6 +41972,54 @@
 
       symbolDeclarations.set(sourceId, symbols);
       return symbols;
+    }
+
+    function getFunctionSymbols(sourceId, maxResults) {
+      const symbols = getInternalSymbols(sourceId);
+      if (!symbols) {
+        return [];
+      }
+      let { functions } = symbols;
+      // Avoid transferring more symbols than necessary
+      if (maxResults && functions.length > maxResults) {
+        functions = functions.slice(0, maxResults);
+      }
+      // The Outline & the Quick open panels do not need anonymous functions
+      return functions.filter(fn => fn.name !== "anonymous");
+    }
+
+    // This is only called from the main thread and we return a subset of attributes
+    function getSymbols(sourceId) {
+      const symbols = getInternalSymbols(sourceId);
+      return {
+        // This is used in the main thread by:
+        // - Outline panel
+        // - The `getFunctionSymbols` function
+        // - The mapping of frame function names
+        // And within the worker by `findOutOfScopeLocations`
+        functions: symbols.functions,
+
+        // The three following attributes are only used by `findBestMatchExpression` within the worker thread
+        // `memberExpressions`, `literals`
+        // This one is also used within the worker for framework computation
+        // `identifiers`
+
+        // This is used within the worker for framework computation,
+        // and in the main thread by the outline panel
+        classes: symbols.classes,
+
+        // The two following are only used by the main thread for computing CodeMirror "mode"
+        hasJsx: symbols.hasJsx,
+        hasTypes: symbols.hasTypes,
+
+        // This is used in the main thread only to compute the source icon
+        framework: symbols.framework,
+
+        // This is only used within the worker for framework computation:
+        // `imports`, `callExpressions`
+        // This is only used by `findOutOfScopeLocations`:
+        // `comments`
+      };
     }
 
     function getUniqueIdentifiers(identifiers) {
@@ -42013,15 +42053,6 @@
         source: node.source.value,
         location: node.loc,
         specifiers: getSpecifiers(node.specifiers),
-      };
-    }
-
-    function getObjectPropertySymbol(path) {
-      const { start, end, identifierName } = path.node.key.loc;
-      return {
-        name: identifierName,
-        location: { start, end },
-        expression: getSnippet(path),
       };
     }
 
@@ -42179,12 +42210,28 @@
       const { global, lexical } = createGlobalScope(ast, sourceId);
 
       const state = {
+        // The id for the source that scope list is generated for
         sourceId,
+
+        // A map of any free variables(variables which are used within the current scope but not
+        // declared within the scope). This changes when a new scope is created.
         freeVariables: new Map(),
+
+        // A stack of all the free variables created across all the scopes that have
+        // been created.
         freeVariableStack: [],
+
         inType: null,
+
+        // The current scope, a new scope is potentially created on a visit to each node
+        // depending in the criteria. Initially set to the lexical global scope which is the
+        // child to the global scope.
         scope: lexical,
+
+        // A stack of all the existing scopes, this is mainly used retrieve the parent scope
+        // (which is the last scope push onto the stack) on exiting a visited node.
         scopeStack: [],
+
         declarationBindingIds: new Set(),
       };
       lib$3.traverse(ast, scopeCollectionVisitor, state);
@@ -42235,20 +42282,39 @@
       }));
     }
 
+    /**
+     * Create a new scope object and link the scope to it parent.
+     *
+     * @param {String} type - scope type
+     * @param {String} displayName - The scope display name
+     * @param {Object} parent - The parent object scope
+     * @param {Object} loc - The start and end postions (line/columns) of the scope
+     * @returns {Object} The newly created scope
+     */
     function createTempScope(type, displayName, parent, loc) {
-      const result = {
+      const scope = {
         type,
         displayName,
         parent,
+
+        // A list of all the child scopes
         children: [],
         loc,
+
+        // All the bindings defined in this scope
+        // bindings = [binding, ...]
+        // binding = { type: "", refs: []}
         bindings: Object.create(null),
       };
+
       if (parent) {
-        parent.children.push(result);
+        parent.children.push(scope);
       }
-      return result;
+      return scope;
     }
+
+    // Sets a new current scope and creates a new map to store the free variables
+    // that may exist in this scope.
     function pushTempScope(state, type, displayName, loc) {
       const scope = createTempScope(type, displayName, state.scope, loc);
 
@@ -42263,6 +42329,7 @@
       return node ? node.type === type : false;
     }
 
+    // Walks up the scope tree to the top most variable scope
     function getVarScope(scope) {
       let s = scope;
       while (s.type !== "function" && s.type !== "module") {
@@ -42388,6 +42455,8 @@
       return isNode(node, "VariableDeclaration") && isLetOrConst(node);
     }
 
+    // Creates the global scopes for this source, the overall global scope
+    // and a lexical global scope.
     function createGlobalScope(ast, sourceId) {
       const global = createTempScope("object", "Global", null, {
         start: fromBabelLocation(ast.loc.start, sourceId),
@@ -42425,6 +42494,7 @@
           };
         } else if (lib$3.isFunction(node)) {
           let { scope } = state;
+
           if (lib$3.isFunctionExpression(node) && isNode(node.id, "Identifier")) {
             scope = pushTempScope(state, "block", "Function Expression", {
               start: fromBabelLocation(node.loc.start, state.sourceId),
@@ -42469,6 +42539,7 @@
                 refs,
               };
             } else {
+              // Add the binding to the ancestor scope
               getVarScope(scope).bindings[node.id.name] = {
                 type: "var",
                 refs,
@@ -43088,7 +43159,7 @@
     }
 
     function findSymbols(source) {
-      const { functions, comments } = getSymbols(source);
+      const { functions, comments } = getInternalSymbols(source);
       return { functions, comments };
     }
 
@@ -43208,6 +43279,37 @@
         return !containsPosition(loc, location);
       });
       return removeOverlaps(outerLocations);
+    }
+
+    function findBestMatchExpression(sourceId, tokenPos) {
+      const symbols = getInternalSymbols(sourceId);
+      if (!symbols) {
+        return null;
+      }
+
+      const { line, column } = tokenPos;
+      const { memberExpressions, identifiers, literals } = symbols;
+
+      function matchExpression(expression) {
+        const { location } = expression;
+        const { start, end } = location;
+        return start.line == line && start.column <= column && end.column >= column;
+      }
+      function matchMemberExpression(expression) {
+        // For member expressions we ignore "computed" member expressions `foo[bar]`,
+        // to only match the one that looks like: `foo.bar`.
+        return !expression.computed && matchExpression(expression);
+      }
+      // Avoid duplicating these arrays and be careful about performance as they can be large
+      //
+      // Process member expressions first as they can be including identifiers which
+      // are subset of the member expression.
+      // Ex: `foo.bar` is a member expression made of `foo` and `bar` identifiers.
+      return (
+        memberExpressions.find(matchMemberExpression) ||
+        literals.find(matchExpression) ||
+        identifiers.find(matchExpression)
+      );
     }
 
     function hasSyntaxError(input) {
@@ -43454,8 +43556,8 @@
     }
 
     /**
-     * Given an AST, compute its last statement and replace it with a
-     * return statement.
+     * Given an AST, modify it to return the last evaluated statement's expression value if possible.
+     * This is to preserve existing console behavior of displaying the last executed expression value.
      */
     function addReturnNode(ast) {
       const statements = ast.program.body;
@@ -43467,7 +43569,16 @@
       if (lib$3.isAwaitExpression(lastStatement.expression)) {
         lastStatement.expression = lastStatement.expression.argument;
       }
-      statements.push(lib$3.returnStatement(lastStatement.expression));
+
+      // NOTE: For more complicated cases such as an if/for statement, the last evaluated
+      // expression value probably can not be displayed, unless doing hacky workarounds such
+      // as returning the `eval` of the final statement (won't always work due to CSP issues?)
+      // or SpiderMonkey support (See Bug 1839588) at which point this entire module can be removed.
+      statements.push(
+        lib$3.isExpressionStatement(lastStatement)
+          ? lib$3.returnStatement(lastStatement.expression)
+          : lastStatement
+      );
       return statements;
     }
 
@@ -43830,7 +43941,9 @@
 
     self.onmessage = workerUtilsExports.workerHandler({
       findOutOfScopeLocations,
+      findBestMatchExpression,
       getSymbols,
+      getFunctionSymbols,
       getScopes,
       clearSources: clearAllHelpersForSources,
       hasSyntaxError,

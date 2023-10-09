@@ -36,12 +36,15 @@
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Variant.h"
+#include "mozilla/ipc/ProtocolUtils.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
 #include "nsError.h"
 #include "nsFrameLoader.h"
 #include "nsFrameLoaderOwner.h"
+#include "nsICookieManager.h"
+#include "nsICookieService.h"
 #include "nsQueryObject.h"
 #include "nsNetUtil.h"
 #include "nsSandboxFlags.h"
@@ -63,9 +66,14 @@
 #include "mozilla/dom/JSWindowActorBinding.h"
 #include "mozilla/dom/JSWindowActorParent.h"
 
+#include "mozilla/net/NeckoParent.h"
+#include "mozilla/net/PCookieServiceParent.h"
+#include "mozilla/net/CookieServiceParent.h"
+
 #include "SessionStoreFunctions.h"
 #include "nsIXPConnect.h"
 #include "nsImportModule.h"
+#include "nsIXULRuntime.h"
 
 #include "mozilla/dom/PBackgroundSessionStorageCache.h"
 
@@ -543,9 +551,7 @@ void WindowGlobalParent::NotifyContentBlockingEvent(
   MOZ_ASSERT(NS_IsMainThread());
   DebugOnly<bool> isCookiesBlocked =
       aEvent == nsIWebProgressListener::STATE_COOKIES_BLOCKED_TRACKER ||
-      aEvent == nsIWebProgressListener::STATE_COOKIES_BLOCKED_SOCIALTRACKER ||
-      (aEvent == nsIWebProgressListener::STATE_COOKIES_BLOCKED_FOREIGN &&
-       StaticPrefs::network_cookie_rejectForeignWithExceptions_enabled());
+      aEvent == nsIWebProgressListener::STATE_COOKIES_BLOCKED_SOCIALTRACKER;
   MOZ_ASSERT_IF(aBlocked, aReason.isNothing());
   MOZ_ASSERT_IF(!isCookiesBlocked, aReason.isNothing());
   MOZ_ASSERT_IF(isCookiesBlocked && !aBlocked, aReason.isSome());
@@ -601,6 +607,11 @@ already_AddRefed<JSActor> WindowGlobalParent::InitJSActor(
 }
 
 bool WindowGlobalParent::IsCurrentGlobal() {
+  if (mozilla::SessionHistoryInParent() && BrowsingContext() &&
+      BrowsingContext()->IsInBFCache()) {
+    return false;
+  }
+
   return CanSend() && BrowsingContext()->GetCurrentWindowGlobal() == this;
 }
 
@@ -1103,12 +1114,13 @@ void WindowGlobalParent::FinishAccumulatingPageUseCounters() {
 
     Telemetry::Accumulate(Telemetry::TOP_LEVEL_CONTENT_DOCUMENTS_DESTROYED, 1);
 
+    bool any = false;
     for (int32_t c = 0; c < eUseCounter_Count; ++c) {
       auto uc = static_cast<UseCounter>(c);
       if (!mPageUseCounters->mUseCounters[uc]) {
         continue;
       }
-
+      any = true;
       auto id = static_cast<Telemetry::HistogramID>(
           Telemetry::HistogramFirstUseCounter + uc * 2 + 1);
       if (dumpCounters) {
@@ -1116,6 +1128,11 @@ void WindowGlobalParent::FinishAccumulatingPageUseCounters() {
                       Telemetry::GetHistogramName(id), urlForLogging->get());
       }
       Telemetry::Accumulate(id, 1);
+    }
+
+    if (!any) {
+      MOZ_LOG(gUseCountersLog, LogLevel::Debug,
+              (" > page use counter data was received, but was empty"));
     }
   } else {
     MOZ_LOG(gUseCountersLog, LogLevel::Debug,
@@ -1288,6 +1305,10 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvReloadWithHttpsOnlyException() {
   nsresult rv;
   nsCOMPtr<nsIURI> currentUri = BrowsingContext()->Top()->GetCurrentURI();
 
+  if (!currentUri) {
+    return IPC_FAIL(this, "HTTPS-only mode: Failed to get current URI");
+  }
+
   bool isViewSource = currentUri->SchemeIs("view-source");
 
   nsCOMPtr<nsINestedURI> nestedURI = do_QueryInterface(currentUri);
@@ -1383,57 +1404,15 @@ IPCResult WindowGlobalParent::RecvHasStorageAccessPermission(
   }
   nsIPrincipal* topPrincipal = top->DocumentPrincipal();
   nsIPrincipal* principal = DocumentPrincipal();
+  bool result;
+  nsresult rv = AntiTrackingUtils::TestStoragePermissionInParent(
+      topPrincipal, principal, &result);
+  NS_ENSURE_SUCCESS(
+      rv, IPC_FAIL(
+              this,
+              "Storage Access Permission: Failed to test storage permission."));
 
-  nsCOMPtr<nsIPermissionManager> permMgr =
-      components::PermissionManager::Service();
-  if (!permMgr) {
-    return IPC_FAIL(
-        this,
-        "Storage Access Permission: Failed to get Permission Manager service");
-  }
-
-  // Build the permission keys
-  nsAutoCString requestPermissionKey;
-  bool success = AntiTrackingUtils::CreateStoragePermissionKey(
-      principal, requestPermissionKey);
-  if (!success) {
-    return IPC_FAIL(
-        this,
-        "Storage Access Permission: Failed to create top level permission key");
-  }
-
-  nsAutoCString requestFramePermissionKey;
-  success = AntiTrackingUtils::CreateStorageFramePermissionKey(
-      principal, requestFramePermissionKey);
-  if (!success) {
-    return IPC_FAIL(
-        this,
-        "Storage Access Permission: Failed to create frame permission key");
-  }
-
-  // Test the permission
-  uint32_t access = nsIPermissionManager::UNKNOWN_ACTION;
-  nsresult rv = permMgr->TestPermissionFromPrincipal(
-      topPrincipal, requestPermissionKey, &access);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return IPC_FAIL(this,
-                    "Storage Access Permission: Permission Manager failed to "
-                    "test permission");
-  }
-  if (access == nsIPermissionManager::ALLOW_ACTION) {
-    aResolve(true);
-    return IPC_OK();
-  }
-
-  uint32_t frameAccess = nsIPermissionManager::UNKNOWN_ACTION;
-  rv = permMgr->TestPermissionFromPrincipal(
-      topPrincipal, requestFramePermissionKey, &frameAccess);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return IPC_FAIL(this,
-                    "Storage Access Permission: Permission Manager failed to "
-                    "test permission");
-  }
-  aResolve(frameAccess == nsIPermissionManager::ALLOW_ACTION);
+  aResolve(result);
   return IPC_OK();
 }
 
@@ -1644,6 +1623,26 @@ void WindowGlobalParent::SetShouldReportHasBlockedOpaqueResponse(
       mShouldReportHasBlockedOpaqueResponse = true;
     }
   }
+}
+
+IPCResult WindowGlobalParent::RecvSetCookies(
+    const nsCString& aBaseDomain, const OriginAttributes& aOriginAttributes,
+    nsIURI* aHost, bool aFromHttp, const nsTArray<CookieStruct>& aCookies) {
+  // Get CookieServiceParent via
+  // ContentParent->NeckoParent->CookieServiceParent.
+  ContentParent* contentParent = GetContentParent();
+  NS_ENSURE_TRUE(contentParent, IPC_OK());
+
+  net::PNeckoParent* neckoParent =
+      LoneManagedOrNullAsserts(contentParent->ManagedPNeckoParent());
+  NS_ENSURE_TRUE(neckoParent, IPC_OK());
+  net::PCookieServiceParent* csParent =
+      LoneManagedOrNullAsserts(neckoParent->ManagedPCookieServiceParent());
+  NS_ENSURE_TRUE(csParent, IPC_OK());
+  auto* cs = static_cast<net::CookieServiceParent*>(csParent);
+
+  return cs->SetCookies(aBaseDomain, aOriginAttributes, aHost, aFromHttp,
+                        aCookies, GetBrowsingContext());
 }
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(WindowGlobalParent, WindowContext,

@@ -42,7 +42,7 @@ packaging_description_schema = Schema(
         Optional("shipping-product"): job_description_schema["shipping-product"],
         Optional("shipping-phase"): job_description_schema["shipping-phase"],
         Required("package-formats"): optionally_keyed_by(
-            "build-platform", "release-type", [str]
+            "build-platform", "release-type", "build-type", [str]
         ),
         Optional("msix"): {
             Optional("channel"): optionally_keyed_by(
@@ -77,6 +77,7 @@ packaging_description_schema = Schema(
                 "shipping-product",
                 str,
             ),
+            Optional("vendor"): str,
         },
         # All l10n jobs use mozharness
         Required("mozharness"): {
@@ -153,6 +154,8 @@ PACKAGE_FORMATS = {
             "{msix-publisher-display-name}",
             "--identity-name",
             "{msix-identity-name}",
+            "--vendor",
+            "{msix-vendor}",
             "--arch",
             "{architecture}",
             # For langpacks.  Ignored if directory does not exist.
@@ -178,6 +181,8 @@ PACKAGE_FORMATS = {
             "{msix-publisher-display-name}",
             "--identity-name",
             "{msix-identity-name}",
+            "--vendor",
+            "{msix-vendor}",
             "--arch",
             "{architecture}",
             # For langpacks.  Ignored if directory does not exist.
@@ -194,6 +199,17 @@ PACKAGE_FORMATS = {
     },
     "dmg": {
         "args": ["dmg"],
+        "inputs": {
+            "input": "target{archive_format}",
+        },
+        "output": "target.dmg",
+    },
+    "dmg-attrib": {
+        "args": [
+            "dmg",
+            "--attribution_sentinel",
+            "__MOZCUSTOM__",
+        ],
         "inputs": {
             "input": "target{archive_format}",
         },
@@ -305,6 +321,7 @@ def copy_in_useful_magic(config, jobs):
 
         job["build-platform"] = dep.attributes.get("build_platform")
         job["shipping-product"] = dep.attributes.get("shipping_product")
+        job["build-type"] = dep.attributes.get("build_type")
         yield job
 
 
@@ -493,6 +510,7 @@ def make_job_description(config, jobs):
                 "identity-name",
                 "publisher",
                 "publisher-display-name",
+                "vendor",
             ):
                 resolve_keyed_by(
                     item=temp_job,

@@ -782,7 +782,8 @@ nsDOMWindowUtils::SendWheelEvent(float aX, float aY, double aDeltaX,
   wheelEvent.mRefPoint =
       nsContentUtils::ToWidgetPoint(CSSPoint(aX, aY), offset, presContext);
 
-  if (StaticPrefs::test_events_async_enabled()) {
+  if (StaticPrefs::test_events_async_enabled() &&
+      StaticPrefs::test_events_async_wheel_enabled()) {
     widget->DispatchInputEvent(&wheelEvent);
   } else {
     nsEventStatus status = nsEventStatus_eIgnore;
@@ -934,7 +935,8 @@ nsresult nsDOMWindowUtils::SendTouchEventCommon(
     return presShell->HandleEvent(view->GetFrame(), &event, false, &status);
   }
 
-  if (StaticPrefs::test_events_async_enabled()) {
+  if (StaticPrefs::test_events_async_enabled() &&
+      StaticPrefs::test_events_async_touch_enabled()) {
     status = widget->DispatchInputEvent(&event).mContentStatus;
   } else {
     nsresult rv = widget->DispatchEvent(&event, status);
@@ -2202,7 +2204,7 @@ nsDOMWindowUtils::GetCanvasBackgroundColor(nsAString& aColor) {
   }
   nscolor color = NS_RGB(255, 255, 255);
   if (PresShell* presShell = GetPresShell()) {
-    color = presShell->ComputeCanvasBackground().mColor;
+    color = presShell->ComputeCanvasBackground().mViewportColor;
   }
   nsStyleUtil::GetSerializedColorValue(color, aColor);
   return NS_OK;
@@ -3097,7 +3099,7 @@ nsDOMWindowUtils::ZoomToFocusedInput() {
       layers::TouchActionHelper::GetAllowedTouchBehaviorForFrame(
           element->GetPrimaryFrame());
 
-  uint32_t flags = layers::DISABLE_ZOOM_OUT;
+  uint32_t flags = layers::DISABLE_ZOOM_OUT | layers::ZOOM_TO_FOCUSED_INPUT;
   if (!Preferences::GetBool("formhelper.autozoom") ||
       Preferences::GetBool("formhelper.autozoom.force-disable.test-only",
                            /* aFallback = */ false) ||
@@ -3139,8 +3141,6 @@ nsDOMWindowUtils::ZoomToFocusedInput() {
     // Do not zoom on empty bounds. Bail out.
     return NS_OK;
   }
-
-  bounds.Inflate(15.0f, 0.0f);
 
   bool waitForRefresh = false;
   for (nsIScrollableFrame* scrollAncestor :
@@ -4260,6 +4260,17 @@ nsDOMWindowUtils::GetFramesReflowed(uint64_t* aResult) {
 }
 
 NS_IMETHODIMP
+nsDOMWindowUtils::GetAnimationTriggeredRestyles(uint64_t* aResult) {
+  nsPresContext* presContext = GetPresContext();
+  if (!presContext) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  *aResult = presContext->AnimationTriggeredRestylesCount();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDOMWindowUtils::GetRefreshDriverHasPendingTick(bool* aResult) {
   nsPresContext* presContext = GetPresContext();
   if (!presContext) {
@@ -4284,10 +4295,8 @@ nsDOMWindowUtils::LeaveChaosMode() {
 
 NS_IMETHODIMP
 nsDOMWindowUtils::TriggerDeviceReset() {
-  ContentChild* cc = ContentChild::GetSingleton();
-  if (cc) {
-    cc->SendDeviceReset();
-    return NS_OK;
+  if (!XRE_IsParentProcess()) {
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
   GPUProcessManager* pm = GPUProcessManager::Get();
@@ -4387,7 +4396,7 @@ nsDOMWindowUtils::AddManuallyManagedState(Element* aElement,
     return NS_ERROR_INVALID_ARG;
   }
 
-  aElement->AddManuallyManagedStates(state);
+  aElement->AddStates(state);
   return NS_OK;
 }
 
@@ -4403,7 +4412,7 @@ nsDOMWindowUtils::RemoveManuallyManagedState(Element* aElement,
     return NS_ERROR_INVALID_ARG;
   }
 
-  aElement->RemoveManuallyManagedStates(state);
+  aElement->RemoveStates(state);
   return NS_OK;
 }
 

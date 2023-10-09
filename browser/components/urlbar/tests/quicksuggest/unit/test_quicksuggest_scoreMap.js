@@ -9,7 +9,7 @@
 
 "use strict";
 
-const { DEFAULT_SUGGESTION_SCORE } = QuickSuggestRemoteSettings;
+const { DEFAULT_SUGGESTION_SCORE } = UrlbarProviderQuickSuggest;
 
 const REMOTE_SETTINGS_RECORDS = [
   {
@@ -744,31 +744,27 @@ function makeExpectedAdmResult({
 }
 
 function makeExpectedAddonResult({ suggestion, source = "remote-settings" }) {
+  let url = new URL(suggestion.url);
+  url.searchParams.set("utm_medium", "firefox-desktop");
+  url.searchParams.set("utm_source", "firefox-suggest");
+
   return {
-    type: UrlbarUtils.RESULT_TYPE.DYNAMIC,
+    type: UrlbarUtils.RESULT_TYPE.URL,
     source: UrlbarUtils.RESULT_SOURCE.SEARCH,
     heuristic: false,
+    isBestMatch: true,
     payload: {
       source,
       provider: source == "remote-settings" ? "AddonSuggestions" : "amo",
       telemetryType: "amo",
-      dynamicType: "addons",
       title: suggestion.title,
-      url: suggestion.url,
-      displayUrl: suggestion.url.replace(/^https:\/\//, ""),
+      url: url.href,
+      originalUrl: suggestion.url,
+      displayUrl: url.href.replace(/^https:\/\//, ""),
+      shouldShowUrl: true,
       icon: suggestion.icon,
       description: suggestion.description,
-      rating: Number(
-        source == "remote-settings"
-          ? suggestion.rating
-          : suggestion.custom_details.amo.rating
-      ),
-      reviews: Number(
-        source == "remote-settings"
-          ? suggestion.number_of_ratings
-          : suggestion.custom_details.amo.number_of_ratings
-      ),
-      shouldNavigate: true,
+      bottomTextL10n: { id: "firefox-suggest-addons-recommended" },
       helpUrl: QuickSuggest.HELP_URL,
     },
   };

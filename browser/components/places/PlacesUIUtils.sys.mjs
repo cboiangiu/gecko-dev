@@ -11,6 +11,7 @@ import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  CLIENT_NOT_CONFIGURED: "resource://services-sync/constants.sys.mjs",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   CustomizableUI: "resource:///modules/CustomizableUI.sys.mjs",
   MigrationUtils: "resource:///modules/MigrationUtils.sys.mjs",
@@ -377,7 +378,7 @@ class BookmarkState {
   async _createBookmark() {
     await lazy.PlacesTransactions.batch(async () => {
       this._guid = await lazy.PlacesTransactions.NewBookmark({
-        parentGuid: this._newState.parentGuid ?? this._originalState.parentGuid,
+        parentGuid: this.parentGuid,
         tags: this._newState.tags,
         title: this._newState.title ?? this._originalState.title,
         url: this._newState.uri ?? this._originalState.uri,
@@ -401,12 +402,16 @@ class BookmarkState {
    */
   async _createFolder() {
     this._guid = await lazy.PlacesTransactions.NewFolder({
-      parentGuid: this._newState.parentGuid ?? this._originalState.parentGuid,
+      parentGuid: this.parentGuid,
       title: this._newState.title ?? this._originalState.title,
       children: this._children,
       index: this._originalState.index,
     }).transact();
     return this._guid;
+  }
+
+  get parentGuid() {
+    return this._newState.parentGuid ?? this._originalState.parentGuid;
   }
 
   /**
@@ -1181,7 +1186,7 @@ export var PlacesUIUtils = {
 
   shouldShowTabsFromOtherComputersMenuitem() {
     let weaveOK =
-      lazy.Weave.Status.checkSetup() != lazy.Weave.CLIENT_NOT_CONFIGURED &&
+      lazy.Weave.Status.checkSetup() != lazy.CLIENT_NOT_CONFIGURED &&
       lazy.Weave.Svc.PrefBranch.getCharPref("firstSync", "") != "notReady";
     return weaveOK;
   },

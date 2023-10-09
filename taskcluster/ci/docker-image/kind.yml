@@ -247,26 +247,22 @@ jobs:
         parent: debian11-base
     system-symbols-mac:
         symbol: I(system-symbols-mac)
-        parent: debian11-base
+        parent: debian12-base
     system-symbols-win:
         symbol: I(system-symbols-win)
-        parent: debian11-base
+        parent: debian12-base
+    system-symbols-win-gfx:
+        symbol: I(system-symbols-win-gfx)
+        parent: debian12-base
     system-symbols-linux-scraper:
         symbol: I(system-symbols-linux)
-        parent: debian11-base
+        parent: debian12-base
     push-to-try:
         symbol: I(push-to-try)
         parent: debian11-base
     decision:
         symbol: I(decision)
         parent: ubuntu2004-base
-    snap-build-core20:
-        symbol: I(snap20-build)
-        parent: ubuntu2004-base
-        definition: snap-coreXX-build
-        args:
-            SNAP_BASE: core20
-            SNAP_LIST: "gnome-3-38-2004-sdk"
     snap-build-core22:
         symbol: I(snap22-build)
         parent: ubuntu2204-base

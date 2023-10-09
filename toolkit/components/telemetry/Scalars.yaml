@@ -138,185 +138,6 @@ a11y:
     record_in_processes:
       - 'main'
 
-attribution.provenance:
-  data_exists:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      Will be true if the "zoneIdProvenanceData" file is present in the
-      installation directory and we were able to successfully read it.
-    keyed: false
-    expires: "121"
-    kind: boolean
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
-  file_system:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      The file system that the installer resided on at installation time.
-      Possible values are: "NTFS", "FAT32", "other".
-      In error cases, it can also be "missing", "error" or "readIniError".
-      Only sent if attribution.provenance.zone_id.data_exists is true.
-    keyed: false
-    expires: "121"
-    kind: string
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
-  ads_exists:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      Will always be false if attribution.provenance.zone_id.data_exists is
-      false. Will be true if the provenance data indicates that the
-      :Zone.Identifier Alternate Data Stream existed on the installer.
-    keyed: false
-    expires: "121"
-    kind: boolean
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
-  security_zone:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      The zone identifier in the installer's :Zone.Identifier ADS.
-      Possible values are integers between 0 and 4, inclusive.
-      In error cases, it can also be "unexpected", "missing", "error", or
-      "readIniError".
-      Only sent if attribution.provenance.zone_id.ads_exists is true.
-    keyed: false
-    expires: "121"
-    kind: string
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
-  referrer_url_exists:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      Will be true if the zone identifier ADS contained a referrer URL. Will be
-      false if a referrer URL is specified, but it isn't a valid URL.
-      Only sent if attribution.provenance.zone_id.ads_exists is true.
-    keyed: false
-    expires: "121"
-    kind: boolean
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
-  referrer_url_is_mozilla:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      Will be true if the referrer URL from the zone identifier ADS appeared to
-      be a Mozilla URL.
-      Only sent if attribution.provenance.zone_id.referrer_url_exists is true.
-    keyed: false
-    expires: "121"
-    kind: boolean
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
-  host_url_exists:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      Will be true if the zone identifier ADS contained a host URL. Will be
-      false if a host URL is specified, but it isn't a valid URL.
-      Only sent if attribution.provenance.zone_id.ads_exists is true.
-    keyed: false
-    expires: "121"
-    kind: boolean
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
-  host_url_is_mozilla:
-    bug_numbers:
-      - 1815023
-      - 1570652
-    description: >
-      Will be true if the host URL from the zone identifier ADS appeared to be a
-      Mozilla URL.
-      Only sent if attribution.provenance.zone_id.host_url_exists is true.
-    keyed: false
-    expires: "121"
-    kind: boolean
-    notification_emails:
-      - application-update-telemetry-alerts@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - 'main'
-    record_into_store:
-      - main
-      - new-profile
-
 # The following section contains the browser engagement scalars.
 browser.engagement:
   max_concurrent_tab_count:
@@ -1533,12 +1354,13 @@ cookie.banners:
       - 1797073
       - 1804259
       - 1827765
+      - 1850874
     description: >
       Counts the number of hit/miss of cookie banner rule lookups for every
       load. We collect three types of counters, including counters for overall
       rule lookup, counters for cookie rule lookup and counters for click rule
       lookup. We also divide the counter by top-level loads and iframe loads.
-    expires: '120'
+    expires: '122'
     kind: uint
     keyed: true
     notification_emails:
@@ -1554,13 +1376,14 @@ cookie.banners:
       - 1797073
       - 1804259
       - 1827765
+      - 1850874
     description: >
       Counts the number of hit/miss of cookie banner rule lookups for domain.
       We collect three types of counters, including counters for overall
       rule lookup, counters for cookie rule lookup and counters for click rule
       lookup. We also divide the counter by top-level loads and iframe loads.
       For each domain, we will only collect once.
-    expires: '120'
+    expires: '122'
     kind: uint
     keyed: true
     notification_emails:
@@ -1578,12 +1401,13 @@ cookie.banners.click:
       - 1797078
       - 1804259
       - 1827765
+      - 1850874
     description: >
       Given a matching cookie banner click rule, how often do we handle or fail
       to handle cookie banners, labelled by reason. The 'success' and 'fail'
       counters count the total numbers independently of the reason counters.
       Counters are incremented after the content window has been destroyed.
-    expires: '120'
+    expires: '122'
     keyed: true
     kind: uint
     notification_emails:
@@ -1635,13 +1459,14 @@ extensions.apis.dnr:
   startup_cache_entries:
     bug_numbers:
       - 1803363
+      - 1850890
     description: >
       Counters for startup cache data hits or misses on initializating
       DNR rules for extensions loaded on application startup.
       The expected keys are 'hit' and 'miss'.
       This probe is mirrored from a Glean metric with the same name.
     keyed: true
-    expires: '120'
+    expires: '126'
     kind: uint
     notification_emails:
       - addons-dev-internal@mozilla.com
@@ -1652,9 +1477,10 @@ extensions.apis.dnr:
   evaluate_rules_count_max:
     bug_numbers:
       - 1803363
+      - 1850890
     description: >
       Max amount of DNR rules being evaluated.
-    expires: '120'
+    expires: '126'
     kind: uint
     notification_emails:
       - addons-dev-internal@mozilla.com
@@ -1875,6 +1701,23 @@ pwmgr:
       - 'firefox'
     record_in_processes:
       - main
+
+bloburl:
+  resolve_stopped:
+    bug_numbers:
+      - 1843158
+    description: >
+      Counts how many times we do not resolve a blob URL
+      because of different partition keys
+    expires: "127"
+    kind: uint
+    notification_emails:
+      - amadan@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - content
 
 contentblocking:
   cryptomining_blocking_enabled:
@@ -2896,6 +2739,22 @@ media:
     record_in_processes:
       - 'main'
       - 'content'
+
+  device_hardware_decoding_support:
+    bug_numbers:
+      - 1850594
+    description: >
+      Record the hardware decoding availability on devices, the key is the name of video codec, eg. h264, av1.
+    expires: never
+    kind: boolean
+    keyed: true
+    notification_emails:
+      - media-alerts@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'gpu'
 
 # The following section contains content process base counters.
 dom.contentprocess:
@@ -4078,13 +3937,15 @@ gfx.canvas.remote:
       - 1672582
       - 1706844
       - 1739290
+      - 1852144
     description: >
       Number of times remote canvas 2D has been deactivated due to device creation failure.
     kind: uint
-    expires: "103"
+    expires: "130"
     notification_emails:
       - gfx-telemetry-alerts@mozilla.com
       - bowen@mozilla.com
+      - aosmond@mozilla.com
     release_channel_collection: opt-out
     products:
       - 'firefox'
@@ -4097,13 +3958,15 @@ gfx.canvas.remote:
       - 1672582
       - 1706844
       - 1739290
+      - 1852144
     description: >
       Number of times remote canvas 2D has been deactivated due to a stream read failure.
     kind: uint
-    expires: "103"
+    expires: "130"
     notification_emails:
       - gfx-telemetry-alerts@mozilla.com
       - bowen@mozilla.com
+      - aosmond@mozilla.com
     release_channel_collection: opt-out
     products:
       - 'firefox'
@@ -4448,7 +4311,7 @@ apz:
       - 1836870
     description: >
       Count of overshoot events, where the user reverses scrollwheel direction soon after the last scrollwheel input.
-    expires: "121"
+    expires: "126"
     kind: uint
     notification_emails:
       - botond@mozilla.com
@@ -5532,7 +5395,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5567,7 +5431,8 @@ browser.search.content:
     bug_numbers:
       - 1779471
     description: >
-      Records counts for in-content searches where the search was most likely started from the urlbar after the search term was shown in the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the urlbar after the search term was shown in the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     kind: uint
     keyed: true
@@ -5588,7 +5453,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the urlbar in search mode. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the urlbar in search mode. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5609,7 +5475,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the search bar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the search bar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5630,7 +5497,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the about:home. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the about:home. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5651,7 +5519,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the about:newtab. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the about:newtab. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5672,7 +5541,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the context menu. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the context menu. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5693,7 +5563,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from a webextension. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from a webextension. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5714,7 +5585,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the system, e.g. command line. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the system, e.g. command line. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5731,7 +5603,8 @@ browser.search.content:
     bug_numbers:
       - 1634564
     description: >
-      Records counts for in-content searches where the search was loaded from the tab history. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was loaded from the tab history. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5748,7 +5621,8 @@ browser.search.content:
     bug_numbers:
       - 1634564
     description: >
-      Records counts for in-content searches where the search was loaded by reloading the page. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was loaded by reloading the page. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5769,7 +5643,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was started from a place that could not be determined or not categorized by the other scalars. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was started from a place that could not be determined or not categorized by the other scalars. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5788,6 +5663,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5823,6 +5699,7 @@ browser.search.withads:
       - 1779471
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the urlbar after the search term was shown in the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     kind: uint
     keyed: true
@@ -5840,6 +5717,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the urlbar in search mode. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5857,6 +5735,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the search bar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5874,6 +5753,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from about:home. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5891,6 +5771,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from about:newtab. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5908,6 +5789,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the context menu. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5925,6 +5807,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from a webextension. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5942,6 +5825,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the system, e.g. command line. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5959,6 +5843,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was loaded from the tab history. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5976,6 +5861,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was loaded by reloading the page. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5993,6 +5879,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from a place not categorized by the other scalars. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6011,6 +5898,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6046,6 +5934,7 @@ browser.search.adclicks:
       - 1779471
     description: >
       Records clicks of adverts on SERP pages where the search was started from the urlbar after the search term was shown in the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     kind: uint
     keyed: true
@@ -6063,6 +5952,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the urlbar in search mode. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6080,6 +5970,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the search bar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6097,6 +5988,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from about:home. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6114,6 +6006,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from about:newtab. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6131,6 +6024,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the context menu. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6148,6 +6042,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from a webextension. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6165,6 +6060,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the system, e.g. command line. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6182,6 +6078,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was loaded from the tab history. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6199,6 +6096,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was loaded by reloading the page. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6216,6 +6114,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from a place not categorized by the other scalars. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6259,10 +6158,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of secure (i.e., using https) OpenSearch search
       engines a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -6277,10 +6177,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of insecure (i.e., using http) OpenSearch search
       engines a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -6295,10 +6196,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of OpenSearch search engines with secure updates
       enabled (i.e., using https) a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -6313,10 +6215,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of OpenSearch search engines with insecure updates
       enabled (i.e., using http) a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -6806,6 +6709,90 @@ networking:
     record_in_processes:
       - 'main'
 
+  doh_heuristics_attempts:
+    bug_numbers:
+      - 1784258
+    description: >
+      The number of times we ran DoH heuristics.
+    kind: uint
+    expires: never # capturing continuously for monitoring purposes
+    release_channel_collection: opt-out
+    notification_emails:
+      - necko@mozilla.com
+      - vgosu@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+  doh_heuristics_pass_count:
+    bug_numbers:
+      - 1784258
+    description: >
+      The number of times we passed DoH heuristics.
+    kind: uint
+    expires: never # capturing continuously for monitoring purposes
+    release_channel_collection: opt-out
+    notification_emails:
+      - necko@mozilla.com
+      - vgosu@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+  doh_heuristics_result:
+    bug_numbers:
+      - 1784258
+    description: >
+      The value of this scalar indicates the result of the last heuristic run.
+      0: "incomplete"
+      1: "pass"
+      2: "opt-out"
+      3: "manually-disabled"
+      4: "manually-enabled"
+      5: "enterprise-disabled"
+      6: "enterprise-present"
+      7: "enterprise-enabled"
+      8: "vpn"
+      9: "proxy"
+      10: "nrpt"
+      11: "parental"
+      12: "modifiedRoots"
+      13: "thirdPartyRoots"
+      14: "google"
+      15: "youtube"
+      16: "zscaler"
+      17: "canary"
+      18: "ignored"
+    kind: uint
+    expires: never # capturing continuously for monitoring purposes
+    release_channel_collection: opt-out
+    notification_emails:
+      - necko@mozilla.com
+      - vgosu@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+  doh_heuristic_ever_tripped:
+    bug_numbers:
+      - 1784258
+    description: >
+      True if this heuristic (key) was ever tripped during the session.
+    kind: boolean
+    keyed: true
+    expires: never # capturing continuously for monitoring purposes
+    release_channel_collection: opt-out
+    notification_emails:
+      - necko@mozilla.com
+      - vgosu@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
 blocklist:
   lastModified_rs_addons:
     bug_numbers:
@@ -7076,6 +7063,22 @@ policies:
     kind: boolean
     notification_emails:
       - mkaply@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+urlbar.trending:
+  block:
+    bug_numbers:
+      - 1848048
+    description: >-
+      User has blocked seeing trending results.
+    expires: never
+    kind: uint
+    notification_emails:
+      - fx-search-telemetry@mozilla.com
     release_channel_collection: opt-out
     products:
       - 'firefox'
@@ -7373,6 +7376,22 @@ urlbar.picked:
     bookmark_adaptive:
       bug_numbers:
         - 1466103
+      description: >
+        Counts how many times this result type was picked at a given index.
+      expires: never
+      kind: uint
+      keyed: true
+      notification_emails:
+        - fx-search-telemetry@mozilla.com
+      release_channel_collection: opt-out
+      products:
+        - 'firefox'
+      record_in_processes:
+        - main
+    
+    clipboard:
+      bug_numbers:
+        - 1842247
       description: >
         Counts how many times this result type was picked at a given index.
       expires: never
@@ -8994,6 +9013,77 @@ contextual.services.quicksuggest:
     notification_emails:
       - fx-search-telemetry@mozilla.com
     release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+shopping:
+  nimbus_disabled:
+    bug_numbers:
+      - 1847231
+    description: >
+      Indicates if Nimbus has disabled the use of the shopping component.
+      This scalar is mirroring the Glean metric named
+      shopping.settings.nimbus_disabled_shopping, which is defined in
+      toolkit/components/shopping/metrics.yaml.
+    expires: "122"
+    kind: boolean
+    notification_emails:
+      - betling@mozilla.com
+      - fx-desktop-shopping-eng@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+  component_opted_out:
+    bug_numbers:
+      - 1847231
+    description: >
+      Indicates if the user has opted out of using the shopping component.
+      Set during shopping component init and updated when changed in browser.
+      This scalar is mirroring the Glean metric named
+      shopping.settings.component_opted_out, which is defined in
+      toolkit/components/shopping/metrics.yaml.
+    expires: "122"
+    kind: boolean
+    notification_emails:
+      - betling@mozilla.com
+      - fx-desktop-shopping-eng@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+  has_onboarded:
+    bug_numbers:
+      - 1847231
+    description: >
+      Indicates if the user has completed the Shopping product Onboarding
+      experience. Set during shopping component init and updated when changed
+      in browser. This scalar is mirroring the Glean metric named
+      shopping.settings.has_onboarded, which is defined in
+      toolkit/components/shopping/metrics.yaml.
+    expires: "122"
+    kind: boolean
+    notification_emails:
+      - betling@mozilla.com
+      - fx-desktop-shopping-eng@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+  product_page_visits:
+    bug_numbers:
+      - 1848160
+    description: >
+      Counts number of visits to a supported retailer product page while
+      enrolled in either the control or treatment branches of the shopping
+      experiment.
+    expires: "122"
+    kind: uint
+    notification_emails:
+      - betling@mozilla.com
+      - fx-desktop-shopping-eng@mozilla.com
     products:
       - 'firefox'
     record_in_processes:

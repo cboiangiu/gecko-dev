@@ -10,6 +10,8 @@ ChromeUtils.defineESModuleGetters(this, {
 
 const TEST_URL = "https://example.com/";
 
+add_virtual_authenticator();
+
 function getTelemetryForScalar(aName) {
   let scalars = TelemetryTestUtils.getProcessScalars("parent", true);
   return scalars[aName] || 0;
@@ -44,7 +46,6 @@ add_task(async function test_setup() {
       ["security.webauth.webauthn", true],
       ["security.webauth.webauthn_enable_softtoken", true],
       ["security.webauth.webauthn_enable_usbtoken", false],
-      ["security.webauth.webauthn_enable_android_fido2", false],
       ["security.webauth.webauthn_testing_allow_direct_attestation", true],
     ],
   });
@@ -76,7 +77,7 @@ add_task(async function test() {
     new Uint8Array(authenticatorData)
   );
   is(
-    "" + attestation.flags,
+    "" + (attestation.flags & flag_TUP),
     "" + flag_TUP,
     "Assertion's user presence byte set correctly"
   );

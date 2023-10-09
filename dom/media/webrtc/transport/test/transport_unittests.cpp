@@ -444,7 +444,7 @@ class TransportTestPeer : public sigslot::has_slots<> {
         streams_(),
         peer_(nullptr),
         gathering_complete_(false),
-        digest_("sha-1"),
+        digest_("sha-1"_ns),
         enabled_cipersuites_(),
         disabled_cipersuites_(),
         test_utils_(utils) {
@@ -1218,7 +1218,8 @@ static void ConfigureOneCipher(TransportTestPeer* peer, uint16_t suite) {
   std::vector<uint16_t> everythingElse(
       SSL_GetImplementedCiphers(),
       SSL_GetImplementedCiphers() + SSL_GetNumImplementedCiphers());
-  std::remove(everythingElse.begin(), everythingElse.end(), suite);
+  everythingElse.erase(
+      std::remove(everythingElse.begin(), everythingElse.end(), suite));
   peer->SetCipherSuiteChanges(justOne, everythingElse);
 }
 

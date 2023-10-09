@@ -103,8 +103,9 @@ class WidgetMouseEventBase : public WidgetInputEvent {
   // we have to hardcode MouseEvent_Binding::MOZ_SOURCE_MOUSE.
 
   WidgetMouseEventBase(bool aIsTrusted, EventMessage aMessage,
-                       nsIWidget* aWidget, EventClassID aEventClassID)
-      : WidgetInputEvent(aIsTrusted, aMessage, aWidget, aEventClassID),
+                       nsIWidget* aWidget, EventClassID aEventClassID,
+                       const WidgetEventTime* aTime = nullptr)
+      : WidgetInputEvent(aIsTrusted, aMessage, aWidget, aEventClassID, aTime),
         mPressure(0),
         mButton(0),
         mButtons(0),
@@ -204,17 +205,17 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
         mContextMenuTrigger(eNormal),
         mClickCount(0),
         mIgnoreRootScrollFrame(false),
-        mUseLegacyNonPrimaryDispatch(false),
         mClickEventPrevented(false) {}
 
   WidgetMouseEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget,
-                   EventClassID aEventClassID, Reason aReason)
-      : WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, aEventClassID),
+                   EventClassID aEventClassID, Reason aReason,
+                   const WidgetEventTime* aTime = nullptr)
+      : WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, aEventClassID,
+                             aTime),
         mReason(aReason),
         mContextMenuTrigger(eNormal),
         mClickCount(0),
         mIgnoreRootScrollFrame(false),
-        mUseLegacyNonPrimaryDispatch(false),
         mClickEventPrevented(false) {}
 
 #ifdef DEBUG
@@ -226,13 +227,14 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
 
   WidgetMouseEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget,
                    Reason aReason,
-                   ContextMenuTrigger aContextMenuTrigger = eNormal)
-      : WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, eMouseEventClass),
+                   ContextMenuTrigger aContextMenuTrigger = eNormal,
+                   const WidgetEventTime* aTime = nullptr)
+      : WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, eMouseEventClass,
+                             aTime),
         mReason(aReason),
         mContextMenuTrigger(aContextMenuTrigger),
         mClickCount(0),
         mIgnoreRootScrollFrame(false),
-        mUseLegacyNonPrimaryDispatch(false),
         mClickEventPrevented(false) {
     if (aMessage == eContextMenu) {
       mButton = (mContextMenuTrigger == eNormal) ? MouseButton::eSecondary
@@ -249,7 +251,7 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
                "Duplicate() must be overridden by sub class");
     // Not copying widget, it is a weak reference.
     WidgetMouseEvent* result = new WidgetMouseEvent(
-        false, mMessage, nullptr, mReason, mContextMenuTrigger);
+        false, mMessage, nullptr, mReason, mContextMenuTrigger, this);
     result->AssignMouseEventData(*this, true);
     result->mFlags = mFlags;
     return result;
@@ -283,10 +285,6 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
   // Whether the event should ignore scroll frame bounds during dispatch.
   bool mIgnoreRootScrollFrame;
 
-  // Indicates whether the event should dispatch click events for non-primary
-  // mouse buttons on window and document.
-  bool mUseLegacyNonPrimaryDispatch;
-
   // Whether the event shouldn't cause click event.
   bool mClickEventPrevented;
 
@@ -297,7 +295,6 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
     mExitFrom = aEvent.mExitFrom;
     mClickCount = aEvent.mClickCount;
     mIgnoreRootScrollFrame = aEvent.mIgnoreRootScrollFrame;
-    mUseLegacyNonPrimaryDispatch = aEvent.mUseLegacyNonPrimaryDispatch;
     mClickEventPrevented = aEvent.mClickEventPrevented;
   }
 
@@ -337,16 +334,20 @@ class WidgetDragEvent : public WidgetMouseEvent {
  public:
   virtual WidgetDragEvent* AsDragEvent() override { return this; }
 
-  WidgetDragEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget)
-      : WidgetMouseEvent(aIsTrusted, aMessage, aWidget, eDragEventClass, eReal),
+  WidgetDragEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget,
+                  const WidgetEventTime* aTime = nullptr)
+      : WidgetMouseEvent(aIsTrusted, aMessage, aWidget, eDragEventClass, eReal,
+                         aTime),
         mUserCancelled(false),
-        mDefaultPreventedOnContent(false) {}
+        mDefaultPreventedOnContent(false),
+        mInHTMLEditorEventListener(false) {}
 
   virtual WidgetEvent* Duplicate() const override {
     MOZ_ASSERT(mClass == eDragEventClass,
                "Duplicate() must be overridden by sub class");
     // Not copying widget, it is a weak reference.
-    WidgetDragEvent* result = new WidgetDragEvent(false, mMessage, nullptr);
+    WidgetDragEvent* result =
+        new WidgetDragEvent(false, mMessage, nullptr, this);
     result->AssignDragEventData(*this, true);
     result->mFlags = mFlags;
     return result;
@@ -359,6 +360,8 @@ class WidgetDragEvent : public WidgetMouseEvent {
   bool mUserCancelled;
   // If this is true, the drag event's preventDefault() is called on content.
   bool mDefaultPreventedOnContent;
+  // If this event is currently being handled by HTMLEditorEventListener.
+  bool mInHTMLEditorEventListener;
 
   // XXX Not tested by test_assign_event_data.html
   void AssignDragEventData(const WidgetDragEvent& aEvent, bool aCopyTargets) {
@@ -369,8 +372,6 @@ class WidgetDragEvent : public WidgetMouseEvent {
     mUserCancelled = false;
     mDefaultPreventedOnContent = aEvent.mDefaultPreventedOnContent;
   }
-
-  void UpdateDefaultPreventedOnContent(dom::EventTarget* aTarget);
 
   /**
    * Should be called before dispatching the DOM tree if this event is
@@ -397,9 +398,10 @@ class WidgetMouseScrollEvent : public WidgetMouseEventBase {
   virtual WidgetMouseScrollEvent* AsMouseScrollEvent() override { return this; }
 
   WidgetMouseScrollEvent(bool aIsTrusted, EventMessage aMessage,
-                         nsIWidget* aWidget)
+                         nsIWidget* aWidget,
+                         const WidgetEventTime* aTime = nullptr)
       : WidgetMouseEventBase(aIsTrusted, aMessage, aWidget,
-                             eMouseScrollEventClass),
+                             eMouseScrollEventClass, aTime),
         mDelta(0),
         mIsHorizontal(false) {}
 
@@ -408,7 +410,7 @@ class WidgetMouseScrollEvent : public WidgetMouseEventBase {
                "Duplicate() must be overridden by sub class");
     // Not copying widget, it is a weak reference.
     WidgetMouseScrollEvent* result =
-        new WidgetMouseScrollEvent(false, mMessage, nullptr);
+        new WidgetMouseScrollEvent(false, mMessage, nullptr, this);
     result->AssignMouseScrollEventData(*this, true);
     result->mFlags = mFlags;
     return result;
@@ -470,8 +472,10 @@ class WidgetWheelEvent : public WidgetMouseEventBase {
  public:
   virtual WidgetWheelEvent* AsWheelEvent() override { return this; }
 
-  WidgetWheelEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget)
-      : WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, eWheelEventClass),
+  WidgetWheelEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget,
+                   const WidgetEventTime* aTime = nullptr)
+      : WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, eWheelEventClass,
+                             aTime),
         mDeltaX(0.0),
         mDeltaY(0.0),
         mDeltaZ(0.0),
@@ -497,7 +501,8 @@ class WidgetWheelEvent : public WidgetMouseEventBase {
     MOZ_ASSERT(mClass == eWheelEventClass,
                "Duplicate() must be overridden by sub class");
     // Not copying widget, it is a weak reference.
-    WidgetWheelEvent* result = new WidgetWheelEvent(false, mMessage, nullptr);
+    WidgetWheelEvent* result =
+        new WidgetWheelEvent(false, mMessage, nullptr, this);
     result->AssignWheelEventData(*this, true);
     result->mFlags = mFlags;
     return result;
@@ -695,8 +700,9 @@ class WidgetPointerEvent : public WidgetMouseEvent {
  public:
   virtual WidgetPointerEvent* AsPointerEvent() override { return this; }
 
-  WidgetPointerEvent(bool aIsTrusted, EventMessage aMsg, nsIWidget* w)
-      : WidgetMouseEvent(aIsTrusted, aMsg, w, ePointerEventClass, eReal),
+  WidgetPointerEvent(bool aIsTrusted, EventMessage aMsg, nsIWidget* w,
+                     const WidgetEventTime* aTime = nullptr)
+      : WidgetMouseEvent(aIsTrusted, aMsg, w, ePointerEventClass, eReal, aTime),
         mWidth(1),
         mHeight(1),
         mIsPrimary(true),
@@ -716,7 +722,7 @@ class WidgetPointerEvent : public WidgetMouseEvent {
                "Duplicate() must be overridden by sub class");
     // Not copying widget, it is a weak reference.
     WidgetPointerEvent* result =
-        new WidgetPointerEvent(false, mMessage, nullptr);
+        new WidgetPointerEvent(false, mMessage, nullptr, this);
     result->AssignPointerEventData(*this, true);
     result->mFlags = mFlags;
     return result;

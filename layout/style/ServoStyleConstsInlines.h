@@ -450,12 +450,12 @@ inline imgRequestProxy* StyleComputedImageUrl::GetImage() const {
 template <>
 inline bool StyleGradient::Repeating() const {
   if (IsLinear()) {
-    return AsLinear().repeating;
+    return bool(AsLinear().flags & StyleGradientFlags::REPEATING);
   }
   if (IsRadial()) {
-    return AsRadial().repeating;
+    return bool(AsRadial().flags & StyleGradientFlags::REPEATING);
   }
-  return AsConic().repeating;
+  return bool(AsConic().flags & StyleGradientFlags::REPEATING);
 }
 
 template <>
@@ -717,7 +717,7 @@ nscoord LengthPercentage::Resolve(T aPercentageGetter, U aRounder) const {
     return ToLength();
   }
   if (IsPercentage() && AsPercentage()._0 == 0.0f) {
-    return 0.0f;
+    return 0;
   }
   nscoord basis = aPercentageGetter();
   if (IsPercentage()) {
@@ -965,7 +965,7 @@ Maybe<CSSIntSize> StyleImage::GetIntrinsicSize() const;
 template <>
 inline bool StyleImage::IsImageRequestType() const {
   const auto& finalImage = FinalImage();
-  return finalImage.IsUrl() || finalImage.IsRect();
+  return finalImage.IsUrl();
 }
 
 template <>
@@ -974,9 +974,6 @@ inline const StyleComputedImageUrl* StyleImage::GetImageRequestURLValue()
   const auto& finalImage = FinalImage();
   if (finalImage.IsUrl()) {
     return &finalImage.AsUrl();
-  }
-  if (finalImage.IsRect()) {
-    return &finalImage.AsRect()->url;
   }
   return nullptr;
 }
@@ -999,8 +996,6 @@ template <>
 bool StyleImage::IsSizeAvailable() const;
 template <>
 bool StyleImage::IsComplete() const;
-template <>
-Maybe<StyleImage::ActualCropRect> StyleImage::ComputeActualCropRect() const;
 template <>
 void StyleImage::ResolveImage(dom::Document&, const StyleImage*);
 

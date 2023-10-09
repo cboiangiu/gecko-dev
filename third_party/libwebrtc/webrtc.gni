@@ -132,7 +132,7 @@ declare_args() {
 
   # Selects whether debug dumps for the audio processing module
   # should be generated.
-  apm_debug_dump = false
+  apm_debug_dump = build_with_mozilla
 
   # Selects whether the audio processing module should be excluded.
   rtc_exclude_audio_processing_module = false
@@ -232,7 +232,7 @@ declare_args() {
   # When set to true, a capturer implementation that uses the
   # Windows.Graphics.Capture APIs will be available for use. This introduces a
   # dependency on the Win 10 SDK v10.0.17763.0.
-  rtc_enable_win_wgc = false
+  rtc_enable_win_wgc = is_win
 
   # Includes the dav1d decoder in the internal decoder factory when set to true.
   rtc_include_dav1d_in_internal_decoder_factory = true

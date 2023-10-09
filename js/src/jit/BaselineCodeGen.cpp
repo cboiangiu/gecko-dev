@@ -201,10 +201,12 @@ MethodStatus BaselineCompiler::compile() {
 
   Rooted<JSScript*> script(cx, handler.script());
   JitSpew(JitSpew_BaselineScripts, "Baseline compiling script %s:%u:%u (%p)",
-          script->filename(), script->lineno(), script->column(), script.get());
+          script->filename(), script->lineno(),
+          script->column().zeroOriginValue(), script.get());
 
   JitSpew(JitSpew_Codegen, "# Emitting baseline code for script %s:%u:%u",
-          script->filename(), script->lineno(), script->column());
+          script->filename(), script->lineno(),
+          script->column().zeroOriginValue());
 
   AutoIncrementalTimer timer(cx->realm()->timers.baselineCompileTime);
 
@@ -285,7 +287,7 @@ MethodStatus BaselineCompiler::compile() {
   JitSpew(JitSpew_BaselineScripts,
           "Created BaselineScript %p (raw %p) for %s:%u:%u",
           (void*)baselineScript.get(), (void*)code->raw(), script->filename(),
-          script->lineno(), script->column());
+          script->lineno(), script->column().zeroOriginValue());
 
   baselineScript->copyRetAddrEntries(handler.retAddrEntries().begin());
   baselineScript->copyOSREntries(handler.osrEntries().begin());
@@ -310,8 +312,8 @@ MethodStatus BaselineCompiler::compile() {
   {
     JitSpew(JitSpew_Profiling,
             "Added JitcodeGlobalEntry for baseline script %s:%u:%u (%p)",
-            script->filename(), script->lineno(), script->column(),
-            baselineScript.get());
+            script->filename(), script->lineno(),
+            script->column().zeroOriginValue(), baselineScript.get());
 
     // Generate profiling string.
     UniqueChars str = GeckoProfilerRuntime::allocProfileString(cx, script);
@@ -516,25 +518,26 @@ bool BaselineCodeGen<Handler>::emitOutOfLinePostBarrierSlot() {
 
   masm.bind(&postBarrierSlot_);
 
-  saveInterpreterPCReg();
+#ifdef JS_USE_LINK_REGISTER
+  masm.pushReturnAddress();
+#endif
 
   Register objReg = R2.scratchReg();
+
+  // Check one element cache to avoid VM call.
+  Label skipBarrier;
+  auto* lastCellAddr = cx->runtime()->gc.addressOfLastBufferedWholeCell();
+  masm.branchPtr(Assembler::Equal, AbsoluteAddress(lastCellAddr), objReg,
+                 &skipBarrier);
+
+  saveInterpreterPCReg();
+
   AllocatableGeneralRegisterSet regs(GeneralRegisterSet::All());
   MOZ_ASSERT(!regs.has(FramePointer));
   regs.take(R0);
   regs.take(objReg);
   Register scratch = regs.takeAny();
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64)
-  // On ARM, save the link register before calling.  It contains the return
-  // address.  The |masm.ret()| later will pop this into |pc| to return.
-  masm.push(lr);
-#elif defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64)
-  masm.push(ra);
-#elif defined(JS_CODEGEN_LOONG64)
-  masm.push(ra);
-#elif defined(JS_CODEGEN_RISCV64)
-  masm.push(ra);
-#endif
+
   masm.pushValue(R0);
 
   using Fn = void (*)(JSRuntime* rt, js::gc::Cell* cell);
@@ -547,6 +550,8 @@ bool BaselineCodeGen<Handler>::emitOutOfLinePostBarrierSlot() {
   restoreInterpreterPCReg();
 
   masm.popValue(R0);
+
+  masm.bind(&skipBarrier);
   masm.ret();
   return true;
 }
@@ -907,9 +912,7 @@ void BaselineCompilerCodeGen::loadGlobalLexicalEnvironment(Register dest) {
 
 template <>
 void BaselineInterpreterCodeGen::loadGlobalLexicalEnvironment(Register dest) {
-  masm.loadPtr(AbsoluteAddress(cx->addressOfRealm()), dest);
-  masm.loadPtr(Address(dest, Realm::offsetOfActiveGlobal()), dest);
-  masm.loadPrivate(Address(dest, GlobalObject::offsetOfGlobalDataSlot()), dest);
+  masm.loadGlobalObjectData(dest);
   masm.loadPtr(Address(dest, GlobalObjectData::offsetOfLexicalEnvironment()),
                dest);
 }
@@ -1702,6 +1705,11 @@ bool BaselineCodeGen<Handler>::emit_Nop() {
 
 template <typename Handler>
 bool BaselineCodeGen<Handler>::emit_NopDestructuring() {
+  return true;
+}
+
+template <typename Handler>
+bool BaselineCodeGen<Handler>::emit_NopIsAssignOp() {
   return true;
 }
 
@@ -5313,6 +5321,18 @@ bool BaselineCodeGen<Handler>::emit_CloseIter() {
   masm.unboxObject(R0, iter);
 
   return emitNextIC();
+}
+
+template <typename Handler>
+bool BaselineCodeGen<Handler>::emit_OptimizeGetIterator() {
+  frame.popRegsAndSync(1);
+
+  if (!emitNextIC()) {
+    return false;
+  }
+
+  frame.push(R0);
+  return true;
 }
 
 template <typename Handler>

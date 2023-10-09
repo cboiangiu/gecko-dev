@@ -43,6 +43,20 @@
                 permissions-exceptions-manage-etp-desc,
               "/>
     </hbox>
+    <hbox id="rfpIncompatibilityWarning" class="info-box-container" hidden="true">
+      <vbox class="info-icon-container">
+        <html:img class="info-icon"></html:img>
+      </vbox>
+      <vbox flex="1">
+        <description>
+          <html:span class="tail-with-learn-more" data-l10n-id="content-blocking-rfp-incompatibility-warning"/>
+          <html:a is="moz-support-link"
+                  class="learnMore"
+                  support-page="firefox-protection-against-fingerprinting"
+          />
+        </description>
+      </vbox>
+    </hbox>
     <hbox id="fpiIncompatibilityWarning" class="info-box-container" hidden="true">
       <vbox class="info-icon-container">
         <html:img class="info-icon"></html:img>
@@ -189,7 +203,7 @@
                   <label class="content-blocking-label" data-l10n-id="content-blocking-cryptominers"/>
                 </hbox>
                 <hbox class="extra-information-label fingerprinters-option" hidden="true">
-                  <label class="content-blocking-label" data-l10n-id="content-blocking-fingerprinters"/>
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-known-and-suspected-fingerprinters"/>
                 </hbox>
               </vbox>
               <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
@@ -294,9 +308,23 @@
                   <checkbox id="contentBlockingFingerprintersCheckbox"
                             class="content-blocking-checkbox" flex="1"
                             preference="privacy.trackingprotection.fingerprinting.enabled"
-                            data-l10n-id="content-blocking-fingerprinters-label"
+                            data-l10n-id="content-blocking-known-fingerprinters-label"
                             aria-describedby="contentBlockingCustomDesc"/>
                 </hbox>
+                <hbox class="custom-option">
+                    <checkbox id="contentBlockingFingerprintingProtectionCheckbox"
+                              class="content-blocking-checkbox" flex="1"
+                              data-l10n-id="content-blocking-suspected-fingerprinters-label"
+                              aria-describedby="contentBlockingCustomDesc"/>
+                    <vbox>
+                      <menulist id="fingerprintingProtectionMenu">
+                        <menupopup>
+                          <menuitem data-l10n-id="content-blocking-option-private" value="private"/>
+                          <menuitem data-l10n-id="content-blocking-tracking-protection-option-all-windows" value="always"/>
+                        </menupopup>
+                      </menulist>
+                    </vbox>
+                  </hbox>
               <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
                 <html:div class="content-blocking-reload-desc-container">
                   <html:div class="info-icon-container">
@@ -328,19 +356,39 @@
         </vbox>
       </radiogroup>
     </vbox>
-    <vbox id="doNotTrackLearnMoreBox">
-      <label>
-        <label class="tail-with-learn-more" data-l10n-id="do-not-track-description" id="doNotTrackDesc"></label>
-      <html:a is="moz-support-link"
-              class="learnMore"
-              data-l10n-id="do-not-track-learn-more"
-              support-page="how-do-i-turn-do-not-track-feature"
-      />
-      </label>
-      <radiogroup id="doNotTrackRadioGroup" aria-labelledby="doNotTrackDesc" preference="privacy.donottrackheader.enabled">
-        <radio value="true" data-l10n-id="do-not-track-option-always"/>
-        <radio value="false" data-l10n-id="do-not-track-option-default-content-blocking-known"/>
-      </radiogroup>
+    <vbox id="nonTechnicalPrivacyBox">
+      <hbox id="globalPrivacyControlBox" flex="1" align="center" hidden="true">
+        <checkbox id="globalPrivacyControlCheckbox"
+                class="tail-with-learn-more"
+                preference="privacy.globalprivacycontrol.enabled"
+                data-l10n-id="global-privacy-control-description"
+                search-l10n-id="global-privacy-control-search" />
+        <html:a is="moz-support-link"
+            id="globalPrivacyControlLearnMoreLink"
+            support-page="global-privacy-control" />
+      </hbox>
+      <vbox id="legacyDoNotTrackBox">
+        <label>
+          <label class="tail-with-learn-more" data-l10n-id="do-not-track-description" id="doNotTrackDesc"></label>
+        <html:a is="moz-support-link"
+                class="learnMore"
+                support-page="how-do-i-turn-do-not-track-feature"
+        />
+        </label>
+        <radiogroup id="doNotTrackRadioGroup" aria-labelledby="doNotTrackDesc" preference="privacy.donottrackheader.enabled">
+          <radio value="true" data-l10n-id="do-not-track-option-always"/>
+          <radio value="false" data-l10n-id="do-not-track-option-default-content-blocking-known"/>
+        </radiogroup>
+      </vbox>
+      <hbox id="doNotTrackBox" flex="1" align="center">
+        <checkbox id="doNotTrackCheckbox"
+                class="tail-with-learn-more"
+                preference="privacy.donottrackheader.enabled"
+                data-l10n-id="do-not-track-description2" />
+        <html:a is="moz-support-link"
+            id="doNotTrackLearnMoreLink"
+            support-page="how-do-i-turn-do-not-track-feature" />
+      </hbox>
     </vbox>
   </vbox>
 </groupbox>
@@ -460,7 +508,6 @@
         <hbox class="indent" id="generatePasswordsBox" flex="1">
           <checkbox id="generatePasswords"
                     data-l10n-id="forms-generate-passwords"
-                    search-l10n-ids="forms-generate-passwords.label"
                     preference="signon.generation.enabled"
                     flex="1" />
         </hbox>
@@ -480,15 +527,13 @@
                 is="highlightable-button"
                 class="accessory-button"
                 data-l10n-id="forms-saved-logins"
-                search-l10n-ids="forms-saved-logins.label"
                 preference="pref.privacy.disable_button.view_passwords"/>
       </vbox>
     </hbox>
     <hbox class="indent" id="relayIntegrationBox" flex="1" align="center">
       <checkbox id="relayIntegration"
                 class="tail-with-learn-more"
-                data-l10n-id="preferences-relay-integration-checkbox"
-                search-l10n-ids="preferences-relay-integration-checkbox.label" />
+                data-l10n-id="preferences-relay-integration-checkbox"/>
       <html:a id="relayIntegrationLearnMoreLink" class="learnMore"
              data-l10n-id="relay-integration-learn-more-link"/>
     </hbox>
@@ -496,7 +541,6 @@
       <checkbox id="breachAlerts"
                 class="tail-with-learn-more"
                 data-l10n-id="forms-breach-alerts"
-                search-l10n-ids="breach-alerts.label"
                 preference="signon.management.page.breach-alerts.enabled"/>
       <html:a is="moz-support-link"
               id="breachAlertsLearnMoreLink"
@@ -661,6 +705,8 @@
             preference="browser.urlbar.suggest.history"/>
   <checkbox id="bookmarkSuggestion" data-l10n-id="addressbar-locbar-bookmarks-option"
             preference="browser.urlbar.suggest.bookmark"/>
+  <checkbox id="clipboardSuggestion" data-l10n-id="addressbar-locbar-clipboard-option" hidden="true"
+            preference="browser.urlbar.suggest.clipboard"/>
   <checkbox id="openpageSuggestion" data-l10n-id="addressbar-locbar-openpage-option"
             preference="browser.urlbar.suggest.openpage"/>
   <checkbox id="topSitesSuggestion"
@@ -971,11 +1017,11 @@
       class="subcategory"
       hidden="true"
       data-category="panePrivacy">
-  <html:h1 data-l10n-id="collection-header"/>
+  <html:h1 data-l10n-id="collection-header2" data-l10n-attrs="searchkeywords"/>
 </hbox>
 
 <groupbox id="dataCollectionGroup" data-category="panePrivacy" hidden="true">
-  <label class="search-header" hidden="true"><html:h2 data-l10n-id="collection-header"/></label>
+  <label class="search-header" hidden="true"><html:h2 data-l10n-id="collection-header2" data-l10n-attrs="searchkeywords"/></label>
 
   <description>
     <label class="tail-with-learn-more" data-l10n-id="collection-description"/>
@@ -1143,6 +1189,18 @@
                 devmgr-button-unload.label
               "/>
     </vbox>
+  </hbox>
+
+  <hbox id="certEnableThirdPartyToggleBox" align="center">
+    <checkbox id="certEnableThirdPartyToggle"
+              data-l10n-id="certs-thirdparty-toggle"
+              preference="security.enterprise_roots.enabled"
+              class="tail-with-learn-more"
+    />
+    <html:a is="moz-support-link"
+            class="learnMore"
+            support-page="automatically-trust-third-party-certificates"
+    />
   </hbox>
 </groupbox>
 

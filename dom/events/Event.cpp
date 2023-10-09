@@ -61,6 +61,9 @@ void Event::ConstructorInit(EventTarget* aOwner, nsPresContext* aPresContext,
                             WidgetEvent* aEvent) {
   SetOwner(aOwner);
   mIsMainThreadEvent = NS_IsMainThread();
+  if (mIsMainThreadEvent) {
+    mRefCnt.SetIsOnMainThread();
+  }
 
   mPrivateDataDuplicated = false;
   mWantsPopupControlCheck = false;
@@ -236,9 +239,12 @@ already_AddRefed<Document> Event::GetDocument() const {
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindowInner> win =
-      do_QueryInterface(eventTarget->GetOwnerGlobal());
+  nsIGlobalObject* global = eventTarget->GetOwnerGlobal();
+  if (!global) {
+    return nullptr;
+  }
 
+  nsPIDOMWindowInner* win = global->GetAsInnerWindow();
   if (!win) {
     return nullptr;
   }
@@ -290,7 +296,7 @@ EventTarget* Event::GetOriginalTarget() const {
 
 EventTarget* Event::GetComposedTarget() const {
   EventTarget* et = GetOriginalTarget();
-  nsCOMPtr<nsIContent> content = do_QueryInterface(et);
+  nsIContent* content = nsIContent::FromEventTargetOrNull(et);
   if (!content) {
     return et;
   }
@@ -318,7 +324,7 @@ bool Event::ShouldIgnoreChromeEventTargetListener() const {
   if (NS_WARN_IF(!global)) {
     return false;
   }
-  nsPIDOMWindowInner* win = global->AsInnerWindow();
+  nsPIDOMWindowInner* win = global->GetAsInnerWindow();
   if (NS_WARN_IF(!win)) {
     return false;
   }
@@ -336,14 +342,13 @@ bool Event::Init(mozilla::dom::EventTarget* aGlobal) {
     return IsCurrentThreadRunningChromeWorker();
   }
   bool trusted = false;
-  nsCOMPtr<nsPIDOMWindowInner> w = do_QueryInterface(aGlobal);
-  if (w) {
-    nsCOMPtr<Document> d = w->GetExtantDoc();
-    if (d) {
-      trusted = nsContentUtils::IsChromeDoc(d);
-      nsPresContext* presContext = d->GetPresContext();
-      if (presContext) {
-        InitPresContextData(presContext);
+  if (aGlobal) {
+    if (nsPIDOMWindowInner* w = aGlobal->GetAsInnerWindow()) {
+      if (Document* d = w->GetExtantDoc()) {
+        trusted = nsContentUtils::IsChromeDoc(d);
+        if (nsPresContext* presContext = d->GetPresContext()) {
+          InitPresContextData(presContext);
+        }
       }
     }
   }
@@ -416,8 +421,7 @@ void Event::PreventDefaultInternal(bool aCalledByDefaultHandler,
     return;
   }
   if (mEvent->mFlags.mInPassiveListener) {
-    nsCOMPtr<nsPIDOMWindowInner> win(do_QueryInterface(mOwner));
-    if (win) {
+    if (nsPIDOMWindowInner* win = mOwner->GetAsInnerWindow()) {
       if (Document* doc = win->GetExtantDoc()) {
         if (!doc->HasWarnedAbout(
                 Document::ePreventDefaultFromPassiveListener)) {
@@ -437,12 +441,38 @@ void Event::PreventDefaultInternal(bool aCalledByDefaultHandler,
     return;
   }
 
-  // If this is called by default handlers, the caller will call
-  // UpdateDefaultPreventedOnContentFor when necessary.
-  if (!aCalledByDefaultHandler) {
-    if (WidgetDragEvent* dragEvent = mEvent->AsDragEvent()) {
-      dragEvent->UpdateDefaultPreventedOnContent(dragEvent->mCurrentTarget);
+  if (mEvent->mClass == eDragEventClass) {
+    UpdateDefaultPreventedOnContentForDragEvent();
+  }
+}
+
+void Event::UpdateDefaultPreventedOnContentForDragEvent() {
+  WidgetDragEvent* dragEvent = mEvent->AsDragEvent();
+  if (!dragEvent) {
+    return;
+  }
+
+  nsIPrincipal* principal = nullptr;
+  // Since we now have HTMLEditorEventListener registered on nsWindowRoot,
+  // mCurrentTarget could be nsWindowRoot, so we need to use
+  // mTarget if that's the case.
+  MOZ_ASSERT_IF(dragEvent->mInHTMLEditorEventListener,
+                mEvent->mCurrentTarget->IsRootWindow());
+  EventTarget* target = dragEvent->mInHTMLEditorEventListener
+                            ? mEvent->mTarget
+                            : mEvent->mCurrentTarget;
+
+  nsINode* node = nsINode::FromEventTargetOrNull(target);
+  if (node) {
+    principal = node->NodePrincipal();
+  } else {
+    nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(target);
+    if (sop) {
+      principal = sop->GetPrincipal();
     }
+  }
+  if (principal && !principal->IsSystemPrincipal()) {
+    dragEvent->mDefaultPreventedOnContent = true;
   }
 }
 
@@ -735,7 +765,7 @@ double Event::TimeStamp() {
       return 0.0;
     }
 
-    nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(mOwner);
+    nsPIDOMWindowInner* win = mOwner->GetAsInnerWindow();
     if (NS_WARN_IF(!win)) {
       return 0.0;
     }
@@ -816,7 +846,7 @@ void Event::SetOwner(EventTarget* aOwner) {
     return;
   }
 
-  if (nsPIDOMWindowInner* w = aOwner->GetAsWindowInner()) {
+  if (nsPIDOMWindowInner* w = aOwner->GetAsInnerWindow()) {
     mOwner = w->AsGlobal();
     return;
   }

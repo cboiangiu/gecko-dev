@@ -76,7 +76,6 @@ class gfxVarReceiver;
   _(UseDoubleBufferingWithCompositor, bool, false)                 \
   _(UseGLSwizzle, bool, true)                                      \
   _(ForceSubpixelAAWherePossible, bool, false)                     \
-  _(DwmCompositionEnabled, bool, true)                             \
   _(FxREmbedded, bool, false)                                      \
   _(UseAHardwareBufferSharedSurfaceWebglOop, bool, false)          \
   _(UseEGL, bool, false)                                           \
@@ -157,6 +156,12 @@ class gfxVars final {
    private:
     size_t mIndex;
   };
+
+  // Whether the gfxVars singleton instance has been initialized. Most gfx code
+  // doesn't need to check this, but code that can potentially run before
+  // gfxPlatform initialization can use this to check whether gfxVars are
+  // available yet.
+  static bool IsInitialized() { return sInstance != nullptr; }
 
  private:
   static StaticAutoPtr<gfxVars> sInstance;

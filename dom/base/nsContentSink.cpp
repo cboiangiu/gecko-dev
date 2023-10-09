@@ -815,7 +815,7 @@ void nsContentSink::EndUpdate(Document* aDocument) {
 }
 
 void nsContentSink::DidBuildModelImpl(bool aTerminated) {
-  MOZ_ASSERT(aTerminated ||
+  MOZ_ASSERT(aTerminated || (mParser && mParser->IsParserClosed()) ||
                  mDocument->GetReadyStateEnum() == Document::READYSTATE_LOADING,
              "Bad readyState");
   mDocument->SetReadyStateInternal(Document::READYSTATE_INTERACTIVE);
@@ -950,8 +950,7 @@ void nsContentSink::NotifyDocElementCreated(Document* aDoc) {
   observerService->NotifyObservers(ToSupports(aDoc),
                                    "document-element-inserted", u"");
 
-  nsContentUtils::DispatchChromeEvent(aDoc, ToSupports(aDoc),
-                                      u"DOMDocElementInserted"_ns,
+  nsContentUtils::DispatchChromeEvent(aDoc, aDoc, u"DOMDocElementInserted"_ns,
                                       CanBubble::eYes, Cancelable::eNo);
 }
 

@@ -3245,12 +3245,14 @@ static void OnChildProcessDumpRequested(
 
 #if XP_WIN
   nsTArray<CAnnotation>* child_annotations = mozannotation_retrieve(
-      reinterpret_cast<uintptr_t>(aClientInfo.process_handle()));
+      reinterpret_cast<uintptr_t>(aClientInfo.process_handle()),
+      static_cast<size_t>(Annotation::Count));
 #elif defined(XP_MACOSX)
-  nsTArray<CAnnotation>* child_annotations =
-      mozannotation_retrieve(aClientInfo.task());
+  nsTArray<CAnnotation>* child_annotations = mozannotation_retrieve(
+      aClientInfo.task(), static_cast<size_t>(Annotation::Count));
 #else
-  nsTArray<CAnnotation>* child_annotations = mozannotation_retrieve(pid);
+  nsTArray<CAnnotation>* child_annotations =
+      mozannotation_retrieve(pid, static_cast<size_t>(Annotation::Count));
 #endif
 
   // TODO: Write a minimal set of annotations if we fail to read them, and
@@ -3849,10 +3851,11 @@ bool CreateMinidumpsAndPair(ProcessHandle aTargetHandle,
   AddSharedAnnotations(aTargetAnnotations);
 #if XP_WIN
   nsTArray<CAnnotation>* child_annotations =
-      mozannotation_retrieve(reinterpret_cast<uintptr_t>(aTargetHandle));
+      mozannotation_retrieve(reinterpret_cast<uintptr_t>(aTargetHandle),
+                             static_cast<size_t>(Annotation::Count));
 #else
-  nsTArray<CAnnotation>* child_annotations =
-      mozannotation_retrieve(aTargetHandle);
+  nsTArray<CAnnotation>* child_annotations = mozannotation_retrieve(
+      aTargetHandle, static_cast<size_t>(Annotation::Count));
 #endif
   AddChildProcessAnnotations(aTargetAnnotations, child_annotations);
   if (child_annotations) {
@@ -3888,14 +3891,14 @@ void SetNotificationPipeForChild(int childCrashFd) {
 
 }  // namespace CrashReporter
 
-#if ANDROID_NDK_MAJOR_VERSION && (ANDROID_NDK_MAJOR_VERSION < 24)
+#if defined(__ANDROID_API__) && (__ANDROID_API__ < 24)
 
 // Bionic introduced support for getgrgid_r() and getgrnam_r() only in version
-// 24 (that is Android Nougat / 7.1.2). Since we build with NDK version 23c we
-// can't link against those functions, but nix needs them and minidump-writer
-// relies on nix. These functions should never be called in practice hence we
-// implement them only to satisfy nix linking requirements but we crash if we
-// accidentally enter them.
+// 24 (that is Android Nougat / 7.1.2). Since GeckoView is built by version 16
+// (32-bit) or 21 (64-bit), those functions aren't defined, but nix needs them
+// and minidump-writer relies on nix. These functions should never be called in
+// practice hence we implement them only to satisfy nix linking requirements but
+// we crash if we accidentally enter them.
 
 extern "C" {
 
@@ -3922,4 +3925,4 @@ int munlockall(void) {
 }
 }
 
-#endif  // ANDROID_NDK_MAJOR_VERSION && (ANDROID_NDK_MAJOR_VERSION < 24)
+#endif  // __ANDROID_API__ && (__ANDROID_API__ < 24)

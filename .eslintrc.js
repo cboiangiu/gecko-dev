@@ -72,7 +72,7 @@ module.exports = {
   // tools/lint/eslint/eslint-plugin-mozilla/lib/configs/recommended.js to
   // allow external repositories that use the plugin to pick them up as well.
   extends: ["plugin:mozilla/recommended"],
-  plugins: ["mozilla", "import"],
+  plugins: ["mozilla", "import", "json"],
   overrides: [
     {
       // All .eslintrc.js files are in the node environment, so turn that
@@ -212,12 +212,6 @@ module.exports = {
       ],
     },
     {
-      files: ["netwerk/test/mochitests/**", "netwerk/test/unit*/**"],
-      rules: {
-        "no-shadow": "warn",
-      },
-    },
-    {
       // Bug 877389 - Gradually migrate from Cu.reportError to console.error.
       // Enable these as we fix more areas.
       files: [
@@ -348,6 +342,7 @@ module.exports = {
     },
     {
       files: ["layout/**"],
+      excludedFiles: ["layout/tools/reftest/**"],
       rules: {
         "object-shorthand": "off",
         "mozilla/avoid-removeChild": "off",
@@ -356,7 +351,6 @@ module.exports = {
         "mozilla/no-arbitrary-setTimeout": "off",
         "mozilla/no-define-cc-etc": "off",
         "mozilla/prefer-boolean-length-check": "off",
-        "mozilla/use-chromeutils-generateqi": "off",
         "mozilla/use-default-preference-values": "off",
         "mozilla/use-includes-instead-of-indexOf": "off",
         "mozilla/use-services": "off",
@@ -441,10 +435,7 @@ module.exports = {
         "mozilla/consistent-if-bracing": "off",
         "mozilla/no-arbitrary-setTimeout": "off",
         "mozilla/no-compare-against-boolean-literals": "off",
-        "mozilla/no-define-cc-etc": "off",
         "mozilla/reject-importGlobalProperties": "off",
-        "mozilla/use-cc-etc": "off",
-        "mozilla/use-chromeutils-generateqi": "off",
         "mozilla/use-includes-instead-of-indexOf": "off",
         "mozilla/use-ownerGlobal": "off",
         "mozilla/use-services": "off",
@@ -452,13 +443,10 @@ module.exports = {
         "no-caller": "off",
         "no-cond-assign": "off",
         "no-control-regex": "off",
-        "no-debugger": "off",
         "no-else-return": "off",
         "no-empty": "off",
-        "no-eval": "off",
         "no-func-assign": "off",
         "no-global-assign": "off",
-        "no-implied-eval": "off",
         "no-lone-blocks": "off",
         "no-lonely-if": "off",
         "no-nested-ternary": "off",
@@ -585,13 +573,11 @@ module.exports = {
       rules: {
         "mozilla/no-useless-parameters": "off",
         "mozilla/no-useless-removeEventListener": "off",
-        "mozilla/use-chromeutils-generateqi": "off",
         "mozilla/use-services": "off",
         complexity: "off",
         "no-array-constructor": "off",
         "no-caller": "off",
         "no-empty": "off",
-        "no-eval": "off",
         "no-lone-blocks": "off",
         "no-redeclare": "off",
         "no-shadow": "off",
@@ -610,6 +596,11 @@ module.exports = {
         "browser/components/pocket/**",
         "devtools/**",
       ],
+      rules: {
+        // react-hooks/recommended has exhaustive-deps as a warning, we prefer
+        // errors, so that raised issues get addressed one way or the other.
+        "react-hooks/exhaustive-deps": "error",
+      },
     },
     {
       // Exempt files with these paths since they have to use http for full coverage
@@ -659,7 +650,6 @@ module.exports = {
         "toolkit/crashreporter/test/browser/browser_aboutCrashesResubmit.js",
         // Exempt tests that set pref dom.security.https_first to false Bug 1758951
         "browser/tools/mozscreenshots/controlCenter/browser_controlCenter.js",
-        "dom/file/tests/test_agentcluster_bloburl.js",
         "dom/ipc/tests/test_bug1086684.js",
         "dom/manifest/test/browser_ManifestObtainer_obtain.js",
         "dom/media/test/test_access_control.html",
@@ -774,7 +764,6 @@ module.exports = {
         "browser/components/extensions/test/browser/browser_ext_tabs_attention.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_containerIsolation.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_create.js",
-        "browser/components/extensions/test/browser/browser_ext_tabs_detectLanguage.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_discard.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_discard_reversed.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_discarded.js",
@@ -786,11 +775,6 @@ module.exports = {
         "browser/components/extensions/test/browser/browser_ext_tabs_hide_update.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_highlight.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_insertCSS.js",
-        "browser/components/extensions/test/browser/browser_ext_tabs_move_array.js",
-        "browser/components/extensions/test/browser/browser_ext_tabs_move_discarded.js",
-        "browser/components/extensions/test/browser/browser_ext_tabs_move_window.js",
-        "browser/components/extensions/test/browser/browser_ext_tabs_move_window_multiple.js",
-        "browser/components/extensions/test/browser/browser_ext_tabs_move_window_pinned.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_printPreview.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_query.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_readerMode.js",
@@ -926,12 +910,6 @@ module.exports = {
         "browser/components/safebrowsing/content/test/browser_bug415846.js",
         "browser/components/safebrowsing/content/test/browser_whitelisted.js",
         "browser/components/screenshots/tests/browser/head.js",
-        "browser/components/search/test/browser/browser_483086.js",
-        "browser/components/search/test/browser/browser_addKeywordSearch.js",
-        "browser/components/search/test/browser/browser_ime_composition.js",
-        "browser/components/search/test/browser/browser_search_discovery.js",
-        "browser/components/search/test/browser/browser_search_telemetry_searchbar.js",
-        "browser/components/search/test/browser/browser_search_telemetry_sources_ads.js",
         "browser/components/sessionstore/test/browser_1284886_suspend_tab.js",
         "browser/components/sessionstore/test/browser_394759_behavior.js",
         "browser/components/sessionstore/test/browser_394759_purge.js",
@@ -1524,7 +1502,6 @@ module.exports = {
         "dom/security/test/csp/test_upgrade_insecure.html",
         "dom/security/test/csp/test_upgrade_insecure_navigation.html",
         "dom/security/test/csp/test_websocket_self.html",
-        "dom/security/test/general/browser_same_site_cookies_bug1748693.js",
         "dom/security/test/general/browser_test_data_download.js",
         "dom/security/test/general/browser_test_data_text_csv.js",
         "dom/security/test/general/browser_test_toplevel_data_navigations.js",
@@ -1615,7 +1592,6 @@ module.exports = {
         "dom/tests/browser/browser_frame_elements.js",
         "dom/tests/browser/browser_hasbeforeunload.js",
         "dom/tests/browser/browser_localStorage_e10s.js",
-        "dom/tests/browser/browser_localStorage_snapshotting.js",
         "dom/tests/browser/browser_test_toolbars_visibility.js",
         "dom/tests/browser/browser_windowProxy_transplant.js",
         "dom/tests/mochitest/beacon/file_beaconSafelist.html",
@@ -1769,7 +1745,6 @@ module.exports = {
         "netwerk/cookie/test/browser/browser_sameSiteConsole.js",
         "netwerk/test/browser/browser_103_assets.js",
         "netwerk/test/browser/browser_103_preload.js",
-        "netwerk/test/browser/browser_103_telemetry.js",
         "netwerk/test/browser/browser_cookie_filtering_subdomain.js",
         "netwerk/test/browser/browser_test_favicon.js",
         "netwerk/test/browser/cookie_filtering_helper.jsm",
@@ -1943,7 +1918,6 @@ module.exports = {
         "toolkit/components/places/tests/browser/browser_visituri.js",
         "toolkit/components/places/tests/browser/browser_visituri_nohistory.js",
         "toolkit/components/places/tests/browser/browser_visituri_privatebrowsing_perwindowpb.js",
-        "toolkit/components/places/tests/browser/previews/browser_thumbnails.js",
         "toolkit/components/places/tests/browser/redirect_once.sjs",
         "toolkit/components/places/tests/chrome/test_371798.xhtml",
         "toolkit/components/places/tests/chrome/test_favicon_annotations.xhtml",

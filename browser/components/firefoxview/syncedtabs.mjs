@@ -15,11 +15,7 @@ const { TabsSetupFlowManager } = ChromeUtils.importESModule(
   "resource:///modules/firefox-view-tabs-setup-manager.sys.mjs"
 );
 
-import {
-  html,
-  ifDefined,
-  when,
-} from "chrome://global/content/vendor/lit.all.mjs";
+import { html, ifDefined } from "chrome://global/content/vendor/lit.all.mjs";
 import { ViewPage } from "./viewpage.mjs";
 
 const SYNCED_TABS_CHANGED = "services.sync.tabs.changed";
@@ -34,7 +30,7 @@ class SyncedTabsInView extends ViewPage {
     this.errorState = null;
     this._id = Math.floor(Math.random() * 10e6);
     this.currentSyncedTabs = [];
-    if (this.overview) {
+    if (this.recentBrowsing) {
       this.maxTabsLength = 6; // 5 tabs plus the device row
     } else {
       // Setting maxTabsLength to -1 for no max
@@ -50,6 +46,10 @@ class SyncedTabsInView extends ViewPage {
     currentSyncedTabs: { type: Array },
     _currentSetupStateIndex: { type: Number },
     devices: { type: Array },
+  };
+
+  static queries = {
+    emptyState: "fxview-empty-state",
   };
 
   connectedCallback() {
@@ -135,17 +135,17 @@ class SyncedTabsInView extends ViewPage {
 
   async observe(subject, topic, errorState) {
     if (topic == TOPIC_SETUPSTATE_CHANGED) {
-      this.updateStates({ errorState });
+      this.updateStates(errorState);
     }
     if (topic == SYNCED_TABS_CHANGED) {
       this.getSyncedTabData();
     }
   }
 
-  updateStates({
-    stateIndex = TabsSetupFlowManager.uiStateIndex,
-    errorState = SyncedTabsErrorHandler.getErrorType(),
-  } = {}) {
+  updateStates(errorState) {
+    let stateIndex = TabsSetupFlowManager.uiStateIndex;
+    errorState = errorState || SyncedTabsErrorHandler.getErrorType();
+
     if (stateIndex == 4 && this._currentSetupStateIndex !== stateIndex) {
       // trigger an initial request for the synced tabs list
       this.getSyncedTabData();
@@ -173,7 +173,11 @@ class SyncedTabsInView extends ViewPage {
     "sync-tabs-disabled": {
       header: "firefoxview-syncedtabs-synctabs-header",
       description: "firefoxview-syncedtabs-synctabs-description",
-      checkboxLabel: "firefoxview-syncedtabs-synctabs-checkbox",
+      buttonLabel: "firefoxview-tabpickup-synctabs-primarybutton",
+    },
+    loading: {
+      header: "firefoxview-syncedtabs-loading-header",
+      description: "firefoxview-syncedtabs-loading-description",
     },
   };
 
@@ -183,7 +187,6 @@ class SyncedTabsInView extends ViewPage {
       description,
       descriptionLink,
       buttonLabel,
-      checkboxLabel,
       headerIconUrl,
       mainImageUrl;
     let descriptionArray;
@@ -208,7 +211,6 @@ class SyncedTabsInView extends ViewPage {
       header = this.actionMappings[action].header;
       description = this.actionMappings[action].description;
       buttonLabel = this.actionMappings[action].buttonLabel;
-      checkboxLabel = this.actionMappings[action].checkboxLabel;
       descriptionLink = this.actionMappings[action].descriptionLink;
       mainImageUrl =
         "chrome://browser/content/firefoxview/synced-tabs-error.svg";
@@ -220,11 +222,13 @@ class SyncedTabsInView extends ViewPage {
         headerLabel=${header}
         .descriptionLabels=${descriptionArray}
         .descriptionLink=${ifDefined(descriptionLink)}
-        class="empty-state synced-tabs"
+        class="empty-state synced-tabs error"
         ?isSelectedTab=${this.selectedTab}
-        ?isInnerCard=${this.overview}
+        ?isInnerCard=${this.recentBrowsing}
         mainImageUrl="${ifDefined(mainImageUrl)}"
+        ?errorGrayscale=${error}
         headerIconUrl="${ifDefined(headerIconUrl)}"
+        id="empty-container"
       >
         <button
           class="primary"
@@ -233,14 +237,8 @@ class SyncedTabsInView extends ViewPage {
           data-l10n-id="${ifDefined(buttonLabel)}"
           data-action="${action}"
           @click=${this.handleEvent}
+          aria-details="empty-container"
         ></button>
-        <div slot="primary-action"
-          ?hidden=${!checkboxLabel} >
-          <label>
-            <input type="checkbox" @change=${this.handleEvent}></input>
-            <span data-l10n-id="${ifDefined(checkboxLabel)}"></span>
-          </label>
-        </div>
       </fxview-empty-state>
     `;
   }
@@ -257,6 +255,15 @@ class SyncedTabsInView extends ViewPage {
         where = "tab";
       }
       currentWindow.openTrustedLinkIn(event.originalTarget.url, where);
+      Services.telemetry.recordEvent(
+        "firefoxview_next",
+        "synced_tabs",
+        "tabs",
+        null,
+        {
+          page: this.recentBrowsing ? "recentbrowsing" : "syncedtabs",
+        }
+      );
     }
   }
 
@@ -267,7 +274,7 @@ class SyncedTabsInView extends ViewPage {
 
   panelListTemplate() {
     return html`
-      <panel-list slot="menu">
+      <panel-list slot="menu" data-tab-type="syncedtabs">
         <panel-item
           @click=${this.openInNewWindow}
           data-l10n-id="fxviewtabrow-open-in-window"
@@ -289,18 +296,20 @@ class SyncedTabsInView extends ViewPage {
   }
 
   noDeviceTabsTemplate(deviceName, deviceType) {
-    if (this.overview) {
+    if (this.recentBrowsing) {
       return html` ${this.deviceTemplate(deviceName, deviceType, [])}
         <div
           class="blackbox notabs"
           data-l10n-id="firefoxview-syncedtabs-device-notabs"
         ></div>`;
     }
-    return html`<card-container>
-      <h2 slot="header">
+    return html`<card-container
+      shortPageName=${this.recentBrowsing ? "syncedtabs" : null}
+    >
+      <h3 slot="header" class="device-header">
         <span class="icon ${deviceType}" role="presentation"></span>
         ${deviceName}
-      </h2>
+      </h3>
       <div
         slot="main"
         class="blackbox notabs"
@@ -311,48 +320,22 @@ class SyncedTabsInView extends ViewPage {
 
   deviceTemplate(deviceName, deviceType, tabs) {
     let tabItems = this.getTabItems(tabs);
-    if (this.overview) {
-      /* Insert device at the beginning of the tabs array */
-      let icon;
-      switch (deviceType) {
-        case "phone":
-          icon = "chrome://browser/skin/device-phone.svg";
-          break;
-        case "desktop":
-          icon = "chrome://browser/skin/device-desktop.svg";
-          break;
-        case "tablet":
-          icon = "chrome://browser/skin/device-tablet.svg";
-          break;
-      }
-      tabItems.unshift({
-        icon,
-        title: deviceName,
-      });
-    }
-    return html`${when(
-        !this.overview,
-        () => html`<h2 slot="header">
-          <span class="icon ${deviceType}" role="presentation"></span>
-          ${deviceName}
-        </h2>`
-      )}
+    return html`<h3
+        slot=${!this.recentBrowsing ? "header" : null}
+        class="device-header"
+      >
+        <span class="icon ${deviceType}" role="presentation"></span>
+        ${deviceName}
+      </h3>
       <fxview-tab-list
         slot="main"
-        class="syncedtabs"
+        class="with-context-menu"
         hasPopup="menu"
         .tabItems=${ifDefined(tabItems)}
         maxTabsLength=${this.maxTabsLength}
         @fxview-tab-list-primary-action=${this.onOpenLink}
         @fxview-tab-list-secondary-action=${this.onContextMenu}
       >
-        ${when(
-          this.overview,
-          () => html`<h2 slot="header">
-            <span class="icon ${deviceType}" role="presentation"></span>
-            ${deviceName}
-          </h2>`
-        )}
         ${this.panelListTemplate()}
       </fxview-tab-list>`;
   }
@@ -384,7 +367,7 @@ class SyncedTabsInView extends ViewPage {
 
     for (let id in renderInfo) {
       if (renderInfo[id].tabs.length) {
-        if (this.overview) {
+        if (this.recentBrowsing) {
           renderArray.push(
             this.deviceTemplate(
               renderInfo[id].name,
@@ -395,6 +378,7 @@ class SyncedTabsInView extends ViewPage {
         } else {
           renderArray.push(
             html`<card-container
+              shortPageName=${this.recentBrowsing ? "syncedtabs" : null}
               >${this.deviceTemplate(
                 renderInfo[id].name,
                 renderInfo[id].deviceType,
@@ -412,6 +396,22 @@ class SyncedTabsInView extends ViewPage {
         );
       }
     }
+    if (!this.recentBrowsing) {
+      renderArray.push(
+        html`<div class="syncedtabs-footer">
+          <button data-action="add-device" @click=${this.handleEvent}>
+            <img
+              class="icon"
+              role="presentation"
+              src="chrome://global/skin/icons/plus.svg"
+            /><span
+              data-l10n-id="firefoxview-syncedtabs-connect-another-device"
+              data-action="add-device"
+            ></span>
+          </button>
+        </div>`
+      );
+    }
     return renderArray;
   }
 
@@ -421,7 +421,7 @@ class SyncedTabsInView extends ViewPage {
         if (this.errorState) {
           return this.generateMessageCard({ error: true });
         }
-        break;
+        return this.generateMessageCard({ action: "loading" });
       case 1 /* not-signed-in */:
         if (Services.prefs.prefHasUserValue("services.sync.lastversion")) {
           // If this pref is set, the user has signed out of sync.
@@ -437,6 +437,11 @@ class SyncedTabsInView extends ViewPage {
       case 3 /* disabled-tab-sync */:
         return this.generateMessageCard({ action: "sync-tabs-disabled" });
       case 4 /* synced-tabs-loaded*/:
+        // There seems to be an edge case where sync says everything worked
+        // fine but we have no devices.
+        if (!this.devices.length) {
+          return this.generateMessageCard({ action: "add-device" });
+        }
         return this.generateTabList();
     }
     return html``;
@@ -456,32 +461,36 @@ class SyncedTabsInView extends ViewPage {
       rel="stylesheet"
       href="chrome://browser/content/firefoxview/firefoxview-next.css"
     />`);
-    if (!this.overview) {
+    if (!this.recentBrowsing) {
       renderArray.push(html`<div class="sticky-container bottom-fade">
         <h2
-          class="page-header"
+          class="page-header heading-large"
           data-l10n-id="firefoxview-synced-tabs-header"
         ></h2>
       </div>`);
     }
 
-    if (this.overview) {
+    if (this.recentBrowsing) {
       renderArray.push(
         html`<card-container
           preserveCollapseState
-          viewAllPage=${this._currentSetupStateIndex == 4 ? "syncedtabs" : null}
+          shortPageName="syncedtabs"
+          ?showViewAll=${this._currentSetupStateIndex == 4 &&
+          this.currentSyncedTabs.length}
         >
           >
-          <h2
+          <h3
             slot="header"
             data-l10n-id="firefoxview-synced-tabs-header"
-            class="overview-header"
-          ></h2>
+            class="recentbrowsing-header"
+          ></h3>
           <div slot="main">${this.generateCardContent()}</div>
         </card-container>`
       );
     } else {
-      renderArray.push(this.generateCardContent());
+      renderArray.push(
+        html`<div class="cards-container">${this.generateCardContent()}</div>`
+      );
     }
     return renderArray;
   }
@@ -499,7 +508,8 @@ class SyncedTabsInView extends ViewPage {
       url: tab.url,
       primaryL10nId: "firefoxview-tabs-list-tab-button",
       primaryL10nArgs: JSON.stringify({ targetURI: tab.url }),
-      secondaryL10nId: "firefoxview-close-button",
+      secondaryL10nId: "fxviewtabrow-options-menu-button",
+      secondaryL10nArgs: JSON.stringify({ tabTitle: tab.title }),
     }));
   }
 

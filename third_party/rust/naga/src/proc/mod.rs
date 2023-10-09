@@ -39,6 +39,7 @@ impl From<super::StorageFormat> for super::ScalarKind {
             Sf::Rgba8Snorm => Sk::Float,
             Sf::Rgba8Uint => Sk::Uint,
             Sf::Rgba8Sint => Sk::Sint,
+            Sf::Rgb10a2Uint => Sk::Uint,
             Sf::Rgb10a2Unorm => Sk::Float,
             Sf::Rg11b10Float => Sk::Float,
             Sf::Rg32Uint => Sk::Uint,
@@ -375,8 +376,8 @@ impl super::MathFunction {
             Self::Round => 1,
             Self::Fract => 1,
             Self::Trunc => 1,
-            Self::Modf => 2,
-            Self::Frexp => 2,
+            Self::Modf => 1,
+            Self::Frexp => 1,
             Self::Ldexp => 2,
             // exponent
             Self::Exp => 1,

@@ -63,7 +63,16 @@ MIDIPort::~MIDIPort() {
 }
 
 bool MIDIPort::Initialize(const MIDIPortInfo& aPortInfo, bool aSysexEnabled) {
-  nsIURI* uri = GetDocumentIfCurrent()->GetDocumentURI();
+  nsCOMPtr<Document> document = GetDocumentIfCurrent();
+  if (!document) {
+    return false;
+  }
+
+  nsCOMPtr<nsIURI> uri = document->GetDocumentURI();
+  if (!uri) {
+    return false;
+  }
+
   nsAutoCString origin;
   nsresult rv = nsContentUtils::GetWebExposedOriginSerialization(uri, origin);
   if (NS_FAILED(rv)) {
@@ -245,8 +254,10 @@ void MIDIPort::Receive(const nsTArray<MIDIMessage>& aMsg) {
 }
 
 void MIDIPort::DisconnectFromOwner() {
+  if (Port()) {
+    Port()->SendClose();
+  }
   DontKeepAliveOnStatechange();
-  Port()->SendClose();
 
   DOMEventTargetHelper::DisconnectFromOwner();
 }

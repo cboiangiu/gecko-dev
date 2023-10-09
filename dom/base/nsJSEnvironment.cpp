@@ -362,8 +362,10 @@ bool NS_HandleScriptError(nsIScriptGlobalObject* aScriptGlobal,
           nsGlobalWindowInner::Cast(win), u"error"_ns, aErrorEventInit);
       event->SetTrusted(true);
 
-      EventDispatcher::DispatchDOMEvent(win, nullptr, event, presContext,
-                                        aStatus);
+      // MOZ_KnownLive due to bug 1506441
+      EventDispatcher::DispatchDOMEvent(
+          MOZ_KnownLive(nsGlobalWindowInner::Cast(win)), nullptr, event,
+          presContext, aStatus);
       called = true;
     }
     --errorDepth;
@@ -419,8 +421,10 @@ class ScriptErrorEvent : public Runnable {
           nsGlobalWindowInner::Cast(win), u"error"_ns, init);
       event->SetTrusted(true);
 
-      EventDispatcher::DispatchDOMEvent(win, nullptr, event, presContext,
-                                        &status);
+      // MOZ_KnownLive due to bug 1506441
+      EventDispatcher::DispatchDOMEvent(
+          MOZ_KnownLive(nsGlobalWindowInner::Cast(win)), nullptr, event,
+          presContext, &status);
     }
 
     if (status != nsEventStatus_eConsumeNoDefault) {
@@ -1693,7 +1697,16 @@ void nsJSContext::MaybeRunNextCollectorSlice(nsIDocShell* aDocShell,
     // Try to not delay the next RefreshDriver tick, so give a reasonable
     // deadline for collectors.
     if (next.isSome()) {
-      sScheduler.RunNextCollectorTimer(aReason, next.value());
+      if (sScheduler.InIncrementalGC() || sScheduler.IsCollectingCycles()) {
+        sScheduler.RunNextCollectorTimer(aReason, next.value());
+      } else {
+        // In order to improve performance on the next page, run a minor GC.
+        // The 16ms limit ensures it isn't called all the time if there are for
+        // example multiple iframes loading at the same time.
+        JS::RunNurseryCollection(CycleCollectedJSRuntime::Get()->Runtime(),
+                                 JS::GCReason::PREPARE_FOR_PAGELOAD,
+                                 mozilla::TimeDuration::FromMilliseconds(16));
+      }
     }
   }
 }
@@ -1752,7 +1765,8 @@ void nsJSContext::LowMemoryGC() {
 
 // static
 void nsJSContext::MaybePokeCC() {
-  sScheduler.MaybePokeCC(TimeStamp::Now(), nsCycleCollector_suspectedCount());
+  sScheduler.MaybePokeCC(TimeStamp::NowLoRes(),
+                         nsCycleCollector_suspectedCount());
 }
 
 static void DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress,
@@ -2079,6 +2093,11 @@ void nsJSContext::EnsureStatics() {
       SetMemoryPrefChangedCallbackBool,
       "javascript.options.mem.gc_parallel_marking",
       (void*)JSGC_PARALLEL_MARKING_ENABLED);
+
+  Preferences::RegisterCallbackAndCall(
+      SetMemoryPrefChangedCallbackInt,
+      "javascript.options.mem.gc_parallel_marking_threshold_mb",
+      (void*)JSGC_PARALLEL_MARKING_THRESHOLD_MB);
 
   Preferences::RegisterCallbackAndCall(
       SetMemoryGCSliceTimePrefChangedCallback,

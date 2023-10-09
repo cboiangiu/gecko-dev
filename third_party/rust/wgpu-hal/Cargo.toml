@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.60"
+rust-version = "1.65"
 name = "wgpu-hal"
-version = "0.16.0"
+version = "0.17.0"
 authors = ["wgpu developers"]
 description = "WebGPU hardware abstraction layer"
 homepage = "https://wgpu.rs/"
@@ -62,9 +62,9 @@ version = "0.12.3"
 optional = true
 
 [dependencies.naga]
-version = "0.12.0"
+version = "0.13.0"
 git = "https://github.com/gfx-rs/naga"
-rev = "409239c0e2313bfd0dc4fd64f8c3021185ccef1b"
+rev = "6668d0694cc51ee66c71c2ca3a1ab1081956299b"
 features = ["clone"]
 
 [dependencies.profiling]
@@ -72,20 +72,23 @@ version = "1"
 default-features = false
 
 [dependencies.wgt]
-version = "0.16"
+version = "0.17"
 path = "../wgpu-types"
 package = "wgpu-types"
 
 [dev-dependencies]
 cfg-if = "1"
 env_logger = "0.10"
-winit = "0.27.1"
 
 [dev-dependencies.naga]
-version = "0.12.0"
+version = "0.13.0"
 git = "https://github.com/gfx-rs/naga"
-rev = "409239c0e2313bfd0dc4fd64f8c3021185ccef1b"
+rev = "6668d0694cc51ee66c71c2ca3a1ab1081956299b"
 features = ["wgsl-in"]
+
+[dev-dependencies.winit]
+version = "0.28.7"
+features = ["android-native-activity"]
 
 [features]
 default = ["link"]
@@ -104,6 +107,7 @@ dx12 = [
     "naga/hlsl-out",
     "d3d12",
     "bit-set",
+    "libloading",
     "range-alloc",
     "winapi/std",
     "winapi/winbase",
@@ -140,11 +144,11 @@ vulkan = [
 windows_rs = ["gpu-allocator"]
 
 [target."cfg(all(target_arch = \"wasm32\", not(target_os = \"emscripten\")))".dependencies]
-js-sys = "0.3.63"
-wasm-bindgen = "0.2.86"
+js-sys = "0.3.64"
+wasm-bindgen = "0.2.87"
 
 [target."cfg(all(target_arch = \"wasm32\", not(target_os = \"emscripten\")))".dependencies.web-sys]
-version = "0.3.61"
+version = "0.3.64"
 features = [
     "Window",
     "HtmlCanvasElement",
@@ -161,9 +165,8 @@ version = "0.1"
 optional = true
 
 [target."cfg(any(target_os=\"macos\", target_os=\"ios\"))".dependencies.metal]
-git = "https://github.com/gfx-rs/metal-rs.git"
-rev = "a6a0446"
-default_features = false
+git = "https://github.com/gfx-rs/metal-rs/"
+rev = "d24f1a4"
 
 [target."cfg(not(target_arch = \"wasm32\"))".dependencies.ash]
 version = "0.37.3"
@@ -183,7 +186,7 @@ features = ["dynamic"]
 optional = true
 
 [target."cfg(not(target_arch = \"wasm32\"))".dependencies.libloading]
-version = ">=0.7,<0.9"
+version = ">=0.7, <0.9"
 optional = true
 
 [target."cfg(not(target_arch = \"wasm32\"))".dependencies.renderdoc-sys]
@@ -209,7 +212,7 @@ features = [
 ]
 
 [target."cfg(target_os = \"emscripten\")".dependencies.libloading]
-version = ">=0.7,<0.9"
+version = ">=0.7, <0.9"
 optional = true
 
 [target."cfg(unix)".dependencies]
@@ -225,10 +228,9 @@ features = ["libloading"]
 optional = true
 
 [target."cfg(windows)".dependencies.gpu-allocator]
-version = "0.22"
+version = "0.23"
 features = [
     "d3d12",
-    "windows",
     "public-winapi",
 ]
 optional = true

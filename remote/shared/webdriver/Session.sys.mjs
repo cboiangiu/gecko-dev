@@ -83,6 +83,30 @@ export class WebDriverSession {
    *  <dd>Use a WebDriver conforming <i>WebDriver::ElementClick</i>.
    * </dl>
    *
+   * <h4>WebAuthn</h4>
+   *
+   * <dl>
+   *  <dt><code>webauthn:virtualAuthenticators</code> (boolean)
+   *  <dd>Indicates whether the endpoint node supports all Virtual
+   *   Authenticators commands.
+   *
+   *  <dt><code>webauthn:extension:uvm</code> (boolean)
+   *  <dd>Indicates whether the endpoint node WebAuthn WebDriver
+   *   implementation supports the User Verification Method extension.
+   *
+   *  <dt><code>webauthn:extension:prf</code> (boolean)
+   *  <dd>Indicates whether the endpoint node WebAuthn WebDriver
+   *   implementation supports the prf extension.
+   *
+   *  <dt><code>webauthn:extension:largeBlob</code> (boolean)
+   *  <dd>Indicates whether the endpoint node WebAuthn WebDriver implementation
+   *   supports the largeBlob extension.
+   *
+   *  <dt><code>webauthn:extension:credBlob</code> (boolean)
+   *  <dd>Indicates whether the endpoint node WebAuthn WebDriver implementation
+   *   supports the credBlob extension.
+   * </dl>
+   *
    * <h4>Timeouts object</h4>
    *
    * <dl>
@@ -364,6 +388,11 @@ export class WebDriverSession {
  *     The list of seen nodes.
  */
 export function getSeenNodesForBrowsingContext(sessionId, browsingContext) {
+  if (!lazy.TabManager.isValidCanonicalBrowsingContext(browsingContext)) {
+    // If browsingContext is not a valid Browsing Context, return an empty set.
+    return new Set();
+  }
+
   const navigable =
     lazy.TabManager.getNavigableForBrowsingContext(browsingContext);
   const session = getWebDriverSessionById(sessionId);

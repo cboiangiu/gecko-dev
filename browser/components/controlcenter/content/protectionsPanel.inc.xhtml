@@ -45,19 +45,8 @@
       <vbox id="protections-popup-main-body" class="panel-subview-body">
         <vbox id="protections-popup-tp-switch-section" class="protections-popup-section protections-popup-switch-section">
           <hbox id="protections-popup-tp-switch-section-header" class="protections-popup-switch-section-header">
-            <vbox class="protections-popup-tp-switch-label-box" flex="1" align="start">
-              <label class="protections-popup-switch-header protections-popup-tp-switch-on-header"
-                     role="heading"
-                     aria-level="2" data-l10n-id="protections-panel-etp-on-header"></label>
-              <label class="protections-popup-switch-header protections-popup-tp-switch-off-header"
-                     role="heading"
-                     aria-level="2" data-l10n-id="protections-panel-etp-off-header"></label>
-            </vbox>
-            <vbox class="protections-popup-tp-switch-box">
-              <toolbarbutton id="protections-popup-tp-switch"
-                             class="protections-popup-tp-switch"
-                             enabled="false"
-                             oncommand="gProtectionsHandler.onTPSwitchCommand();" />
+            <vbox class="protections-popup-tp-switch-box" flex="1" align="stretch">
+              <html:moz-toggle id="protections-popup-tp-switch" data-l10n-attrs="label, description"></html:moz-toggle>
             </vbox>
           </hbox>
           <hbox id="protections-popup-tp-switch-section-footer">
@@ -193,19 +182,8 @@
                role="document"
                data-l10n-id="protections-panel-site-not-working-view">
         <hbox id="protections-popup-siteNotWorkingView-header">
-          <vbox class="protections-popup-tp-switch-label-box" flex="1">
-            <label class="protections-popup-switch-header protections-popup-tp-switch-on-header"
-                   role="heading"
-                   aria-level="1" data-l10n-id="protections-panel-etp-on-header"></label>
-            <label class="protections-popup-switch-header protections-popup-tp-switch-off-header"
-                   role="heading"
-                   aria-level="1" data-l10n-id="protections-panel-etp-off-header"></label>
-          </vbox>
-          <vbox class="protections-popup-tp-switch-box">
-            <toolbarbutton id="protections-popup-siteNotWorking-tp-switch"
-                           class="protections-popup-tp-switch"
-                           enabled="false"
-                           oncommand="gProtectionsHandler.onTPSwitchCommand();" />
+          <vbox class="protections-popup-tp-switch-box" flex="1" align="stretch">
+            <html:moz-toggle id="protections-popup-siteNotWorking-tp-switch" data-l10n-attrs="label, description"></html:moz-toggle>
           </vbox>
         </hbox>
         <toolbarseparator></toolbarseparator>
@@ -394,9 +372,11 @@
         <html:moz-button-group id="protections-popup-sendReportView-footer"
               class="panel-footer">
           <button id="protections-popup-sendReportView-cancel"
+                  class="panel-footer-button"
                   data-l10n-id="protections-panel-content-blocking-breakage-report-view-cancel"
                   oncommand="gProtectionsHandler._protectionsPopupMultiView.goBack();"/>
           <button id="protections-popup-sendReportView-submit"
+                  class="panel-footer-button"
                   default="true"
                   data-l10n-id="protections-panel-content-blocking-breakage-report-view-send-report"
                   oncommand="gProtectionsHandler.onSendReportClicked(); gProtectionsHandler.recordClick('send_report_submit');"/>
@@ -419,17 +399,17 @@
           <button id="protections-popup-cookieBannerView-cancel"
                     data-l10n-id="protections-panel-cookie-banner-view-cancel"
                     oncommand="gProtectionsHandler._protectionsPopupMultiView.goBack();"
-                    class="subviewbutton panel-subview-footer-button" />
+                    class="panel-footer-button" />
           <button id="protections-popup-cookieBannerView-enable-button"
                     data-l10n-id="protections-panel-cookie-banner-view-turn-on"
                     oncommand="gProtectionsHandler.onCookieBannerToggleCommand()"
                     default="true"
-                    class="subviewbutton panel-subview-footer-button" />
+                    class="panel-footer-button" />
           <button id="protections-popup-cookieBannerView-disable-button"
                     data-l10n-id="protections-panel-cookie-banner-view-turn-off"
                     oncommand="gProtectionsHandler.onCookieBannerToggleCommand()"
                     default="true"
-                    class="subviewbutton panel-subview-footer-button" />
+                    class="panel-footer-button" />
         </html:moz-button-group>
     </panelview>
   </panelmultiview>

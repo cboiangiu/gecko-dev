@@ -374,6 +374,18 @@ const SymbolicAddressSignature SASigArrayNewElem = {
     _FailOnNullPtr,
     5,
     {_PTR, _I32, _I32, _PTR, _I32, _END}};
+const SymbolicAddressSignature SASigArrayInitData = {
+    SymbolicAddress::ArrayInitData,
+    _VOID,
+    _FailOnNegI32,
+    7,
+    {_PTR, _RoN, _I32, _I32, _I32, _PTR, _I32, _END}};
+const SymbolicAddressSignature SASigArrayInitElem = {
+    SymbolicAddress::ArrayInitElem,
+    _VOID,
+    _FailOnNegI32,
+    7,
+    {_PTR, _RoN, _I32, _I32, _I32, _PTR, _I32, _END}};
 const SymbolicAddressSignature SASigArrayCopy = {
     SymbolicAddress::ArrayCopy,
     _VOID,
@@ -1162,58 +1174,58 @@ void* wasm::AddressOf(SymbolicAddress imm, ABIFunctionType* abiType) {
       return FuncCast<double(double)>(sin, *abiType);
     case SymbolicAddress::SinFdlibmD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::sin, *abiType);
+      return FuncCast<double(double)>(fdlibm_sin, *abiType);
     case SymbolicAddress::CosNativeD:
       *abiType = Args_Double_Double;
       return FuncCast<double(double)>(cos, *abiType);
     case SymbolicAddress::CosFdlibmD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::cos, *abiType);
+      return FuncCast<double(double)>(fdlibm_cos, *abiType);
     case SymbolicAddress::TanNativeD:
       *abiType = Args_Double_Double;
       return FuncCast<double(double)>(tan, *abiType);
     case SymbolicAddress::TanFdlibmD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::tan, *abiType);
+      return FuncCast<double(double)>(fdlibm_tan, *abiType);
     case SymbolicAddress::ASinD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::asin, *abiType);
+      return FuncCast<double(double)>(fdlibm_asin, *abiType);
     case SymbolicAddress::ACosD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::acos, *abiType);
+      return FuncCast<double(double)>(fdlibm_acos, *abiType);
     case SymbolicAddress::ATanD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::atan, *abiType);
+      return FuncCast<double(double)>(fdlibm_atan, *abiType);
     case SymbolicAddress::CeilD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::ceil, *abiType);
+      return FuncCast<double(double)>(fdlibm_ceil, *abiType);
     case SymbolicAddress::CeilF:
       *abiType = Args_Float32_Float32;
-      return FuncCast<float(float)>(fdlibm::ceilf, *abiType);
+      return FuncCast<float(float)>(fdlibm_ceilf, *abiType);
     case SymbolicAddress::FloorD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::floor, *abiType);
+      return FuncCast<double(double)>(fdlibm_floor, *abiType);
     case SymbolicAddress::FloorF:
       *abiType = Args_Float32_Float32;
-      return FuncCast<float(float)>(fdlibm::floorf, *abiType);
+      return FuncCast<float(float)>(fdlibm_floorf, *abiType);
     case SymbolicAddress::TruncD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::trunc, *abiType);
+      return FuncCast<double(double)>(fdlibm_trunc, *abiType);
     case SymbolicAddress::TruncF:
       *abiType = Args_Float32_Float32;
-      return FuncCast<float(float)>(fdlibm::truncf, *abiType);
+      return FuncCast<float(float)>(fdlibm_truncf, *abiType);
     case SymbolicAddress::NearbyIntD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::nearbyint, *abiType);
+      return FuncCast<double(double)>(fdlibm_nearbyint, *abiType);
     case SymbolicAddress::NearbyIntF:
       *abiType = Args_Float32_Float32;
-      return FuncCast<float(float)>(fdlibm::nearbyintf, *abiType);
+      return FuncCast<float(float)>(fdlibm_nearbyintf, *abiType);
     case SymbolicAddress::ExpD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::exp, *abiType);
+      return FuncCast<double(double)>(fdlibm_exp, *abiType);
     case SymbolicAddress::LogD:
       *abiType = Args_Double_Double;
-      return FuncCast<double(double)>(fdlibm::log, *abiType);
+      return FuncCast<double(double)>(fdlibm_log, *abiType);
     case SymbolicAddress::PowD:
       *abiType = Args_Double_DoubleDouble;
       return FuncCast(ecmaPow, *abiType);
@@ -1405,11 +1417,18 @@ void* wasm::AddressOf(SymbolicAddress imm, ABIFunctionType* abiType) {
       *abiType = Args_General_GeneralInt32Int32GeneralInt32;
       MOZ_ASSERT(*abiType == ToABIType(SASigArrayNewElem));
       return FuncCast(Instance::arrayNewElem, *abiType);
+    case SymbolicAddress::ArrayInitData:
+      *abiType = Args_Int32_GeneralGeneralInt32Int32Int32GeneralInt32;
+      MOZ_ASSERT(*abiType == ToABIType(SASigArrayInitData));
+      return FuncCast(Instance::arrayInitData, *abiType);
+    case SymbolicAddress::ArrayInitElem:
+      *abiType = Args_Int32_GeneralGeneralInt32Int32Int32GeneralInt32;
+      MOZ_ASSERT(*abiType == ToABIType(SASigArrayInitElem));
+      return FuncCast(Instance::arrayInitElem, *abiType);
     case SymbolicAddress::ArrayCopy:
       *abiType = Args_Int32_GeneralGeneralInt32GeneralInt32Int32Int32;
       MOZ_ASSERT(*abiType == ToABIType(SASigArrayCopy));
       return FuncCast(Instance::arrayCopy, *abiType);
-
     case SymbolicAddress::ExceptionNew:
       *abiType = Args_General2;
       MOZ_ASSERT(*abiType == ToABIType(SASigExceptionNew));
@@ -1595,6 +1614,8 @@ bool wasm::NeedsBuiltinThunk(SymbolicAddress sym) {
     case SymbolicAddress::ArrayNew_false:
     case SymbolicAddress::ArrayNewData:
     case SymbolicAddress::ArrayNewElem:
+    case SymbolicAddress::ArrayInitData:
+    case SymbolicAddress::ArrayInitElem:
     case SymbolicAddress::ArrayCopy:
 #define OP(op, export, sa_name, abitype, entry, idx) \
   case SymbolicAddress::sa_name:
@@ -1904,6 +1925,7 @@ bool wasm::EnsureBuiltinThunksInitialized() {
   MOZ_ASSERT(masm.callSiteTargets().empty());
   MOZ_ASSERT(masm.trapSites().empty());
   MOZ_ASSERT(masm.tryNotes().empty());
+  MOZ_ASSERT(masm.codeRangeUnwindInfos().empty());
 
   if (!ExecutableAllocator::makeExecutableAndFlushICache(thunks->codeBase,
                                                          thunks->codeSize)) {

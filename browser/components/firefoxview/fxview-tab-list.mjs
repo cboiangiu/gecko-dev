@@ -6,7 +6,6 @@ import {
   html,
   ifDefined,
   styleMap,
-  classMap,
   when,
 } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
@@ -189,11 +188,6 @@ export default class FxviewTabList extends MozLitElement {
     }
   }
 
-  // Use a relative URL in storybook to get faster reloads on style changes.
-  static stylesheetUrl = window.IS_STORYBOOK
-    ? "./fxview-tab-list.css"
-    : "chrome://browser/content/firefoxview/fxview-tab-list.css";
-
   render() {
     if (this.maxTabsLength > 0) {
       // Can set maxTabsLength to -1 to have no max
@@ -207,7 +201,10 @@ export default class FxviewTabList extends MozLitElement {
       tabItems,
     } = this;
     return html`
-      <link rel="stylesheet" href=${this.constructor.stylesheetUrl} />
+      <link
+        rel="stylesheet"
+        href="chrome://browser/content/firefoxview/fxview-tab-list.css"
+      />
       <div
         id="fxview-tab-list"
         class="fxview-tab-list"
@@ -241,6 +238,8 @@ export default class FxviewTabList extends MozLitElement {
               .secondaryL10nId=${ifDefined(tabItem.secondaryL10nId)}
               .secondaryL10nArgs=${ifDefined(tabItem.secondaryL10nArgs)}
               .closedId=${ifDefined(tabItem.closedId || tabItem.closedId)}
+              .sourceClosedId=${ifDefined(tabItem.sourceClosedId)}
+              .sourceWindowId==${ifDefined(tabItem.sourceWindowId)}
               .tabElement=${ifDefined(tabItem.tabElement)}
               .time=${ifDefined(time)}
               .timeMsPref=${ifDefined(this.timeMsPref)}
@@ -266,6 +265,8 @@ customElements.define("fxview-tab-list", FxviewTabList);
  * @property {string} dateTimeFormat - Expected format for date and/or time
  * @property {string} hasPopup - The aria-haspopup attribute for the secondary action, if required
  * @property {number} closedId - The tab ID for when the tab item was closed.
+ * @property {number} sourceClosedId - The closedId of the closed window its from if applicable
+ * @property {number} sourceWindowId - The sessionstore id of the window its from if applicable
  * @property {string} favicon - The favicon for the tab item.
  * @property {string} primaryL10nId - The l10n id used for the primary action element
  * @property {string} primaryL10nArgs - The l10n args used for the primary action element
@@ -296,6 +297,8 @@ export class FxviewTabRow extends MozLitElement {
     secondaryL10nId: { type: String },
     secondaryL10nArgs: { type: String },
     closedId: { type: Number },
+    sourceClosedId: { type: Number },
+    sourceWindowId: { type: String },
     tabElement: { type: Object },
     time: { type: Number },
     title: { type: String },
@@ -329,11 +332,6 @@ export class FxviewTabRow extends MozLitElement {
     this.mainEl.focus();
     return this.mainEl.id;
   }
-
-  // Use a relative URL in storybook to get faster reloads on style changes.
-  static stylesheetUrl = window.IS_STORYBOOK
-    ? "./fxview-tab-row.css"
-    : "chrome://browser/content/firefoxview/fxview-tab-row.css";
 
   dateFluentArgs(timestamp, dateTimeFormat) {
     if (dateTimeFormat === "date" || dateTimeFormat === "dateTime") {
@@ -383,17 +381,23 @@ export class FxviewTabRow extends MozLitElement {
   }
 
   getImageUrl(icon, targetURI) {
-    if (!window.IS_STORYBOOK) {
-      // If the icon is not for website (doesn't begin with http), we
-      // display it directly. Otherwise we go through the page-icon
-      // protocol to try to get a cached version. We don't load
-      // favicons directly.
-      if (icon?.startsWith("http")) {
-        return `page-icon:${targetURI}`;
-      }
-      return icon;
+    if (window.IS_STORYBOOK) {
+      return `chrome://global/skin/icons/defaultFavicon.svg`;
     }
-    return `chrome://global/skin/icons/defaultFavicon.svg`;
+    if (!icon) {
+      if (targetURI?.startsWith("moz-extension")) {
+        return "chrome://mozapps/skin/extensions/extension.svg";
+      }
+      return `chrome://global/skin/icons/defaultFavicon.svg`;
+    }
+    // If the icon is not for website (doesn't begin with http), we
+    // display it directly. Otherwise we go through the page-icon
+    // protocol to try to get a cached version. We don't load
+    // favicons directly.
+    if (icon.startsWith("http")) {
+      return `page-icon:${targetURI}`;
+    }
+    return icon;
   }
 
   primaryActionHandler(event) {
@@ -453,13 +457,13 @@ export class FxviewTabRow extends MozLitElement {
         rel="stylesheet"
         href="chrome://global/skin/in-content/common.css"
       />
-      <link rel="stylesheet" href=${this.constructor.stylesheetUrl} />
+      <link
+        rel="stylesheet"
+        href="chrome://browser/content/firefoxview/fxview-tab-row.css"
+      />
       <a
         .href=${ifDefined(this.url)}
-        class=${classMap({
-          "fxview-tab-row-main": true,
-          "fxview-tab-row-header": !this.url,
-        })}
+        class="fxview-tab-row-main"
         id="fxview-tab-row-main"
         tabindex=${this.active &&
         this.currentActiveElementId === "fxview-tab-row-main"

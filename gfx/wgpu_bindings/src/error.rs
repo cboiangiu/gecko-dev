@@ -436,9 +436,10 @@ mod foreign {
     impl HasErrorBufferType for DeviceError {
         fn error_type(&self) -> ErrorBufferType {
             match self {
-                DeviceError::Invalid => ErrorBufferType::Validation,
+                DeviceError::Invalid | DeviceError::WrongDevice => ErrorBufferType::Validation,
                 DeviceError::Lost => ErrorBufferType::None,
                 DeviceError::OutOfMemory => ErrorBufferType::OutOfMemory,
+                DeviceError::ResourceCreationFailed => ErrorBufferType::Internal,
             }
         }
     }

@@ -198,9 +198,9 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
     assertSameZone(shape);
     addStubField(uintptr_t(shape), StubField::Type::WeakShape);
   }
-  void writeGetterSetterField(GetterSetter* gs) {
+  void writeWeakGetterSetterField(GetterSetter* gs) {
     MOZ_ASSERT(gs);
-    addStubField(uintptr_t(gs), StubField::Type::GetterSetter);
+    addStubField(uintptr_t(gs), StubField::Type::WeakGetterSetter);
   }
   void writeObjectField(JSObject* obj) {
     MOZ_ASSERT(obj);
@@ -220,9 +220,9 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
     MOZ_ASSERT(sym);
     addStubField(uintptr_t(sym), StubField::Type::Symbol);
   }
-  void writeBaseScriptField(BaseScript* script) {
+  void writeWeakBaseScriptField(BaseScript* script) {
     MOZ_ASSERT(script);
-    addStubField(uintptr_t(script), StubField::Type::BaseScript);
+    addStubField(uintptr_t(script), StubField::Type::WeakBaseScript);
   }
   void writeJitCodeField(JitCode* code) {
     MOZ_ASSERT(code);
@@ -473,7 +473,7 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
       slotIndex += argc;
     }
     MOZ_ASSERT(slotIndex >= 0);
-    MOZ_ASSERT(slotIndex <= UINT8_MAX);
+    MOZ_RELEASE_ASSERT(slotIndex <= UINT8_MAX);
     return loadArgumentFixedSlot_(slotIndex);
   }
 
@@ -621,6 +621,28 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
     uint32_t nargsAndFlags = setter->flagsAndArgCountRaw();
     callNativeSetter_(receiver, setter, rhs, sameRealm, nargsAndFlags);
   }
+
+#ifdef JS_PUNBOX64
+  void callScriptedProxyGetResult(ValOperandId target, ObjOperandId receiver,
+                                  ObjOperandId handler, JSFunction* trap,
+                                  HandleId property) {
+    MOZ_ASSERT(trap->hasJitEntry());
+    uint32_t nargsAndFlags = trap->flagsAndArgCountRaw();
+    callScriptedProxyGetResult_(target, receiver, handler, trap, property,
+                                nargsAndFlags);
+  }
+
+  void callScriptedProxyGetByValueResult(ValOperandId target,
+                                         ObjOperandId receiver,
+                                         ObjOperandId handler,
+                                         ValOperandId property,
+                                         JSFunction* trap) {
+    MOZ_ASSERT(trap->hasJitEntry());
+    uint32_t nargsAndFlags = trap->flagsAndArgCountRaw();
+    callScriptedProxyGetByValueResult_(target, receiver, handler, property,
+                                       trap, nargsAndFlags);
+  }
+#endif
 
   void metaScriptedThisShape(Shape* thisShape) {
     metaScriptedThisShape_(thisShape);

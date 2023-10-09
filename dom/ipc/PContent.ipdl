@@ -278,7 +278,7 @@ struct BlobURLRegistrationData
   nsCString url;
   IPCBlob blob;
   nullable nsIPrincipal principal;
-  nsID? agentClusterId;
+  nsCString partitionKey;
   bool revoked;
 };
 
@@ -867,8 +867,7 @@ child:
     async GetFilesResponse(nsID aID, GetFilesResponseResult aResult);
 
     async BlobURLRegistration(nsCString aURI, IPCBlob aBlob,
-                              nullable nsIPrincipal aPrincipal,
-                              nsID? aAgentClusterId);
+                              nullable nsIPrincipal aPrincipal, nsCString aPartitionKey);
 
     async BlobURLUnregistration(nsCString aURI);
 
@@ -1185,7 +1184,7 @@ parent:
     // Pass true for aShouldCloseWindow to specify that aContext was opened specifically
     // for this load, and should be closed once we've handled it.
     async PExternalHelperApp(nullable nsIURI uri,
-                             LoadInfoArgs? loadInfoArgs,
+                             LoadInfoArgs loadInfoArgs,
                              nsCString aMimeContentType,
                              nsCString aContentDisposition,
                              uint32_t aContentDispositionHint,
@@ -1256,8 +1255,6 @@ parent:
 
     // Tell the parent that the child has gone idle for the first time.
     async FirstIdle();
-
-    async DeviceReset();
 
     async CopyFavicon(nullable nsIURI oldURI, nullable nsIURI newURI, bool isPrivate);
 
@@ -1611,8 +1608,7 @@ parent:
      async DeleteGetFilesRequest(nsID aID);
 
      async StoreAndBroadcastBlobURLRegistration(nsCString url, IPCBlob blob,
-                                                nullable nsIPrincipal principal,
-                                                nsID? aAgentClusterId);
+                                                nullable nsIPrincipal principal, nsCString aPartitionKey);
 
      async UnstoreAndBroadcastBlobURLUnregistration(nsCString url, nullable nsIPrincipal principal);
 
@@ -1816,7 +1812,7 @@ parent:
                              nullable nsIPrincipal aLoadingPrincipal,
                              OriginAttributes aOriginAttributes,
                              uint64_t aInnerWindowId,
-                             nsID? aAgentClusterId)
+                             nsCString aPartitionKey)
       returns (BlobURLDataRequestResult aResult);
 
     async SetActiveSessionHistoryEntry(MaybeDiscardedBrowsingContext context,
@@ -1851,7 +1847,7 @@ both:
      * loadInfo is passed in order to enforce same-origin security checks
      * aData must be non-null.
      */
-    async ReportFrameTimingData(LoadInfoArgs? loadInfo, nsString entryName,
+    async ReportFrameTimingData(LoadInfoArgs loadInfo, nsString entryName,
                                 nsString initiatorType,
                                 UniquePtr<PerformanceTimingData> aData);
 

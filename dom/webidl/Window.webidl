@@ -30,10 +30,6 @@ interface nsIPrintSettings;
  Exposed=Window,
  InstrumentedProps=(AbsoluteOrientationSensor,
                     Accelerometer,
-                    Atomics,
-                    AudioParamMap,
-                    AudioWorklet,
-                    AudioWorkletNode,
                     BackgroundFetchManager,
                     BackgroundFetchRecord,
                     BackgroundFetchRegistration,
@@ -48,10 +44,10 @@ interface nsIPrintSettings;
                     BluetoothUUID,
                     CanvasCaptureMediaStreamTrack,
                     chrome,
-                    clientInformation,
                     ClipboardItem,
                     CSSImageValue,
                     CSSKeywordValue,
+                    CSSMathClamp,
                     CSSMathInvert,
                     CSSMathMax,
                     CSSMathMin,
@@ -64,6 +60,7 @@ interface nsIPrintSettings;
                     CSSNumericValue,
                     CSSPerspective,
                     CSSPositionValue,
+                    CSSPropertyRule,
                     CSSRotate,
                     CSSScale,
                     CSSSkew,
@@ -85,12 +82,12 @@ interface nsIPrintSettings;
                     DeviceMotionEventAcceleration,
                     DeviceMotionEventRotationRate,
                     DOMError,
+                    EncodedVideoChunk,
                     EnterPictureInPictureEvent,
                     External,
                     FederatedCredential,
                     Gyroscope,
                     HTMLContentElement,
-                    HTMLDialogElement,
                     HTMLShadowElement,
                     ImageCapture,
                     InputDeviceCapabilities,
@@ -98,10 +95,6 @@ interface nsIPrintSettings;
                     Keyboard,
                     KeyboardLayoutMap,
                     LinearAccelerationSensor,
-                    Lock,
-                    LockManager,
-                    MediaMetadata,
-                    MediaSession,
                     MediaSettingsRange,
                     MIDIAccess,
                     MIDIConnectionEvent,
@@ -111,17 +104,16 @@ interface nsIPrintSettings;
                     MIDIOutput,
                     MIDIOutputMap,
                     MIDIPort,
-                    NavigationPreloadManager,
                     NetworkInformation,
                     offscreenBuffering,
-                    OffscreenCanvas,
-                    OffscreenCanvasRenderingContext2D,
                     onbeforeinstallprompt,
                     oncancel,
                     onmousewheel,
+                    onorientationchange,
                     onsearch,
                     onselectionchange,
                     openDatabase,
+                    orientation,
                     OrientationSensor,
                     OverconstrainedError,
                     PasswordCredential,
@@ -132,10 +124,9 @@ interface nsIPrintSettings;
                     PaymentRequest,
                     PaymentRequestUpdateEvent,
                     PaymentResponse,
-                    PerformanceEventTiming,
                     PerformanceLongTaskTiming,
-                    PerformancePaintTiming,
                     PhotoCapabilities,
+                    PictureInPictureEvent,
                     PictureInPictureWindow,
                     Presentation,
                     PresentationAvailability,
@@ -147,28 +138,28 @@ interface nsIPrintSettings;
                     PresentationRequest,
                     RelativeOrientationSensor,
                     RemotePlayback,
+                    Report,
+                    ReportBody,
                     ReportingObserver,
-                    RTCDtlsTransport,
                     RTCError,
                     RTCErrorEvent,
                     RTCIceTransport,
-                    RTCSctpTransport,
+                    RTCPeerConnectionIceErrorEvent,
                     Sensor,
                     SensorErrorEvent,
-                    SharedArrayBuffer,
+                    SpeechRecognitionAlternative,
+                    SpeechRecognitionResult,
+                    SpeechRecognitionResultList,
                     styleMedia,
                     StylePropertyMap,
                     StylePropertyMapReadOnly,
                     SVGDiscardElement,
                     SyncManager,
                     TaskAttributionTiming,
-                    TextDecoderStream,
-                    TextEncoderStream,
                     TextEvent,
                     Touch,
                     TouchEvent,
                     TouchList,
-                    TransformStream,
                     USB,
                     USBAlternateInterface,
                     USBConfiguration,
@@ -183,7 +174,12 @@ interface nsIPrintSettings;
                     USBIsochronousOutTransferResult,
                     USBOutTransferResult,
                     UserActivation,
-                    visualViewport,
+                    VideoColorSpace,
+                    VideoDecoder,
+                    VideoEncoder,
+                    VideoFrame,
+                    WakeLock,
+                    WakeLockSentinel,
                     webkitCancelAnimationFrame,
                     webkitMediaStream,
                     WebKitMutationObserver,
@@ -196,9 +192,7 @@ interface nsIPrintSettings;
                     webkitSpeechRecognition,
                     webkitSpeechRecognitionError,
                     webkitSpeechRecognitionEvent,
-                    webkitStorageInfo,
-                    Worklet,
-                    WritableStream)]
+                    webkitStorageInfo)]
 /*sealed*/ interface Window : EventTarget {
   // the current browsing context
   [LegacyUnforgeable, Constant, StoreInSlot,
@@ -250,7 +244,7 @@ interface nsIPrintSettings;
   [Throws, NeedsSubjectPrincipal] undefined alert(DOMString message);
   [Throws, NeedsSubjectPrincipal] boolean confirm(optional DOMString message = "");
   [Throws, NeedsSubjectPrincipal] DOMString? prompt(optional DOMString message = "", optional DOMString default = "");
-  [Throws, Pref="dom.enable_window_print"]
+  [Throws]
   undefined print();
 
   // Returns a window that you can use for a print preview.
@@ -464,9 +458,7 @@ partial interface Window {
 
   [Throws] attribute boolean fullScreen;
 
-  undefined                 updateCommands(DOMString action,
-                                           optional Selection? sel = null,
-                                           optional short reason = 0);
+  undefined                 updateCommands(DOMString action);
 
   /* Find in page.
    * @param str: the search pattern
@@ -578,13 +570,6 @@ partial interface Window {
            attribute EventHandler onorientationchange;
 };
 #endif
-
-// Mozilla extension
-// Sidebar is deprecated and it will be removed in the next cycles. See bug 1640138.
-partial interface Window {
-  [Replaceable, UseCounter, Pref="dom.window.sidebar.enabled"]
-  readonly attribute (External or WindowProxy) sidebar;
-};
 
 [MOZ_CAN_RUN_SCRIPT_BOUNDARY]
 callback PromiseDocumentFlushedCallback = any ();
@@ -716,9 +701,9 @@ partial interface Window {
   [Func="IsChromeOrUAWidget"]
   readonly attribute boolean isChromeWindow;
 
-  [ChromeOnly]
+  [Func="nsGlobalWindowInner::IsGleanNeeded"]
   readonly attribute GleanImpl Glean;
-  [ChromeOnly]
+  [Func="nsGlobalWindowInner::IsGleanNeeded"]
   readonly attribute GleanPingsImpl GleanPings;
 };
 
@@ -803,7 +788,7 @@ partial interface Window {
 };
 
 partial interface Window {
-  [SameObject, Pref="dom.visualviewport.enabled", Replaceable]
+  [SameObject, Replaceable]
   readonly attribute VisualViewport visualViewport;
 };
 

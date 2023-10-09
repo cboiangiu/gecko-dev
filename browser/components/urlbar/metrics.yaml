@@ -49,6 +49,11 @@ urlbar:
           did not fall into any of these categories, this will be `unknown`. If
           search mode is not active, this will be an empty string.
         type: string
+      search_engine_default_id:
+        description: >
+          The telemetry id of the search engine.
+          Reflects `search.engine.default.engine_id`.
+        type: string
       n_chars:
         description: >
           The length of string used for the search. It includes whitespaces.
@@ -93,6 +98,7 @@ urlbar:
           `autofill_url`,
           `bookmark`,
           `calc`,
+          `clipboard`,
           `history`,
           `intervention_clear`,
           `intervention_refresh`,
@@ -109,6 +115,8 @@ urlbar:
           `rs_adm_sponsored`,
           `rs_amo`,
           `rs_pocket`,
+          `rust_adm_nonsponsored`,
+          `rust_adm_sponsored`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -132,9 +140,11 @@ urlbar:
     bugs:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1800414
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1805717
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1842247
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1800414#c2
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1805717#c4
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1842247#c3
     data_sensitivity:
       - interaction
     notification_emails:
@@ -178,6 +188,11 @@ urlbar:
           did not fall into any of these categories, this will be `unknown`. If
           search mode is not active, this will be an empty string.
         type: string
+      search_engine_default_id:
+        description: >
+          The telemetry id of the search engine.
+          Reflects `search.engine.default.engine_id`.
+        type: string
       n_chars:
         description: >
           The length of string used for the search. It includes whitespaces.
@@ -209,6 +224,7 @@ urlbar:
           `autofill_url`,
           `bookmark`,
           `calc`,
+          `clipboard`,
           `experimental_addon`,
           `history`,
           `input_field`,
@@ -227,6 +243,8 @@ urlbar:
           `rs_adm_sponsored`,
           `rs_amo`,
           `rs_pocket`,
+          `rust_adm_nonsponsored`,
+          `rust_adm_sponsored`,
           `search_engine`,
           `search_history`,
           `search_shortcut_button`,
@@ -258,6 +276,11 @@ urlbar:
           `restart`, `screenshot`, `settings`, `themes`, `update` and
           `viewsource`. Otherwise, an empty string is returned.
         type: string
+      selected_position:
+        description: >
+          The 1-based index of the result the user selected. If user searched
+          without selection, 0 will be recorded.
+        type: quantity
       provider:
         description: >
           The name of the `UrlbarProvider` that provided the selected result.
@@ -297,8 +320,8 @@ urlbar:
           the results list, so we can link each result to a group. The possible
           group names are: `heuristic`, `adaptive_history`, `search_history`,
           `search_suggest`, `search_suggest_rich`, `trending_search`,
-          `trending_search_rich`, `top_pick`, `top_site`, `remote_tab`, 
-          `addon`, `general`, `suggest`, `about_page` and `suggested_index`. 
+          `trending_search_rich`, `top_pick`, `top_site`, `remote_tab`,
+          `addon`, `general`, `suggest`, `about_page` and `suggested_index`.
           If the group did not fall into any of these, this will be `unknown`
           and a bug should be filed to investigate it. If engagement_type is
           `drop_go` or `paste_go`, this will be empty string because no results
@@ -318,6 +341,7 @@ urlbar:
           `autofill_url`,
           `bookmark`,
           `calc`,
+          `clipboard`,
           `history`,
           `intervention_clear`,
           `intervention_refresh`,
@@ -334,6 +358,8 @@ urlbar:
           `rs_adm_sponsored`,
           `rs_amo`,
           `rs_pocket`,
+          `rust_adm_nonsponsored`,
+          `rust_adm_sponsored`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -357,9 +383,11 @@ urlbar:
     bugs:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1797265
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1805717
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1842247
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1797265#c3
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1805717#c4
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1842247#c3
     data_sensitivity:
       - interaction
     notification_emails:
@@ -406,6 +434,11 @@ urlbar:
           did not fall into any of these categories, this will be `unknown`. If
           search mode is not active, this will be an empty string.
         type: string
+      search_engine_default_id:
+        description: >
+          The telemetry id of the search engine.
+          Reflects `search.engine.default.engine_id`.
+        type: string
       n_chars:
         description: >
           The length of string used for the search. It includes whitespaces.
@@ -450,6 +483,7 @@ urlbar:
           `autofill_url`,
           `bookmark`,
           `calc`,
+          `clipboard`,
           `history`,
           `intervention_clear`,
           `intervention_refresh`,
@@ -466,6 +500,8 @@ urlbar:
           `rs_adm_sponsored`,
           `rs_amo`,
           `rs_pocket`,
+          `rust_adm_nonsponsored`,
+          `rust_adm_sponsored`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -489,9 +525,11 @@ urlbar:
     bugs:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1800579
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1805717
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1842247
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1800579#c4
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1805717#c4
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1842247#c3
     data_sensitivity:
       - interaction
     notification_emails:
@@ -528,6 +566,67 @@ urlbar:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1817196
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1817196
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - fx-search-telemetry@mozilla.com
+    expires: never
+    send_in_pings:
+      - events
+
+  pref_suggest_data_collection:
+    lifetime: application
+    type: boolean
+    description: >
+      Whether the user has opted in to data collection for Firefox Suggest,
+      i.e., online suggestions served from Merino.
+      Corresponds to the value of the
+      `browser.urlbar.quicksuggest.dataCollection.enabled` pref.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1847855
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1849726
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1847855
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - fx-search-telemetry@mozilla.com
+    expires: never
+    send_in_pings:
+      - events
+
+  pref_suggest_nonsponsored:
+    lifetime: application
+    type: boolean
+    description: >
+      Whether non-sponsored quick suggest results are shown in the urlbar.
+      Corresponds to the value of the
+      `browser.urlbar.suggest.quicksuggest.nonsponsored` pref.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1847855
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1849726
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1847855
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - fx-search-telemetry@mozilla.com
+    expires: never
+    send_in_pings:
+      - events
+
+  pref_suggest_sponsored:
+    lifetime: application
+    type: boolean
+    description: >
+      Whether sponsored quick suggest results are shown in the urlbar.
+      Corresponds to the value of the
+      `browser.urlbar.suggest.quicksuggest.sponsored` pref.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1847855
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1849726
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1847855
     data_sensitivity:
       - interaction
     notification_emails:
@@ -583,6 +682,45 @@ quick_suggest:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1836283
     data_reviews:
       - https://bugzilla.mozilla.org/show_bug.cgi?id=1836283
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - najiang@mozilla.com
+    expires: never
+    send_in_pings:
+      - quick-suggest
+
+  suggested_index:
+    type: string
+    unit: QuickSuggest bi-directional index
+    description: >
+      A stringified integer value that is the intended index of the suggestion
+      being interacted with. If `suggested_index_relative_to_group` is true, the
+      index is relative to the "Firefox Suggest" group; otherwise the index is
+      relative to the entire list of suggestions. Non-negative values (starting
+      at 0) are relative to the start/top of the group/list; negative values are
+      relative to the end/bottom of the group/list.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1854755
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1854755
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - najiang@mozilla.com
+    expires: never
+    send_in_pings:
+      - quick-suggest
+
+  suggested_index_relative_to_group:
+    type: boolean
+    description: >
+      Whether `suggested_index` is relative to the "Firefox Suggest" group. If
+      false, it is relative to the entire list of suggestions.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1854755
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1854755
     data_sensitivity:
       - interaction
     notification_emails:

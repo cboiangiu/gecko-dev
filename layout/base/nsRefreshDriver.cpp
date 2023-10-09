@@ -34,9 +34,11 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/dom/MediaQueryList.h"
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/DisplayPortUtils.h"
+#include "mozilla/Hal.h"
 #include "mozilla/InputTaskManager.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/PresShell.h"
@@ -63,6 +65,7 @@
 #include "GeckoProfiler.h"
 #include "mozilla/dom/BrowserChild.h"
 #include "mozilla/dom/CallbackDebuggerNotification.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/Performance.h"
 #include "mozilla/dom/Selection.h"
@@ -132,23 +135,6 @@ namespace {
 // disconnected). When this reaches zero we will call
 // nsRefreshDriver::Shutdown.
 static uint32_t sRefreshDriverCount = 0;
-
-// RAII-helper for recording elapsed duration for refresh tick phases.
-class AutoRecordPhase {
- public:
-  explicit AutoRecordPhase(double* aResultMs)
-      : mTotalMs(aResultMs), mStartTime(TimeStamp::Now()) {
-    MOZ_ASSERT(mTotalMs);
-  }
-  ~AutoRecordPhase() {
-    *mTotalMs = (TimeStamp::Now() - mStartTime).ToMilliseconds();
-  }
-
- private:
-  double* mTotalMs;
-  mozilla::TimeStamp mStartTime;
-};
-
 }  // namespace
 
 namespace mozilla {
@@ -236,6 +222,10 @@ class RefreshDriverTimer {
 
   TimeStamp GetIdleDeadlineHint(TimeStamp aDefault) {
     MOZ_ASSERT(NS_IsMainThread());
+
+    if (!IsTicking() && !gfxPlatform::IsInLayoutAsapMode()) {
+      return aDefault;
+    }
 
     TimeStamp mostRecentRefresh = MostRecentRefresh();
     TimeDuration refreshPeriod = GetTimerRate();
@@ -795,6 +785,20 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
     mProcessedVsync = true;
   }
 
+  hal::PerformanceHintSession* GetPerformanceHintSession() {
+    // The ContentChild creates/destroys the PerformanceHintSession in response
+    // to the process' priority being foregrounded/backgrounded. We can only use
+    // this session when using a single vsync source for the process, otherwise
+    // these threads may be performing work for multiple
+    // VsyncRefreshDriverTimers and we will misreport the work duration.
+    const ContentChild* contentChild = ContentChild::GetSingleton();
+    if (contentChild && mVsyncChild) {
+      return contentChild->PerformanceHintSession();
+    }
+
+    return nullptr;
+  }
+
   void TickRefreshDriver(VsyncId aId, TimeStamp aVsyncTimestamp) {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -802,7 +806,16 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
 
     TimeStamp tickStart = TimeStamp::Now();
 
-    TimeDuration rate = GetTimerRate();
+    const TimeDuration previousRate = mVsyncRate;
+    const TimeDuration rate = GetTimerRate();
+
+    hal::PerformanceHintSession* const performanceHintSession =
+        GetPerformanceHintSession();
+    if (performanceHintSession && rate != previousRate) {
+      performanceHintSession->UpdateTargetWorkDuration(
+          ContentChild::GetPerformanceHintTarget(rate));
+    }
+
     if (TimeDuration::FromMilliseconds(nsRefreshDriver::DefaultInterval() / 2) >
         rate) {
       sMostRecentHighRateVsync = tickStart;
@@ -825,6 +838,10 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
     RunRefreshDrivers(aId, aVsyncTimestamp);
 
     TimeStamp tickEnd = TimeStamp::Now();
+
+    if (performanceHintSession) {
+      performanceHintSession->ReportActualWorkDuration(tickEnd - tickStart);
+    }
 
     // Re-read mLastTickStart in case there was a nested tick inside this
     // tick.
@@ -1262,24 +1279,6 @@ TimeDuration nsRefreshDriver::GetMinRecomputeVisibilityInterval() {
       StaticPrefs::layout_visibility_min_recompute_interval_ms());
 }
 
-bool nsRefreshDriver::ComputeShouldBeThrottled() const {
-  if (mIsActive) {
-    // If we're active we should definitely be unthrottled.
-    return false;
-  }
-  if (!mIsInActiveTab) {
-    // If we're not in the active tab we should definitely be throttled.
-    return true;
-  }
-  if (mIsGrantingActivityGracePeriod) {
-    // If we're granting the activity grace period, then we should be
-    // unthrottled.
-    return false;
-  }
-  // Otherwise we should be throttled.
-  return true;
-}
-
 RefreshDriverTimer* nsRefreshDriver::ChooseTimer() {
   if (mThrottled) {
     if (!sThrottledRateTimer) {
@@ -1324,10 +1323,6 @@ nsRefreshDriver::nsRefreshDriver(nsPresContext* aPresContext)
           TimeDuration::FromMilliseconds(GetThrottledTimerInterval())),
       mMinRecomputeVisibilityInterval(GetMinRecomputeVisibilityInterval()),
       mThrottled(false),
-      mIsActive(true),
-      mIsInActiveTab(true),
-      mIsGrantingActivityGracePeriod(false),
-      mHasGrantedActivityGracePeriod(false),
       mNeedToRecomputeVisibility(false),
       mTestControllingRefreshes(false),
       mViewManagerFlushIsPending(false),
@@ -1338,6 +1333,8 @@ nsRefreshDriver::nsRefreshDriver(nsPresContext* aPresContext)
       mResizeSuppressed(false),
       mNotifyDOMContentFlushed(false),
       mNeedToUpdateIntersectionObservations(false),
+      mNeedToUpdateResizeObservers(false),
+      mMightNeedMediaQueryListenerUpdate(false),
       mNeedToUpdateContentRelevancy(false),
       mInNormalTick(false),
       mAttemptedExtraTickSinceLastVsync(false),
@@ -1528,6 +1525,21 @@ void nsRefreshDriver::DispatchVisualViewportScrollEvents() {
   for (auto& event : events) {
     event->Run();
   }
+}
+
+// https://drafts.csswg.org/cssom-view/#evaluate-media-queries-and-report-changes
+void nsRefreshDriver::EvaluateMediaQueriesAndReportChanges() {
+  if (!mMightNeedMediaQueryListenerUpdate) {
+    return;
+  }
+  mMightNeedMediaQueryListenerUpdate = false;
+  if (!mPresContext) {
+    return;
+  }
+  AUTO_PROFILER_LABEL_RELEVANT_FOR_JS(
+      "Evaluate media queries and report changes", LAYOUT);
+  RefPtr<Document> doc = mPresContext->Document();
+  doc->EvaluateMediaQueriesAndReportChanges(/* aRecurse = */ true);
 }
 
 void nsRefreshDriver::AddPostRefreshObserver(
@@ -1947,8 +1959,14 @@ auto nsRefreshDriver::GetReasonsToTick() const -> TickReasons {
   if (HasImageRequests() && !mThrottled) {
     reasons |= TickReasons::eHasImageRequests;
   }
+  if (mNeedToUpdateResizeObservers) {
+    reasons |= TickReasons::eNeedsToNotifyResizeObservers;
+  }
   if (mNeedToUpdateIntersectionObservations) {
     reasons |= TickReasons::eNeedsToUpdateIntersectionObservations;
+  }
+  if (mMightNeedMediaQueryListenerUpdate) {
+    reasons |= TickReasons::eHasPendingMediaQueryListeners;
   }
   if (mNeedToUpdateContentRelevancy) {
     reasons |= TickReasons::eNeedsToUpdateContentRelevancy;
@@ -1980,8 +1998,14 @@ void nsRefreshDriver::AppendTickReasonsToString(TickReasons aReasons,
   if (aReasons & TickReasons::eHasImageRequests) {
     aStr.AppendLiteral(" HasImageAnimations");
   }
+  if (aReasons & TickReasons::eNeedsToNotifyResizeObservers) {
+    aStr.AppendLiteral(" NeedsToNotifyResizeObservers");
+  }
   if (aReasons & TickReasons::eNeedsToUpdateIntersectionObservations) {
     aStr.AppendLiteral(" NeedsToUpdateIntersectionObservations");
+  }
+  if (aReasons & TickReasons::eHasPendingMediaQueryListeners) {
+    aStr.AppendLiteral(" HasPendingMediaQueryListeners");
   }
   if (aReasons & TickReasons::eNeedsToUpdateContentRelevancy) {
     aStr.AppendLiteral(" NeedsToUpdateContentRelevancy");
@@ -2166,6 +2190,12 @@ void nsRefreshDriver::FlushAutoFocusDocuments() {
   }
 }
 
+void nsRefreshDriver::MaybeIncreaseMeasuredTicksSinceLoading() {
+  if (mPresContext && mPresContext->IsRoot()) {
+    mPresContext->MaybeIncreaseMeasuredTicksSinceLoading();
+  }
+}
+
 void nsRefreshDriver::CancelFlushAutoFocus(Document* aDocument) {
   mAutoFocusFlushDocuments.RemoveElement(aDocument);
 }
@@ -2182,6 +2212,10 @@ void nsRefreshDriver::RunFullscreenSteps() {
 
 void nsRefreshDriver::UpdateIntersectionObservations(TimeStamp aNowTime) {
   AUTO_PROFILER_LABEL_RELEVANT_FOR_JS("Compute intersections", LAYOUT);
+
+  if (MOZ_UNLIKELY(!mPresContext)) {
+    return;
+  }
 
   AutoTArray<RefPtr<Document>, 32> documents;
 
@@ -2219,6 +2253,33 @@ void nsRefreshDriver::UpdateRelevancyOfContentVisibilityAutoFrames() {
   });
 
   mNeedToUpdateContentRelevancy = false;
+}
+
+void nsRefreshDriver::NotifyResizeObservers() {
+  AUTO_PROFILER_LABEL_RELEVANT_FOR_JS("Notify ResizeObserver", LAYOUT);
+  if (!mNeedToUpdateResizeObservers) {
+    return;
+  }
+  // NotifyResizeObservers might re-schedule us for next tick.
+  mNeedToUpdateResizeObservers = false;
+
+  if (MOZ_UNLIKELY(!mPresContext)) {
+    return;
+  }
+
+  AutoTArray<RefPtr<Document>, 32> documents;
+  if (mPresContext->Document()->HasResizeObservers()) {
+    documents.AppendElement(mPresContext->Document());
+  }
+
+  mPresContext->Document()->CollectDescendantDocuments(
+      documents, [](const Document* document) -> bool {
+        return document->HasResizeObservers();
+      });
+
+  for (const RefPtr<Document>& doc : documents) {
+    MOZ_KnownLive(doc)->NotifyResizeObservers();
+  }
 }
 
 void nsRefreshDriver::DispatchAnimationEvents() {
@@ -2384,13 +2445,6 @@ static CallState ReduceAnimations(Document& aDocument) {
   return CallState::Continue;
 }
 
-bool nsRefreshDriver::ShouldStopActivityGracePeriod() const {
-  MOZ_ASSERT(mIsGrantingActivityGracePeriod);
-  return TimeStamp::Now() - mActivityGracePeriodStart >=
-         TimeDuration::FromMilliseconds(
-             StaticPrefs::layout_oopif_activity_grace_period_ms());
-}
-
 void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
                            IsExtraTick aIsExtraTick /* = No */) {
   MOZ_ASSERT(!nsContentUtils::GetCurrentJSContext(),
@@ -2493,13 +2547,6 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
     }
   }
 
-  // Potentially go back to throttled after the grace period is done.
-  if (MOZ_UNLIKELY(mIsGrantingActivityGracePeriod) &&
-      ShouldStopActivityGracePeriod()) {
-    mIsGrantingActivityGracePeriod = false;
-    UpdateThrottledState();
-  }
-
   AUTO_PROFILER_LABEL_RELEVANT_FOR_JS("RefreshDriver tick", LAYOUT);
 
   nsAutoCString profilerStr;
@@ -2563,10 +2610,6 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
   }
   DispatchVisualViewportResizeEvents();
 
-  double phaseMetrics[MOZ_ARRAY_LENGTH(mObservers)] = {
-      0.0,
-  };
-
   /*
    * The timer holds a reference to |this| while calling |Notify|.
    * However, implementations of |WillRefresh| are permitted to destroy
@@ -2574,8 +2617,6 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
    * null.  If this happens, we must stop notifying observers.
    */
   for (uint32_t i = 0; i < ArrayLength(mObservers); ++i) {
-    AutoRecordPhase phaseRecord(&phaseMetrics[i]);
-
     for (RefPtr<nsARefreshObserver> obs : mObservers[i].EndLimitedRange()) {
       obs->WillRefresh(aNowTime);
 
@@ -2613,9 +2654,11 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
       FlushAutoFocusDocuments();
       DispatchScrollEvents();
       DispatchVisualViewportScrollEvents();
+      EvaluateMediaQueriesAndReportChanges();
       DispatchAnimationEvents();
       RunFullscreenSteps();
       RunFrameRequestCallbacks(aNowTime);
+      MaybeIncreaseMeasuredTicksSinceLoading();
 
       if (mPresContext && mPresContext->GetPresShell()) {
         AutoTArray<PresShell*, 16> observers;
@@ -2706,6 +2749,10 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
     pm->UpdatePopupPositions(this);
   }
 
+  // Notify resize obsrevers if any, see
+  // https://html.spec.whatwg.org/#update-the-rendering step 14.
+  NotifyResizeObservers();
+
   // Update the relevancy of the content of any `content-visibility: auto`
   // elements. The specification says: "Specifically, such changes will
   // take effect between steps 13 and 14 of Update the Rendering step of
@@ -2718,10 +2765,8 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
 
   UpdateAnimatedImages(previousRefresh, aNowTime);
 
-  double phasePaint = 0.0;
   bool dispatchTasksAfterTick = false;
   if (mViewManagerFlushIsPending && !mThrottled) {
-    AutoRecordPhase paintRecord(&phasePaint);
     nsCString transactionId;
     if (profiler_thread_is_being_profiled_for_markers()) {
       transactionId.AppendLiteral("Transaction ID: ");
@@ -2791,36 +2836,11 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
     mCompositionPayloads.Clear();
   }
 
-  double totalMs = (TimeStamp::Now() - mTickStart).ToMilliseconds();
-
 #ifndef ANDROID /* bug 1142079 */
+  double totalMs = (TimeStamp::Now() - mTickStart).ToMilliseconds();
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::REFRESH_DRIVER_TICK,
                                  static_cast<uint32_t>(totalMs));
 #endif
-
-  // Bug 1568107: If the totalMs is greater than 1/60th second (ie. 1000/60 ms)
-  // then record, via telemetry, the percentage of time spent in each
-  // sub-system.
-  if (totalMs > 1000.0 / 60.0) {
-    auto record = [=](const nsCString& aKey, double aDurationMs) -> void {
-      MOZ_ASSERT(aDurationMs <= totalMs);
-      auto phasePercent = static_cast<uint32_t>(aDurationMs * 100.0 / totalMs);
-      Telemetry::Accumulate(Telemetry::REFRESH_DRIVER_TICK_PHASE_WEIGHT, aKey,
-                            phasePercent);
-    };
-
-    record("Event"_ns, phaseMetrics[0]);
-    record("Style"_ns, phaseMetrics[1]);
-    record("Reflow"_ns, phaseMetrics[2]);
-    record("Display"_ns, phaseMetrics[3]);
-    record("Paint"_ns, phasePaint);
-
-    // Explicitly record the time unaccounted for.
-    double other = totalMs -
-                   std::accumulate(phaseMetrics, ArrayEnd(phaseMetrics), 0.0) -
-                   phasePaint;
-    record("Other"_ns, other);
-  }
 
   if (mNotifyDOMContentFlushed) {
     mNotifyDOMContentFlushed = false;
@@ -3104,30 +3124,8 @@ bool nsRefreshDriver::IsWaitingForPaint(mozilla::TimeStamp aTime) {
   return false;
 }
 
-void nsRefreshDriver::SetActivity(bool aIsActive, bool aIsInActiveTab) {
-  if (mIsActive == aIsActive && mIsInActiveTab == aIsInActiveTab) {
-    return;
-  }
-  mIsActive = aIsActive;
-  mIsInActiveTab = aIsInActiveTab;
-
-  // For iframes which are in the active tab but hidden, grant them a grace
-  // period of 1s of activity so that they can get set up.
-  if (!mHasGrantedActivityGracePeriod && !mIsActive && mIsInActiveTab &&
-      mPresContext && !mPresContext->IsRootContentDocumentCrossProcess()) {
-    mHasGrantedActivityGracePeriod = true;
-    mIsGrantingActivityGracePeriod =
-        StaticPrefs::layout_oopif_activity_grace_period_ms() > 0;
-    if (mIsGrantingActivityGracePeriod) {
-      mActivityGracePeriodStart = TimeStamp::Now();
-    }
-  }
-
-  UpdateThrottledState();
-}
-
-void nsRefreshDriver::UpdateThrottledState() {
-  const bool shouldThrottle = ComputeShouldBeThrottled();
+void nsRefreshDriver::SetActivity(bool aIsActive) {
+  const bool shouldThrottle = !aIsActive;
   if (mThrottled == shouldThrottle) {
     return;
   }

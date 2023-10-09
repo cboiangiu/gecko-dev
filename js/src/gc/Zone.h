@@ -74,9 +74,12 @@ using StringWrapperMap =
     NurseryAwareHashMap<JSString*, JSString*, ZoneAllocPolicy,
                         DuplicatesPossible>;
 
+// Cache for NewMaybeExternalString. It has cache entries for both the
+// Latin1 JSInlineString path and JSExternalString.
 class MOZ_NON_TEMPORARY_CLASS ExternalStringCache {
   static const size_t NumEntries = 4;
-  mozilla::Array<JSString*, NumEntries> entries_;
+  mozilla::Array<JSExternalString*, NumEntries> externalEntries_;
+  mozilla::Array<JSInlineString*, NumEntries> inlineEntries_;
 
  public:
   ExternalStringCache() { purge(); }
@@ -84,10 +87,18 @@ class MOZ_NON_TEMPORARY_CLASS ExternalStringCache {
   ExternalStringCache(const ExternalStringCache&) = delete;
   void operator=(const ExternalStringCache&) = delete;
 
-  void purge() { mozilla::PodArrayZero(entries_); }
+  void purge() {
+    externalEntries_ = {};
+    inlineEntries_ = {};
+  }
 
-  MOZ_ALWAYS_INLINE JSString* lookup(const char16_t* chars, size_t len) const;
-  MOZ_ALWAYS_INLINE void put(JSString* s);
+  MOZ_ALWAYS_INLINE JSExternalString* lookupExternal(const char16_t* chars,
+                                                     size_t len) const;
+  MOZ_ALWAYS_INLINE void putExternal(JSExternalString* s);
+
+  MOZ_ALWAYS_INLINE JSInlineString* lookupInline(const char16_t* chars,
+                                                 size_t len) const;
+  MOZ_ALWAYS_INLINE void putInline(JSInlineString* s);
 };
 
 class MOZ_NON_TEMPORARY_CLASS FunctionToStringCache {
@@ -285,7 +296,11 @@ class Zone : public js::ZoneAllocator, public js::gc::GraphNodeBase<JS::Zone> {
   js::MainThreadOrGCTaskData<js::UniquePtr<js::gc::FinalizationObservers>>
       finalizationObservers_;
 
-  js::MainThreadOrGCTaskData<js::jit::JitZone*> jitZone_;
+  js::MainThreadOrGCTaskOrIonCompileData<js::jit::JitZone*> jitZone_;
+
+  // Number of realms in this zone that have a non-null object allocation
+  // metadata builder.
+  js::MainThreadOrIonCompileData<size_t> numRealmsWithAllocMetadataBuilder_{0};
 
   // Last time at which JIT code was discarded for this zone. This is only set
   // when JitScripts and Baseline code are discarded as well.
@@ -432,11 +447,25 @@ class Zone : public js::ZoneAllocator, public js::gc::GraphNodeBase<JS::Zone> {
   static constexpr size_t offsetOfNeedsIncrementalBarrier() {
     return offsetof(Zone, needsIncrementalBarrier_);
   }
+  static constexpr size_t offsetOfJitZone() { return offsetof(Zone, jitZone_); }
 
   js::jit::JitZone* getJitZone(JSContext* cx) {
     return jitZone_ ? jitZone_ : createJitZone(cx);
   }
   js::jit::JitZone* jitZone() { return jitZone_; }
+
+  bool ensureJitZoneExists(JSContext* cx) { return !!getJitZone(cx); }
+
+  void incNumRealmsWithAllocMetadataBuilder() {
+    numRealmsWithAllocMetadataBuilder_++;
+  }
+  void decNumRealmsWithAllocMetadataBuilder() {
+    MOZ_ASSERT(numRealmsWithAllocMetadataBuilder_ > 0);
+    numRealmsWithAllocMetadataBuilder_--;
+  }
+  bool hasRealmWithAllocMetadataBuilder() const {
+    return numRealmsWithAllocMetadataBuilder_ > 0;
+  }
 
   void prepareForCompacting();
 
@@ -604,8 +633,8 @@ class Zone : public js::ZoneAllocator, public js::gc::GraphNodeBase<JS::Zone> {
   void clearScriptLCov(Realm* realm);
 
   // Add the target of JS WeakRef to a kept-alive set maintained by GC.
-  // See: https://tc39.es/proposal-weakrefs/#sec-keepduringjob
-  bool keepDuringJob(HandleObject target);
+  // https://tc39.es/ecma262/#sec-addtokeptobjects
+  bool addToKeptObjects(HandleObject target);
 
   void traceKeptObjects(JSTracer* trc);
 

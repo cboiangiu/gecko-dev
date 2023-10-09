@@ -306,7 +306,7 @@
   mir_op: true
   operands:
     ref: WordSized
-    superSuperTypeVector: WordSized
+    superSTV: WordSized
   result_type: WordSized
   num_temps: 2
 
@@ -1976,6 +1976,29 @@
   num_temps: 1
   mir_op: ClampToUint8
 
+- name: LoadScriptedProxyHandler
+  result_type: BoxedValue
+  operands:
+    object: WordSized
+  mir_op: true
+
+#ifdef JS_PUNBOX64
+- name: CheckScriptedProxyGetResult
+  operands:
+    target: BoxedValue
+    id: BoxedValue
+    value: BoxedValue
+  num_temps: 2
+  mir_op: true
+#endif
+
+- name: IdToStringOrSymbol
+  result_type: BoxedValue
+  operands:
+    id: BoxedValue
+  num_temps: 1
+  mir_op: true
+
 # Load a boxed value from an object's fixed slot.
 - name: LoadFixedSlotV
   result_type: BoxedValue
@@ -2339,6 +2362,13 @@
   num_temps: 1
   mir_op: true
 
+- name: OptimizeGetIteratorCache
+  result_type: WordSized
+  operands:
+    value: BoxedValue
+  num_temps: 1
+  mir_op: true
+
 # Read the number of actual arguments.
 - name: ArgumentsLength
   result_type: WordSized
@@ -2696,6 +2726,11 @@
     object: WordSized
   num_temps: 1
 
+- name: GuardHasProxyHandler
+  operands:
+    object: WordSized
+  mir_op: true
+
 - name: GuardNoDenseElements
   operands:
     in: WordSized
@@ -2864,6 +2899,15 @@
 
 - name: WasmBoundsCheck64
   gen_boilerplate: false
+
+- name: WasmBoundsCheckRange32
+  result_type: WordSized
+  operands:
+    index: WordSized
+    length: WordSized
+    limit: WordSized
+  mir_op: true
+  num_temps: 1
 
 - name: WasmExtendU32Index
   result_type: WordSized

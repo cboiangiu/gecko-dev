@@ -97,11 +97,11 @@ void CanvasContext::GetCanvas(
   }
 }
 
-void CanvasContext::Configure(const dom::GPUCanvasConfiguration& aDesc) {
+void CanvasContext::Configure(const dom::GPUCanvasConfiguration& aConfig) {
   Unconfigure();
 
   // these formats are guaranteed by the spec
-  switch (aDesc.mFormat) {
+  switch (aConfig.mFormat) {
     case dom::GPUTextureFormat::Rgba8unorm:
     case dom::GPUTextureFormat::Rgba8unorm_srgb:
       mGfxFormat = gfx::SurfaceFormat::R8G8B8A8;
@@ -115,17 +115,22 @@ void CanvasContext::Configure(const dom::GPUCanvasConfiguration& aDesc) {
       return;
   }
 
-  mConfig.reset(new dom::GPUCanvasConfiguration(aDesc));
+  mConfig.reset(new dom::GPUCanvasConfiguration(aConfig));
   mRemoteTextureOwnerId = Some(layers::RemoteTextureOwnerId::GetNext());
-  mTexture = aDesc.mDevice->InitSwapChain(aDesc, *mRemoteTextureOwnerId,
-                                          mGfxFormat, mCanvasSize);
+  mUseExternalTextureInSwapChain =
+      wgpu_client_use_external_texture_in_swapChain(
+          aConfig.mDevice->mId,
+          WebGPUChild::ConvertTextureFormat(aConfig.mFormat));
+  mTexture = aConfig.mDevice->InitSwapChain(aConfig, *mRemoteTextureOwnerId,
+                                            mUseExternalTextureInSwapChain,
+                                            mGfxFormat, mCanvasSize);
   if (!mTexture) {
     Unconfigure();
     return;
   }
 
   mTexture->mTargetContext = this;
-  mBridge = aDesc.mDevice->GetBridge();
+  mBridge = aConfig.mDevice->GetBridge();
 
   ForceNewFrame();
 }

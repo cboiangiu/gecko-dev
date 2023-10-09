@@ -304,6 +304,10 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // weather suggestions are turned on.
   ["suggest.weather", true],
 
+  // If `browser.urlbar.trending.featureGate` is true, this controls whether
+  // trending suggestions are turned on.
+  ["suggest.trending", true],
+
   // JSON'ed array of blocked quick suggest URL digests.
   ["quicksuggest.blockedDigests", ""],
 
@@ -353,6 +357,10 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // Whether Remote Settings is enabled as a quick suggest source.
   ["quicksuggest.remoteSettings.enabled", true],
+
+  // Whether Firefox Suggest will use the new Rust backend instead of the
+  // original JS backend.
+  ["quicksuggest.rustEnabled", false],
 
   // The Firefox Suggest scenario in which the user is enrolled. This is set
   // when the scenario is updated (see `updateFirefoxSuggestScenario`) and is
@@ -404,6 +412,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // Remove redundant portions from URLs.
   ["trimURLs", true],
+
+  // Remove 'https://' from url when urlbar is focused.
+  ["trimHttps", true],
 
   // If true, top sites may include sponsored ones.
   ["sponsoredTopSites", false],
@@ -467,7 +478,6 @@ const PREF_OTHER_DEFAULTS = new Map([
 // defaults are the values of their fallbacks.
 const NIMBUS_DEFAULTS = {
   addonsShowLessFrequentlyCap: 0,
-  addonsUITreatment: "a",
   experimentType: "",
   isBestMatchExperiment: false,
   pocketShowLessFrequentlyCap: 0,

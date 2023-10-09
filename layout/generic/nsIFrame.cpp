@@ -42,6 +42,7 @@
 #include "mozilla/SVGIntegrationUtils.h"
 #include "mozilla/SVGUtils.h"
 #include "mozilla/ToString.h"
+#include "mozilla/Try.h"
 #include "mozilla/ViewportUtils.h"
 
 #include "nsCOMPtr.h"
@@ -217,11 +218,9 @@ static void SetOrUpdateRectValuedProperty(
   }
 }
 
-/* static */
-void nsIFrame::DestroyAnonymousContent(
-    nsPresContext* aPresContext, already_AddRefed<nsIContent>&& aContent) {
-  if (nsCOMPtr<nsIContent> content = aContent) {
-    aPresContext->PresShell()->NativeAnonymousContentRemoved(content);
+FrameDestroyContext::~FrameDestroyContext() {
+  for (auto& content : mozilla::Reversed(mAnonymousContent)) {
+    mPresShell->NativeAnonymousContentRemoved(content);
     content->UnbindFromTree();
   }
 }
@@ -694,18 +693,6 @@ void nsIFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
     AddStateBits(NS_FRAME_MAY_BE_TRANSFORMED);
   }
 
-  if (disp->IsContainLayout() && GetContainSizeAxes().IsBoth()) {
-    // In general, frames that have contain:layout+size can be reflow roots.
-    // (One exception: table-wrapper frames don't work well as reflow roots,
-    // because their inner-table ReflowInput init path tries to reuse & deref
-    // the wrapper's containing block's reflow input, which may be null if we
-    // initiate reflow from the table-wrapper itself.)
-    //
-    // Changes to `contain` force frame reconstructions, so this bit can be set
-    // for the whole lifetime of this frame.
-    AddStateBits(NS_FRAME_REFLOW_ROOT);
-  }
-
   if (nsLayoutUtils::FontSizeInflationEnabled(PresContext()) ||
       !GetParent()
 #ifdef DEBUG
@@ -776,13 +763,11 @@ void nsIFrame::InitPrimaryFrame() {
   HandleLastRememberedSize();
 }
 
-void nsIFrame::DestroyFrom(nsIFrame* aDestructRoot,
-                           PostDestroyData& aPostDestroyData) {
+void nsIFrame::Destroy(DestroyContext& aContext) {
   NS_ASSERTION(!nsContentUtils::IsSafeToRunScript(),
                "destroy called on frame while scripts not blocked");
   NS_ASSERTION(!GetNextSibling() && !GetPrevSibling(),
                "Frames should be removed before destruction.");
-  NS_ASSERTION(aDestructRoot, "Must specify destruct root");
   MOZ_ASSERT(!HasAbsolutelyPositionedChildren());
   MOZ_ASSERT(!HasAnyStateBits(NS_FRAME_PART_OF_IBSPLIT),
              "NS_FRAME_PART_OF_IBSPLIT set on non-nsContainerFrame?");
@@ -806,15 +791,7 @@ void nsIFrame::DestroyFrom(nsIFrame* aDestructRoot,
   nsPresContext* presContext = PresContext();
   mozilla::PresShell* presShell = presContext->GetPresShell();
   if (HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)) {
-    nsPlaceholderFrame* placeholder = GetPlaceholderFrame();
-    NS_ASSERTION(
-        !placeholder || (aDestructRoot != this),
-        "Don't call Destroy() on OOFs, call Destroy() on the placeholder.");
-    NS_ASSERTION(!placeholder || nsLayoutUtils::IsProperAncestorFrame(
-                                     aDestructRoot, placeholder),
-                 "Placeholder relationship should have been torn down already; "
-                 "this might mean we have a stray placeholder in the tree.");
-    if (placeholder) {
+    if (nsPlaceholderFrame* placeholder = GetPlaceholderFrame()) {
       placeholder->SetOutOfFlowFrame(nullptr);
     }
   }
@@ -881,7 +858,7 @@ void nsIFrame::DestroyFrom(nsIFrame* aDestructRoot,
     // aPostDestroyData to unbind it after frame destruction is done.
     if (HasAnyStateBits(NS_FRAME_GENERATED_CONTENT) &&
         mContent->IsRootOfNativeAnonymousSubtree()) {
-      aPostDestroyData.AddAnonymousContent(mContent.forget());
+      aContext.AddAnonymousContent(mContent.forget());
     }
   }
 
@@ -1814,11 +1791,15 @@ bool nsIFrame::Extend3DContext(const nsStyleDisplay* aStyleDisplay,
 }
 
 bool nsIFrame::Combines3DTransformWithAncestors() const {
-  nsIFrame* parent = GetClosestFlattenedTreeAncestorPrimaryFrame();
-  if (!parent || !parent->Extend3DContext()) {
+  // Check these first as they are faster then both calls below and are we are
+  // likely to hit the early return (backface hidden is uncommon and
+  // GetReferenceFrame is a hot caller of this which only calls this if
+  // IsCSSTransformed is false).
+  if (!IsCSSTransformed() && !BackfaceIsHidden()) {
     return false;
   }
-  return IsCSSTransformed() || BackfaceIsHidden();
+  nsIFrame* parent = GetClosestFlattenedTreeAncestorPrimaryFrame();
+  return parent && parent->Extend3DContext();
 }
 
 bool nsIFrame::In3DContextAndBackfaceIsHidden() const {
@@ -2155,12 +2136,17 @@ nsIFrame::CaretBlockAxisMetrics nsIFrame::GetCaretBlockAxisMetrics(
 const nsAtom* nsIFrame::ComputePageValue() const {
   const nsAtom* value = nsGkAtoms::_empty;
   const nsIFrame* frame = this;
+  // Find what CSS page name value this frame's subtree has, if any.
+  // Starting with this frame, check if a page name other than auto is present,
+  // and record it if so. Then, if the current frame is a container frame, find
+  // the first non-placeholder child and repeat.
+  // This will find the most deeply nested first in-flow child of this frame's
+  // subtree, and return its page name (with auto resolved if applicable, and
+  // subtrees with no page-names returning the empty atom rather than null).
   do {
-    // If this has a non-auto start value, track that instead.
-    if (const nsAtom* const startValue = frame->GetStartPageValue()) {
-      value = startValue;
+    if (const nsAtom* maybePageName = frame->GetStylePageName()) {
+      value = maybePageName;
     }
-    MOZ_ASSERT(value, "Should not have a NULL page value.");
     // Get the next frame to read from.
     const nsIFrame* firstNonPlaceholderFrame = nullptr;
     // If this is a container frame, inspect its in-flow children.
@@ -2434,10 +2420,6 @@ static inline bool IsIntrinsicKeyword(const SizeOrMaxSize& aSize) {
 }
 
 bool nsIFrame::CanBeDynamicReflowRoot() const {
-  if (!StaticPrefs::layout_dynamic_reflow_roots_enabled()) {
-    return false;
-  }
-
   const auto& display = *StyleDisplay();
   if (IsFrameOfType(nsIFrame::eLineParticipant) || display.mDisplay.IsRuby() ||
       display.IsInnerTableStyle() ||
@@ -2446,6 +2428,29 @@ bool nsIFrame::CanBeDynamicReflowRoot() const {
     // width or height (i.e., the size depends on content).
     MOZ_ASSERT(!HasAnyStateBits(NS_FRAME_DYNAMIC_REFLOW_ROOT),
                "should not have dynamic reflow root bit");
+    return false;
+  }
+
+  // In general, frames that have contain:layout+size can be reflow roots.
+  // (One exception: table-wrapper frames don't work well as reflow roots,
+  // because their inner-table ReflowInput init path tries to reuse & deref
+  // the wrapper's containing block's reflow input, which may be null if we
+  // initiate reflow from the table-wrapper itself.)
+  //
+  // Changes to `contain` force frame reconstructions, so we used to use
+  // NS_FRAME_REFLOW_ROOT, this bit could be set for the whole lifetime of
+  // this frame. But after the support of `content-visibility: auto` which
+  // is with contain layout + size when it's not relevant to user, and only
+  // with contain layout when it is relevant. The frame does not reconstruct
+  // when the relevancy changes. So we use NS_FRAME_DYNAMIC_REFLOW_ROOT instead.
+  //
+  // We place it above the pref check on purpose, to make sure it works for
+  // containment even with the pref disabled.
+  if (display.IsContainLayout() && GetContainSizeAxes().IsBoth()) {
+    return true;
+  }
+
+  if (!StaticPrefs::layout_dynamic_reflow_roots_enabled()) {
     return false;
   }
 
@@ -5833,9 +5838,7 @@ void nsIFrame::MarkIntrinsicISizesDirty() {
     nsFontInflationData::MarkFontInflationDataTextDirty(this);
   }
 
-  if (StaticPrefs::layout_css_grid_item_baxis_measurement_enabled()) {
-    RemoveProperty(nsGridContainerFrame::CachedBAxisMeasurement::Prop());
-  }
+  RemoveProperty(nsGridContainerFrame::CachedBAxisMeasurement::Prop());
 }
 
 void nsIFrame::MarkSubtreeDirty() {
@@ -7036,7 +7039,7 @@ void nsIFrame::UpdateIsRelevantContent(
   // "This event is dispatched by posting a task at the time when the state
   // change occurs."
   RefPtr<AsyncEventDispatcher> asyncDispatcher =
-      new AsyncEventDispatcher(element, event.get());
+      new AsyncEventDispatcher(element, event.forget());
   DebugOnly<nsresult> rv = asyncDispatcher->PostDOMEvent();
   NS_ASSERTION(NS_SUCCEEDED(rv), "AsyncEventDispatcher failed to dispatch");
 }
@@ -8238,6 +8241,23 @@ void nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix,
     aTo += ToString(pseudoType).c_str();
   }
   aTo += "]";
+
+  auto contentVisibility = StyleDisplay()->ContentVisibility(*this);
+  if (contentVisibility != StyleContentVisibility::Visible) {
+    aTo += nsPrintfCString(" [content-visibility=");
+    if (contentVisibility == StyleContentVisibility::Auto) {
+      aTo += "auto, "_ns;
+    } else if (contentVisibility == StyleContentVisibility::Hidden) {
+      aTo += "hiden, "_ns;
+    }
+
+    if (HidesContent()) {
+      aTo += "HidesContent=hidden"_ns;
+    } else {
+      aTo += "HidesContent=visibile"_ns;
+    }
+    aTo += "]";
+  }
 
   if (IsFrameModified()) {
     aTo += nsPrintfCString(" modified");
@@ -9873,16 +9893,17 @@ static void ComputeAndIncludeOutlineArea(nsIFrame* aFrame,
                                   innerRect);
   }
 
-  const nscoord offset = outline->mOutlineOffset.ToAppUnits();
   nsRect outerRect(innerRect);
+  outerRect.Inflate(outline->EffectiveOffsetFor(outerRect));
+
   if (outline->mOutlineStyle.IsAuto()) {
     nsPresContext* pc = aFrame->PresContext();
-    outerRect.Inflate(offset);
+
     pc->Theme()->GetWidgetOverflow(pc->DeviceContext(), aFrame,
                                    StyleAppearance::FocusOutline, &outerRect);
   } else {
-    nscoord width = outline->GetOutlineWidth();
-    outerRect.Inflate(width + offset);
+    const nscoord width = outline->GetOutlineWidth();
+    outerRect.Inflate(width);
   }
 
   nsRect& vo = aOverflowAreas.InkOverflow();

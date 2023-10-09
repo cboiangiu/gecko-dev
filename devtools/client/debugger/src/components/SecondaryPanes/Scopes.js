@@ -3,6 +3,7 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 import React, { PureComponent } from "react";
+import { div, button } from "react-dom-factories";
 import PropTypes from "prop-types";
 import { showMenu } from "../../context-menu/menu";
 import { connect } from "../../utils/connect";
@@ -18,8 +19,10 @@ import {
   getLastExpandedScopes,
   getIsCurrentThreadPaused,
 } from "../../selectors";
-import { getScopes } from "../../utils/pause/scopes";
-import { getScopeItemPath } from "../../utils/pause/scopes/utils";
+import {
+  getScopesItemsForSelectedFrame,
+  getScopeItemPath,
+} from "../../utils/pause/scopes";
 import { clientCommands } from "../../client/firefox";
 
 import { objectInspector } from "devtools/client/shared/components/reps/index";
@@ -36,8 +39,16 @@ class Scopes extends PureComponent {
     super(props);
 
     this.state = {
-      originalScopes: getScopes(why, selectedFrame, originalFrameScopes),
-      generatedScopes: getScopes(why, selectedFrame, generatedFrameScopes),
+      originalScopes: getScopesItemsForSelectedFrame(
+        why,
+        selectedFrame,
+        originalFrameScopes
+      ),
+      generatedScopes: getScopesItemsForSelectedFrame(
+        why,
+        selectedFrame,
+        generatedFrameScopes
+      ),
       showOriginal: true,
     };
   }
@@ -56,9 +67,9 @@ class Scopes extends PureComponent {
       originalFrameScopes: PropTypes.object,
       removeWatchpoint: PropTypes.func.isRequired,
       setExpandedScope: PropTypes.func.isRequired,
-      toggleMapScopes: PropTypes.func.isRequired,
       unHighlightDomElement: PropTypes.func.isRequired,
       why: PropTypes.object.isRequired,
+      selectedFrame: PropTypes.object,
     };
   }
 
@@ -84,12 +95,12 @@ class Scopes extends PureComponent {
       generatedFrameScopesChanged
     ) {
       this.setState({
-        originalScopes: getScopes(
+        originalScopes: getScopesItemsForSelectedFrame(
           nextProps.why,
           nextProps.selectedFrame,
           nextProps.originalFrameScopes
         ),
-        generatedScopes: getScopes(
+        generatedScopes: getScopesItemsForSelectedFrame(
           nextProps.why,
           nextProps.selectedFrame,
           nextProps.generatedFrameScopes
@@ -97,10 +108,6 @@ class Scopes extends PureComponent {
       });
     }
   }
-
-  onToggleMapScopes = () => {
-    this.props.toggleMapScopes();
-  };
 
   onContextMenu = (event, item) => {
     const { addWatchpoint, removeWatchpoint } = this.props;
@@ -181,16 +188,14 @@ class Scopes extends PureComponent {
     }
 
     const { watchpoint } = item.contents;
-    return (
-      <button
-        className={`remove-watchpoint-${watchpoint}`}
-        title={L10N.getStr("watchpoints.removeWatchpointTooltip")}
-        onClick={e => {
-          e.stopPropagation();
-          removeWatchpoint(item);
-        }}
-      />
-    );
+    return button({
+      className: `remove-watchpoint-${watchpoint}`,
+      title: L10N.getStr("watchpoints.removeWatchpointTooltip"),
+      onClick: e => {
+        e.stopPropagation();
+        removeWatchpoint(item);
+      },
+    });
   };
 
   renderScopesList() {
@@ -215,32 +220,32 @@ class Scopes extends PureComponent {
     }
 
     if (scopes && !!scopes.length && !isLoading) {
-      return (
-        <div className="pane scopes-list">
-          <ObjectInspector
-            roots={scopes}
-            autoExpandAll={false}
-            autoExpandDepth={1}
-            client={clientCommands}
-            createElement={tagName => document.createElement(tagName)}
-            disableWrap={true}
-            dimTopLevelWindow={true}
-            frame={selectedFrame}
-            mayUseCustomFormatter={true}
-            openLink={openLink}
-            onDOMNodeClick={grip => openElementInInspector(grip)}
-            onInspectIconClick={grip => openElementInInspector(grip)}
-            onDOMNodeMouseOver={grip => highlightDomElement(grip)}
-            onDOMNodeMouseOut={grip => unHighlightDomElement(grip)}
-            onContextMenu={this.onContextMenu}
-            setExpanded={(path, expand) =>
-              setExpandedScope(selectedFrame, path, expand)
-            }
-            initiallyExpanded={initiallyExpanded}
-            renderItemActions={this.renderWatchpointButton}
-            shouldRenderTooltip={true}
-          />
-        </div>
+      return div(
+        {
+          className: "pane scopes-list",
+        },
+        React.createElement(ObjectInspector, {
+          roots: scopes,
+          autoExpandAll: false,
+          autoExpandDepth: 1,
+          client: clientCommands,
+          createElement: tagName => document.createElement(tagName),
+          disableWrap: true,
+          dimTopLevelWindow: true,
+          frame: selectedFrame,
+          mayUseCustomFormatter: true,
+          openLink: openLink,
+          onDOMNodeClick: grip => openElementInInspector(grip),
+          onInspectIconClick: grip => openElementInInspector(grip),
+          onDOMNodeMouseOver: grip => highlightDomElement(grip),
+          onDOMNodeMouseOut: grip => unHighlightDomElement(grip),
+          onContextMenu: this.onContextMenu,
+          setExpanded: (path, expand) =>
+            setExpandedScope(selectedFrame, path, expand),
+          initiallyExpanded: initiallyExpanded,
+          renderItemActions: this.renderWatchpointButton,
+          shouldRenderTooltip: true,
+        })
       );
     }
 
@@ -252,16 +257,26 @@ class Scopes extends PureComponent {
         stateText = L10N.getStr("scopes.notAvailable");
       }
     }
-
-    return (
-      <div className="pane scopes-list">
-        <div className="pane-info">{stateText}</div>
-      </div>
+    return div(
+      {
+        className: "pane scopes-list",
+      },
+      div(
+        {
+          className: "pane-info",
+        },
+        stateText
+      )
     );
   }
 
   render() {
-    return <div className="scopes-content">{this.renderScopesList()}</div>;
+    return div(
+      {
+        className: "scopes-content",
+      },
+      this.renderScopesList()
+    );
   }
 }
 
@@ -301,7 +316,6 @@ export default connect(mapStateToProps, {
   openElementInInspector: actions.openElementInInspectorCommand,
   highlightDomElement: actions.highlightDomElement,
   unHighlightDomElement: actions.unHighlightDomElement,
-  toggleMapScopes: actions.toggleMapScopes,
   setExpandedScope: actions.setExpandedScope,
   addWatchpoint: actions.addWatchpoint,
   removeWatchpoint: actions.removeWatchpoint,

@@ -21,7 +21,11 @@ module.exports = {
 
   // The prettier configuration here comes from eslint-config-prettier and
   // turns off all of ESLint's rules related to formatting.
-  extends: ["eslint:recommended", "prettier"],
+  extends: [
+    "eslint:recommended",
+    "prettier",
+    "plugin:json/recommended-with-comments",
+  ],
 
   overrides: [
     {
@@ -116,11 +120,11 @@ module.exports = {
   ],
 
   parserOptions: {
-    ecmaVersion: 12,
+    ecmaVersion: "latest",
   },
 
   // When adding items to this file please check for effects on sub-directories.
-  plugins: ["html", "fetch-options", "no-unsanitized"],
+  plugins: ["fetch-options", "html", "json", "no-unsanitized"],
 
   // When adding items to this file please check for effects on all of toolkit
   // and browser

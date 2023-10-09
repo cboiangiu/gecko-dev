@@ -17,7 +17,6 @@
 #include "util/BitArray.h"
 #include "vm/GlobalObject.h"
 #include "vm/Stack.h"
-#include "vm/WellKnownAtom.h"  // js_*_str
 
 #include "gc/Nursery-inl.h"
 #include "vm/FrameIter-inl.h"  // js::FrameIter::unaliasedForEachActual
@@ -243,13 +242,12 @@ ArgumentsObject* ArgumentsObject::createTemplateObject(JSContext* cx,
   }
 
   AutoSetNewObjectMetadata metadata(cx);
-  JSObject* base =
-      NativeObject::create(cx, FINALIZE_KIND, gc::Heap::Tenured, shape);
-  if (!base) {
+  auto* obj = NativeObject::create<ArgumentsObject>(cx, FINALIZE_KIND,
+                                                    gc::Heap::Tenured, shape);
+  if (!obj) {
     return nullptr;
   }
 
-  ArgumentsObject* obj = &base->as<js::ArgumentsObject>();
   obj->initFixedSlot(ArgumentsObject::DATA_SLOT, PrivateValue(nullptr));
   return obj;
 }
@@ -302,12 +300,11 @@ ArgumentsObject* ArgumentsObject::create(JSContext* cx, HandleFunction callee,
   unsigned numBytes = ArgumentsData::bytesRequired(numArgs);
 
   AutoSetNewObjectMetadata metadata(cx);
-  JSObject* base =
-      NativeObject::create(cx, FINALIZE_KIND, gc::Heap::Default, shape);
-  if (!base) {
+  auto* obj = NativeObject::create<ArgumentsObject>(cx, FINALIZE_KIND,
+                                                    gc::Heap::Default, shape);
+  if (!obj) {
     return nullptr;
   }
-  ArgumentsObject* obj = &base->as<ArgumentsObject>();
 
   ArgumentsData* data = reinterpret_cast<ArgumentsData*>(
       AllocateObjectBuffer<uint8_t>(cx, obj, numBytes));
@@ -592,7 +589,7 @@ bool js::MappedArgSetter(JSContext* cx, HandleObject obj, HandleId id,
 /* static */
 bool ArgumentsObject::getArgumentsIterator(JSContext* cx,
                                            MutableHandleValue val) {
-  Handle<PropertyName*> shName = cx->names().ArrayValues;
+  Handle<PropertyName*> shName = cx->names().dollar_ArrayValues_;
   Rooted<JSAtom*> name(cx, cx->names().values);
   return GlobalObject::getSelfHostedFunction(cx, cx->global(), shName, name, 0,
                                              val);
@@ -1045,7 +1042,7 @@ void ArgumentsObject::trace(JSTracer* trc, JSObject* obj) {
   ArgumentsObject& argsobj = obj->as<ArgumentsObject>();
   if (ArgumentsData* data =
           argsobj.data()) {  // Template objects have no ArgumentsData.
-    TraceRange(trc, data->numArgs, data->begin(), js_arguments_str);
+    TraceRange(trc, data->numArgs, data->begin(), "arguments");
   }
 }
 

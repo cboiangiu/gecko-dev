@@ -12,8 +12,8 @@
 [package]
 edition = "2021"
 name = "metal"
-version = "0.25.0"
-authors = ["GFX Developers"]
+version = "0.26.0"
+authors = ["gfx-rs developers"]
 exclude = [
     "guide/**/*",
     "examples/texture/**/*",

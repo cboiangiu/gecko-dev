@@ -219,7 +219,6 @@
 #include "gc/WeakMap.h"
 #include "jit/ExecutableAllocator.h"
 #include "jit/JitCode.h"
-#include "jit/JitRealm.h"
 #include "jit/JitRuntime.h"
 #include "jit/ProcessExecutableMemory.h"
 #include "js/HeapAPI.h"  // JS::GCCellPtr
@@ -1379,21 +1378,38 @@ bool GCRuntime::updateMarkersVector() {
   return true;
 }
 
+template <typename F>
+static bool EraseCallback(CallbackVector<F>& vector, F callback) {
+  for (Callback<F>* p = vector.begin(); p != vector.end(); p++) {
+    if (p->op == callback) {
+      vector.erase(p);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+template <typename F>
+static bool EraseCallback(CallbackVector<F>& vector, F callback, void* data) {
+  for (Callback<F>* p = vector.begin(); p != vector.end(); p++) {
+    if (p->op == callback && p->data == data) {
+      vector.erase(p);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool GCRuntime::addBlackRootsTracer(JSTraceDataOp traceOp, void* data) {
   AssertHeapIsIdle();
-  return !!blackRootTracers.ref().append(
-      Callback<JSTraceDataOp>(traceOp, data));
+  return blackRootTracers.ref().append(Callback<JSTraceDataOp>(traceOp, data));
 }
 
 void GCRuntime::removeBlackRootsTracer(JSTraceDataOp traceOp, void* data) {
   // Can be called from finalizers
-  for (size_t i = 0; i < blackRootTracers.ref().length(); i++) {
-    Callback<JSTraceDataOp>* e = &blackRootTracers.ref()[i];
-    if (e->op == traceOp && e->data == data) {
-      blackRootTracers.ref().erase(e);
-      break;
-    }
-  }
+  MOZ_ALWAYS_TRUE(EraseCallback(blackRootTracers.ref(), traceOp));
 }
 
 void GCRuntime::setGrayRootsTracer(JSGrayRootsTracer traceOp, void* data) {
@@ -1435,18 +1451,8 @@ bool GCRuntime::addFinalizeCallback(JSFinalizeCallback callback, void* data) {
       Callback<JSFinalizeCallback>(callback, data));
 }
 
-template <typename F>
-static void EraseCallback(CallbackVector<F>& vector, F callback) {
-  for (Callback<F>* p = vector.begin(); p != vector.end(); p++) {
-    if (p->op == callback) {
-      vector.erase(p);
-      return;
-    }
-  }
-}
-
 void GCRuntime::removeFinalizeCallback(JSFinalizeCallback callback) {
-  EraseCallback(finalizeCallbacks.ref(), callback);
+  MOZ_ALWAYS_TRUE(EraseCallback(finalizeCallbacks.ref(), callback));
 }
 
 void GCRuntime::callFinalizeCallbacks(JS::GCContext* gcx,
@@ -1478,7 +1484,8 @@ bool GCRuntime::addWeakPointerZonesCallback(JSWeakPointerZonesCallback callback,
 
 void GCRuntime::removeWeakPointerZonesCallback(
     JSWeakPointerZonesCallback callback) {
-  EraseCallback(updateWeakPointerZonesCallbacks.ref(), callback);
+  MOZ_ALWAYS_TRUE(
+      EraseCallback(updateWeakPointerZonesCallbacks.ref(), callback));
 }
 
 void GCRuntime::callWeakPointerZonesCallbacks(JSTracer* trc) const {
@@ -1495,7 +1502,8 @@ bool GCRuntime::addWeakPointerCompartmentCallback(
 
 void GCRuntime::removeWeakPointerCompartmentCallback(
     JSWeakPointerCompartmentCallback callback) {
-  EraseCallback(updateWeakPointerCompartmentCallbacks.ref(), callback);
+  MOZ_ALWAYS_TRUE(
+      EraseCallback(updateWeakPointerCompartmentCallbacks.ref(), callback));
 }
 
 void GCRuntime::callWeakPointerCompartmentCallbacks(
@@ -1516,8 +1524,9 @@ bool GCRuntime::addNurseryCollectionCallback(
 }
 
 void GCRuntime::removeNurseryCollectionCallback(
-    JS::GCNurseryCollectionCallback callback) {
-  EraseCallback(nurseryCollectionCallbacks.ref(), callback);
+    JS::GCNurseryCollectionCallback callback, void* data) {
+  MOZ_ALWAYS_TRUE(
+      EraseCallback(nurseryCollectionCallbacks.ref(), callback, data));
 }
 
 void GCRuntime::callNurseryCollectionCallbacks(JS::GCNurseryProgress progress,
@@ -2212,11 +2221,8 @@ void ArenaLists::checkEmptyArenaList(AllocKind kind) {
 }
 
 void GCRuntime::purgeRuntimeForMinorGC() {
-  // If external strings become nursery allocable, remember to call
-  // zone->externalStringCache().purge() (and delete this assert.)
-  MOZ_ASSERT(!IsNurseryAllocable(AllocKind::EXTERNAL_STRING));
-
   for (ZonesIter zone(this, SkipAtoms); !zone.done(); zone.next()) {
+    zone->externalStringCache().purge();
     zone->functionToStringCache().purge();
   }
 }
@@ -2839,11 +2845,6 @@ void GCRuntime::beginMarkPhase(AutoGCSession& session) {
   // get here.
   incMajorGcNumber();
 
-  MOZ_ASSERT(!hasDelayedMarking());
-  for (auto& marker : markers) {
-    marker->start();
-  }
-
 #ifdef DEBUG
   queuePos = 0;
   queueMarkColor.reset();
@@ -2863,6 +2864,19 @@ void GCRuntime::beginMarkPhase(AutoGCSession& session) {
     }
   }
 
+  updateSchedulingStateOnGCStart();
+  stats().measureInitialHeapSize();
+
+  useParallelMarking = SingleThreadedMarking;
+  if (canMarkInParallel() && initParallelMarkers()) {
+    useParallelMarking = AllowParallelMarking;
+  }
+
+  MOZ_ASSERT(!hasDelayedMarking());
+  for (auto& marker : markers) {
+    marker->start();
+  }
+
   if (rt->isBeingDestroyed()) {
     checkNoRuntimeRoots(session);
   } else {
@@ -2871,9 +2885,6 @@ void GCRuntime::beginMarkPhase(AutoGCSession& session) {
     traceRuntimeForMajorGC(marker().tracer(), session);
     marker().setRootMarkingMode(false);
   }
-
-  updateSchedulingStateOnGCStart();
-  stats().measureInitialHeapSize();
 }
 
 void GCRuntime::findDeadCompartments() {
@@ -2956,6 +2967,8 @@ void GCRuntime::updateSchedulingStateOnGCStart() {
 }
 
 inline bool GCRuntime::canMarkInParallel() const {
+  MOZ_ASSERT(state() >= gc::State::MarkRoots);
+
 #if defined(DEBUG) || defined(JS_OOM_BREAKPOINT)
   // OOM testing limits the engine to using a single helper thread.
   if (oom::simulator.targetThread() == THREAD_TYPE_GCPARALLEL) {
@@ -2965,6 +2978,21 @@ inline bool GCRuntime::canMarkInParallel() const {
 
   return markers.length() > 1 && stats().initialCollectedBytes() >=
                                      tunables.parallelMarkingThresholdBytes();
+}
+
+bool GCRuntime::initParallelMarkers() {
+  MOZ_ASSERT(canMarkInParallel());
+
+  // Allocate stack for parallel markers. The first marker always has stack
+  // allocated. Other markers have their stack freed in
+  // GCRuntime::finishCollection.
+  for (size_t i = 1; i < markers.length(); i++) {
+    if (!markers[i]->initStack()) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 IncrementalProgress GCRuntime::markUntilBudgetExhausted(
@@ -2978,7 +3006,8 @@ IncrementalProgress GCRuntime::markUntilBudgetExhausted(
     return NotFinished;
   }
 
-  if (allowParallelMarking && canMarkInParallel()) {
+  if (allowParallelMarking) {
+    MOZ_ASSERT(canMarkInParallel());
     MOZ_ASSERT(parallelMarkingEnabled);
     MOZ_ASSERT(reportTime);
     MOZ_ASSERT(!isBackgroundMarking());
@@ -3168,8 +3197,14 @@ void GCRuntime::finishCollection(JS::GCReason reason) {
   assertBackgroundSweepingFinished();
 
   MOZ_ASSERT(!hasDelayedMarking());
-  for (auto& marker : markers) {
+  for (size_t i = 0; i < markers.length(); i++) {
+    const auto& marker = markers[i];
     marker->stop();
+    if (i == 0) {
+      marker->resetStackCapacity();
+    } else {
+      marker->freeStack();
+    }
   }
 
   maybeStopPretenuring();
@@ -3614,7 +3649,7 @@ void GCRuntime::incrementalSlice(SliceBudget& budget, JS::GCReason reason,
 
       {
         gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::MARK);
-        if (markUntilBudgetExhausted(budget, AllowParallelMarking) ==
+        if (markUntilBudgetExhausted(budget, useParallelMarking) ==
             NotFinished) {
           break;
         }

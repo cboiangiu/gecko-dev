@@ -19,7 +19,6 @@ import { validateSelectedFrame } from "../../utils/context";
 import { PROMISE } from "../utils/middleware/promise";
 
 import { log } from "../../utils/log";
-import { isGenerated } from "../../utils/source";
 
 import { buildMappedScopes } from "../../utils/pause/mapScopes";
 import { isFulfilled } from "../../utils/async-value";
@@ -89,10 +88,9 @@ export function toggleMapScopes() {
 
     dispatch({ type: "TOGGLE_MAP_SCOPES", mapScopes: true });
 
-    const currentThread = getCurrentThread(getState());
-
     // Ignore the call if there is no selected frame (we are not paused?)
-    const selectedFrame = getSelectedFrame(getState(), currentThread);
+    const state = getState();
+    const selectedFrame = getSelectedFrame(state, getCurrentThread(state));
     if (!selectedFrame) {
       return;
     }
@@ -102,7 +100,7 @@ export function toggleMapScopes() {
     }
 
     // Also ignore the call if we didn't fetch the scopes for the selected frame
-    const scopes = getGeneratedFrameScope(getState(), currentThread);
+    const scopes = getGeneratedFrameScope(getState(), selectedFrame);
     if (!scopes) {
       return;
     }
@@ -154,7 +152,7 @@ export function getMappedScopes(scopes, locations) {
       !generatedSource ||
       generatedSource.isWasm ||
       source.isPrettyPrinted ||
-      isGenerated(source)
+      !source.isOriginal
     ) {
       return null;
     }

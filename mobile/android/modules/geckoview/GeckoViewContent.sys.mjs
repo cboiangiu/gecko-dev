@@ -3,6 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { GeckoViewModule } from "resource://gre/modules/GeckoViewModule.sys.mjs";
+import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -20,6 +21,9 @@ export class GeckoViewContent extends GeckoViewModule {
       "GeckoView:HasCookieBannerRuleForBrowsingContextTree",
       "GeckoView:RestoreState",
       "GeckoView:ContainsFormData",
+      "GeckoView:RequestCreateAnalysis",
+      "GeckoView:RequestAnalysisCreationStatus",
+      "GeckoView:PollForAnalysisCompleted",
       "GeckoView:RequestAnalysis",
       "GeckoView:RequestRecommendations",
       "GeckoView:ScrollBy",
@@ -153,7 +157,12 @@ export class GeckoViewContent extends GeckoViewModule {
         break;
       }
       case "GeckoView:ZoomToInput":
-        this.sendToAllChildren(aEvent, aData);
+        // For ZoomToInput we just need to send the message to the current focused one.
+        const actor =
+          Services.focus.focusedContentBrowsingContext.currentWindowGlobal.getActor(
+            "GeckoViewContent"
+          );
+        actor.sendAsyncMessage(aEvent, aData);
         break;
       case "GeckoView:ScrollBy":
         // Unclear if that actually works with oop iframes?
@@ -194,6 +203,15 @@ export class GeckoViewContent extends GeckoViewModule {
         break;
       case "GeckoView:RequestAnalysis":
         this._requestAnalysis(aData, aCallback);
+        break;
+      case "GeckoView:RequestCreateAnalysis":
+        this._requestCreateAnalysis(aData, aCallback);
+        break;
+      case "GeckoView:RequestAnalysisCreationStatus":
+        this._requestAnalysisCreationStatus(aData, aCallback);
+        break;
+      case "GeckoView:PollForAnalysisCompleted":
+        this._pollForAnalysisCompleted(aData, aCallback);
         break;
       case "GeckoView:RequestRecommendations":
         this._requestRecommendations(aData, aCallback);
@@ -315,6 +333,10 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestAnalysis(aData, aCallback) {
+    if (!AppConstants.NIGHTLY_BUILD) {
+      aCallback.onError(`This API enabled for Nightly builds only.`);
+      return;
+    }
     const url = Services.io.newURI(aData.url);
     if (!lazy.isProductURL(url)) {
       aCallback.onError(`Cannot requestAnalysis on a non-product url.`);
@@ -323,12 +345,82 @@ export class GeckoViewContent extends GeckoViewModule {
       const analysis = await product.requestAnalysis();
       if (!analysis) {
         aCallback.onError(`Product analysis returned null.`);
+        return;
       }
       aCallback.onSuccess({ analysis });
     }
   }
 
+  async _requestCreateAnalysis(aData, aCallback) {
+    if (!AppConstants.NIGHTLY_BUILD) {
+      aCallback.onError(`This API enabled for Nightly builds only.`);
+      return;
+    }
+    const url = Services.io.newURI(aData.url);
+    if (!lazy.isProductURL(url)) {
+      aCallback.onError(`Cannot requestCreateAnalysis on a non-product url.`);
+    } else {
+      const product = new lazy.ShoppingProduct(url);
+      const status = await product.requestCreateAnalysis();
+      if (!status) {
+        aCallback.onError(`Creation of product analysis returned null.`);
+        return;
+      }
+      aCallback.onSuccess(status.status);
+    }
+  }
+
+  async _requestAnalysisCreationStatus(aData, aCallback) {
+    if (!AppConstants.NIGHTLY_BUILD) {
+      aCallback.onError(`This API enabled for Nightly builds only.`);
+      return;
+    }
+    const url = Services.io.newURI(aData.url);
+    if (!lazy.isProductURL(url)) {
+      aCallback.onError(
+        `Cannot requestAnalysisCreationStatus on a non-product url.`
+      );
+    } else {
+      const product = new lazy.ShoppingProduct(url);
+      const status = await product.requestAnalysisCreationStatus();
+      if (!status) {
+        aCallback.onError(
+          `Status of creation of product analysis returned null.`
+        );
+        return;
+      }
+      aCallback.onSuccess(status.status);
+    }
+  }
+
+  async _pollForAnalysisCompleted(aData, aCallback) {
+    if (!AppConstants.NIGHTLY_BUILD) {
+      aCallback.onError(`This API enabled for Nightly builds only.`);
+      return;
+    }
+    const url = Services.io.newURI(aData.url);
+    if (!lazy.isProductURL(url)) {
+      aCallback.onError(
+        `Cannot pollForAnalysisCompleted on a non-product url.`
+      );
+    } else {
+      const product = new lazy.ShoppingProduct(url);
+      const status = await product.pollForAnalysisCompleted();
+      if (!status) {
+        aCallback.onError(
+          `Polling the status of creation of product analysis returned null.`
+        );
+        return;
+      }
+      aCallback.onSuccess(status.status);
+    }
+  }
+
   async _requestRecommendations(aData, aCallback) {
+    if (!AppConstants.NIGHTLY_BUILD) {
+      aCallback.onError(`This API enabled for Nightly builds only.`);
+      return;
+    }
     const url = Services.io.newURI(aData.url);
     if (!lazy.isProductURL(url)) {
       aCallback.onError(`Cannot requestRecommendations on a non-product url.`);
@@ -337,6 +429,7 @@ export class GeckoViewContent extends GeckoViewModule {
       const recommendations = await product.requestRecommendations();
       if (!recommendations) {
         aCallback.onError(`Product recommendations returned null.`);
+        return;
       }
       aCallback.onSuccess({ recommendations });
     }

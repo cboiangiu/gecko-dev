@@ -153,6 +153,10 @@ class MOZ_RAII GetPropIRGenerator : public IRGenerator {
   AttachDecision tryAttachGenericProxy(Handle<ProxyObject*> obj,
                                        ObjOperandId objId, HandleId id,
                                        bool handleDOMProxies);
+#ifdef JS_PUNBOX64
+  AttachDecision tryAttachScriptedProxy(Handle<ProxyObject*> obj,
+                                        ObjOperandId objId, HandleId id);
+#endif
   AttachDecision tryAttachDOMProxyExpando(Handle<ProxyObject*> obj,
                                           ObjOperandId objId, HandleId id,
                                           ValOperandId receiverId);
@@ -478,6 +482,22 @@ class MOZ_RAII OptimizeSpreadCallIRGenerator : public IRGenerator {
   OptimizeSpreadCallIRGenerator(JSContext* cx, HandleScript script,
                                 jsbytecode* pc, ICState state,
                                 HandleValue value);
+
+  AttachDecision tryAttachStub();
+
+  void trackAttached(const char* name /* must be a C string literal */);
+};
+
+class MOZ_RAII OptimizeGetIteratorIRGenerator : public IRGenerator {
+  HandleValue val_;
+
+  AttachDecision tryAttachArray();
+  AttachDecision tryAttachNotOptimizable();
+
+ public:
+  OptimizeGetIteratorIRGenerator(JSContext* cx, HandleScript script,
+                                 jsbytecode* pc, ICState state,
+                                 HandleValue value);
 
   AttachDecision tryAttachStub();
 

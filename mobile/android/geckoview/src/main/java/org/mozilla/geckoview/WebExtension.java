@@ -1630,9 +1630,13 @@ public class WebExtension {
     /** One of {@link ErrorCodes} that provides more information about this exception. */
     public final @Codes int code;
 
+    /** An optional name of the extension that caused the exception. */
+    public final @Nullable String extensionName;
+
     /** For testing */
     protected InstallException() {
       this.code = ErrorCodes.ERROR_NETWORK_FAILURE;
+      this.extensionName = null;
     }
 
     @Override
@@ -1640,8 +1644,14 @@ public class WebExtension {
       return "InstallException: " + code;
     }
 
+    /* package */ InstallException(final @Codes int code, final @Nullable String extensionName) {
+      this.code = code;
+      this.extensionName = extensionName;
+    }
+
     /* package */ InstallException(final @Codes int code) {
       this.code = code;
+      this.extensionName = null;
     }
   }
 
@@ -1766,12 +1776,26 @@ public class WebExtension {
      * WebExtensionController.EnableSource#APP} as <code>source</code>.
      */
     public static final int APP = 1 << 3;
+
+    /** The extension has been disabled because it is not correctly signed. */
+    public static final int SIGNATURE = 1 << 4;
+
+    /**
+     * The extension has been disabled because it is not compatible with the application version.
+     */
+    public static final int APP_VERSION = 1 << 5;
   }
 
   @Retention(RetentionPolicy.SOURCE)
   @IntDef(
       flag = true,
-      value = {DisabledFlags.USER, DisabledFlags.BLOCKLIST, DisabledFlags.APP})
+      value = {
+        DisabledFlags.USER,
+        DisabledFlags.BLOCKLIST,
+        DisabledFlags.APP,
+        DisabledFlags.SIGNATURE,
+        DisabledFlags.APP_VERSION,
+      })
   public @interface EnabledFlags {}
 
   /** Provides information about a {@link WebExtension}. */
@@ -1818,6 +1842,27 @@ public class WebExtension {
      * manifest.json/description </a>
      */
     public final @Nullable String description;
+
+    /** The full description of this extension. See: `AddonWrapper.fullDescription`. */
+    public final @Nullable String fullDescription;
+
+    /** The average rating of this extension. See: `AddonWrapper.averageRating`. */
+    public final double averageRating;
+
+    /** The review count for this extension. See: `AddonWrapper.reviewCount`. */
+    public final int reviewCount;
+
+    /** The link to the review page for this extension. See `AddonWrapper.reviewURL`. */
+    public final @Nullable String reviewUrl;
+
+    /**
+     * The string representation of the date that this extension was most recently updated
+     * (simplified ISO 8601 format). See `AddonWrapper.updateDate`.
+     */
+    public final @Nullable String updateDate;
+
+    /** The URL used to install this extension. See: `AddonInternal.sourceURI`. */
+    public final @Nullable String downloadUrl;
 
     /**
      * Version string for this extension.
@@ -1955,6 +2000,12 @@ public class WebExtension {
       temporary = false;
       baseUrl = null;
       allowedInPrivateBrowsing = false;
+      fullDescription = null;
+      averageRating = 0;
+      reviewCount = 0;
+      reviewUrl = null;
+      updateDate = null;
+      downloadUrl = null;
     }
 
     /* package */ MetaData(final GeckoBundle bundle) {
@@ -1975,6 +2026,12 @@ public class WebExtension {
       temporary = bundle.getBoolean("temporary", false);
       baseUrl = bundle.getString("baseURL");
       allowedInPrivateBrowsing = bundle.getBoolean("privateBrowsingAllowed", false);
+      fullDescription = bundle.getString("fullDescription");
+      averageRating = bundle.getDouble("averageRating");
+      reviewCount = bundle.getInt("reviewCount");
+      reviewUrl = bundle.getString("reviewURL");
+      updateDate = bundle.getString("updateDate");
+      downloadUrl = bundle.getString("downloadUrl");
 
       final int signedState = bundle.getInt("signedState", SignedStateFlags.UNKNOWN);
       if (signedState <= SignedStateFlags.LAST) {
@@ -1994,6 +2051,10 @@ public class WebExtension {
           disabledFlags |= DisabledFlags.BLOCKLIST;
         } else if (flag.equals("appDisabled")) {
           disabledFlags |= DisabledFlags.APP;
+        } else if (flag.equals("signatureDisabled")) {
+          disabledFlags |= DisabledFlags.SIGNATURE;
+        } else if (flag.equals("appVersionDisabled")) {
+          disabledFlags |= DisabledFlags.APP_VERSION;
         } else {
           Log.e(LOGTAG, "Unrecognized disabledFlag state: " + flag);
         }
@@ -2748,16 +2809,13 @@ public class WebExtension {
 
       final boolean saveAs = optionsBundle.getBoolean("saveAs");
 
-      final WebExtension.DownloadRequest request =
-          new WebExtension.DownloadRequest.Builder(mainRequest)
-              .filename(optionsBundle.getString("filename"))
-              .downloadFlags(downloadFlags)
-              .conflictAction(conflictActionFlags)
-              .saveAs(saveAs)
-              .allowHttpErrors(allowHttpErrors)
-              .build();
-
-      return request;
+      return new Builder(mainRequest)
+          .filename(optionsBundle.getString("filename"))
+          .downloadFlags(downloadFlags)
+          .conflictAction(conflictActionFlags)
+          .saveAs(saveAs)
+          .allowHttpErrors(allowHttpErrors)
+          .build();
     }
 
     /* package */ static class Builder {

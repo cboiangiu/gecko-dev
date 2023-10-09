@@ -192,6 +192,8 @@ export class GeckoViewStartup {
               "GeckoView:WebExtension:SetPBAllowed",
               "GeckoView:WebExtension:Uninstall",
               "GeckoView:WebExtension:Update",
+              "GeckoView:WebExtension:EnableProcessSpawning",
+              "GeckoView:WebExtension:DisableProcessSpawning",
             ],
             observers: [
               "devtools-installed-addon",
@@ -202,7 +204,12 @@ export class GeckoViewStartup {
 
           GeckoViewUtils.addLazyGetter(this, "ChildCrashHandler", {
             module: "resource://gre/modules/ChildCrashHandler.sys.mjs",
-            observers: ["ipc:content-shutdown", "compositor:process-aborted"],
+            observers: [
+              "compositor:process-aborted",
+              "ipc:content-created",
+              "ipc:content-shutdown",
+              "process-type-set",
+            ],
           });
 
           lazy.EventDispatcher.instance.registerListener(this, [

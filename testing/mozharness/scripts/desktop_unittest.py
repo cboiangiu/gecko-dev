@@ -262,7 +262,7 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     "action": "store_true",
                     "default": False,
                     "dest": "a11y_checks",
-                    "help": "Run tests with accessibility checks disabled.",
+                    "help": "Run tests with accessibility checks enabled.",
                 },
             ],
             [
@@ -524,6 +524,24 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     dirs["abs_mochitest_dir"],
                     "websocketprocessbridge",
                     "websocketprocessbridge_requirements_3.txt",
+                )
+            )
+
+        if (
+            self._query_specified_suites("mochitest", "mochitest-browser-a11y")
+            is not None
+            and sys.platform == "win32"
+        ):
+            # Only Windows a11y browser tests need this.
+            requirements_files.append(
+                os.path.join(
+                    dirs["abs_mochitest_dir"],
+                    "browser",
+                    "accessible",
+                    "tests",
+                    "browser",
+                    "windows",
+                    "a11y_setup_requirements.txt",
                 )
             )
 
@@ -959,6 +977,8 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
             return
 
         self._stage_files(self.config["xpcshell_name"])
+        if "plugin_container_name" in self.config:
+            self._stage_files(self.config["plugin_container_name"])
         # http3server isn't built for Windows tests or Linux asan/tsan
         # builds. Only stage if the `http3server_name` config is set and if
         # the file actually exists.

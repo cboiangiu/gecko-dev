@@ -25,6 +25,8 @@ class Quota final : public PQuotaParent {
  private:
   ~Quota();
 
+  bool TrustParams() const;
+
   bool VerifyRequestParams(const UsageRequestParams& aParams) const;
 
   bool VerifyRequestParams(const RequestParams& aParams) const;
@@ -50,8 +52,31 @@ class Quota final : public PQuotaParent {
 
   virtual bool DeallocPQuotaRequestParent(PQuotaRequestParent* aActor) override;
 
+  virtual mozilla::ipc::IPCResult RecvInitializeStorage(
+      InitializeStorageResolver&& aResolver) override;
+
+  virtual mozilla::ipc::IPCResult RecvClearStoragesForOrigin(
+      const Maybe<PersistenceType>& aPersistenceType,
+      const PrincipalInfo& aPrincipalInfo, const Maybe<Type>& aClientType,
+      ClearStoragesForOriginResolver&& aResolve) override;
+
+  virtual mozilla::ipc::IPCResult RecvClearStoragesForOriginPrefix(
+      const Maybe<PersistenceType>& aPersistenceType,
+      const PrincipalInfo& aPrincipalInfo,
+      ClearStoragesForOriginPrefixResolver&& aResolve) override;
+
+  virtual mozilla::ipc::IPCResult RecvClearStoragesForOriginAttributesPattern(
+      const OriginAttributesPattern& aPattern,
+      ClearStoragesForOriginAttributesPatternResolver&& aResolver) override;
+
   virtual mozilla::ipc::IPCResult RecvClearStoragesForPrivateBrowsing(
       ClearStoragesForPrivateBrowsingResolver&& aResolver) override;
+
+  virtual mozilla::ipc::IPCResult RecvClearStorage(
+      ClearStorageResolver&& aResolver) override;
+
+  virtual mozilla::ipc::IPCResult RecvShutdownStorage(
+      ShutdownStorageResolver&& aResolver) override;
 
   virtual mozilla::ipc::IPCResult RecvStartIdleMaintenance() override;
 

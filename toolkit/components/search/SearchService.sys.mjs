@@ -20,6 +20,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
   RemoteSettings: "resource://services-settings/remote-settings.sys.mjs",
   SearchEngine: "resource://gre/modules/SearchEngine.sys.mjs",
   SearchEngineSelector: "resource://gre/modules/SearchEngineSelector.sys.mjs",
+  SearchEngineSelectorOld:
+    "resource://gre/modules/SearchEngineSelectorOld.sys.mjs",
   SearchSettings: "resource://gre/modules/SearchSettings.sys.mjs",
   SearchStaticData: "resource://gre/modules/SearchStaticData.sys.mjs",
   SearchUtils: "resource://gre/modules/SearchUtils.sys.mjs",
@@ -160,7 +162,6 @@ const gEmptyParseSubmissionResult = Object.freeze(
  */
 export class SearchService {
   constructor() {
-    this.#initObservers = PromiseUtils.defer();
     // this._engines is prefixed with _ rather than # because it is called from
     // a test.
     this._engines = new Map();
@@ -275,6 +276,18 @@ export class SearchService {
    */
   get hasSuccessfullyInitialized() {
     return this.#initializationStatus == "success";
+  }
+
+  /**
+   * A promise that is resolved when initialization has finished, but does not
+   * trigger initialization to begin.
+   *
+   * @returns {Promise}
+   *   Resolved when initalization has successfully finished, and rejected if it
+   *   has failed.
+   */
+  get promiseInitialized() {
+    return this.#initObservers.promise;
   }
 
   getDefaultEngineInfo() {
@@ -474,9 +487,15 @@ export class SearchService {
   // Test-only function to reset just the engine selector so that it can
   // load a different configuration.
   resetEngineSelector() {
-    this.#engineSelector = new lazy.SearchEngineSelector(
-      this.#handleConfigurationUpdated.bind(this)
-    );
+    if (lazy.SearchUtils.newSearchConfigEnabled) {
+      this.#engineSelector = new lazy.SearchEngineSelector(
+        this.#handleConfigurationUpdated.bind(this)
+      );
+    } else {
+      this.#engineSelector = new lazy.SearchEngineSelectorOld(
+        this.#handleConfigurationUpdated.bind(this)
+      );
+    }
   }
 
   resetToAppDefaultEngine() {
@@ -994,7 +1013,12 @@ export class SearchService {
     } // end engine iteration
   }
 
-  #initObservers;
+  /**
+   * A deferred promise that is resolved when initialization completes.
+   *
+   * @type {Deferred}
+   */
+  #initObservers = PromiseUtils.defer();
   #currentEngine;
   #currentPrivateEngine;
   #queuedIdle;
@@ -1342,9 +1366,15 @@ export class SearchService {
       }
 
       // Create the search engine selector.
-      this.#engineSelector = new lazy.SearchEngineSelector(
-        this.#handleConfigurationUpdated.bind(this)
-      );
+      if (lazy.SearchUtils.newSearchConfigEnabled) {
+        this.#engineSelector = new lazy.SearchEngineSelector(
+          this.#handleConfigurationUpdated.bind(this)
+        );
+      } else {
+        this.#engineSelector = new lazy.SearchEngineSelectorOld(
+          this.#handleConfigurationUpdated.bind(this)
+        );
+      }
 
       // See if we have a settings file so we don't have to parse a bunch of XML.
       let settings = await this._settings.get();
@@ -1590,11 +1620,18 @@ export class SearchService {
       "engines reported by AddonManager startup"
     );
     for (let extension of this.#startupExtensions) {
-      await this.#installExtensionEngine(
-        extension,
-        [lazy.SearchUtils.DEFAULT_TAG],
-        true
-      );
+      try {
+        await this.#installExtensionEngine(
+          extension,
+          [lazy.SearchUtils.DEFAULT_TAG],
+          true
+        );
+      } catch (ex) {
+        lazy.logConsole.error(
+          `#installExtensionEngine failed for ${extension.id}`,
+          ex
+        );
+      }
     }
     this.#startupExtensions.clear();
 

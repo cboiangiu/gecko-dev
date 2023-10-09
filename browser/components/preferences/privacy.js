@@ -21,6 +21,8 @@ const CONTENT_BLOCKING_PREFS = [
   "privacy.firstparty.isolate",
   "privacy.trackingprotection.emailtracking.enabled",
   "privacy.trackingprotection.emailtracking.pbmode.enabled",
+  "privacy.fingerprintingProtection",
+  "privacy.fingerprintingProtection.pbmode",
 ];
 
 const PREF_URLBAR_QUICKSUGGEST_BLOCKLIST =
@@ -92,6 +94,14 @@ Preferences.addAll([
     type: "bool",
   },
 
+  // Fingerprinting Protection
+  { id: "privacy.fingerprintingProtection", type: "bool" },
+  { id: "privacy.fingerprintingProtection.pbmode", type: "bool" },
+
+  // Resist Fingerprinting
+  { id: "privacy.resistFingerprinting", type: "bool" },
+  { id: "privacy.resistFingerprinting.pbmode", type: "bool" },
+
   // Social tracking
   { id: "privacy.trackingprotection.socialtracking.enabled", type: "bool" },
   { id: "privacy.socialtracking.block_cookies.enabled", type: "bool" },
@@ -111,6 +121,7 @@ Preferences.addAll([
   // Location Bar
   { id: "browser.urlbar.suggest.bestmatch", type: "bool" },
   { id: "browser.urlbar.suggest.bookmark", type: "bool" },
+  { id: "browser.urlbar.suggest.clipboard", type: "bool" },
   { id: "browser.urlbar.suggest.history", type: "bool" },
   { id: "browser.urlbar.suggest.openpage", type: "bool" },
   { id: "browser.urlbar.suggest.topsites", type: "bool" },
@@ -148,6 +159,9 @@ Preferences.addAll([
   // Do not track
   { id: "privacy.donottrackheader.enabled", type: "bool" },
 
+  // Global Privacy Control
+  { id: "privacy.globalprivacycontrol.enabled", type: "bool" },
+
   // Media
   { id: "media.autoplay.default", type: "int" },
 
@@ -180,6 +194,8 @@ Preferences.addAll([
   { id: "security.disable_button.openDeviceManager", type: "bool" },
 
   { id: "security.OCSP.enabled", type: "int" },
+
+  { id: "security.enterprise_roots.enabled", type: "bool" },
 
   // Add-ons, malware, phishing
   { id: "xpinstall.whitelist.required", type: "bool" },
@@ -301,6 +317,10 @@ function dataCollectionCheckboxHandler({
 function setUpContentBlockingWarnings() {
   document.getElementById("fpiIncompatibilityWarning").hidden =
     !gIsFirstPartyIsolated;
+
+  document.getElementById("rfpIncompatibilityWarning").hidden =
+    !Preferences.get("privacy.resistFingerprinting").value &&
+    !Preferences.get("privacy.resistFingerprinting.pbmode").value;
 }
 
 function initTCPStandardSection() {
@@ -438,6 +458,19 @@ var gPrivacyPane = {
     };
     showPref.on("change", showQuickActionsGroup);
     showQuickActionsGroup();
+  },
+
+  _initThirdPartyCertsToggle() {
+    // Third-party certificate import is only implemented for Windows and Mac,
+    // and we should not expose this as a user-configurable setting if there's
+    // an enterprise policy controlling it (either to enable _or_ disable it).
+    let canConfigureThirdPartyCerts =
+      (AppConstants.platform == "win" || AppConstants.platform == "macosx") &&
+      typeof Services.policies.getActivePolicies()?.Certificates
+        ?.ImportEnterpriseRoots == "undefined";
+
+    document.getElementById("certEnableThirdPartyToggleBox").hidden =
+      !canConfigureThirdPartyCerts;
   },
 
   syncFromHttpsOnlyPref() {
@@ -873,8 +906,12 @@ var gPrivacyPane = {
 
     this._showCustomBlockList();
     this.trackingProtectionReadPrefs();
+    this.fingerprintingProtectionReadPrefs();
     this.networkCookieBehaviorReadPrefs();
     this._initTrackingProtectionExtensionControl();
+    this._initThirdPartyCertsToggle();
+
+    Services.telemetry.setEventRecordingEnabled("privacy.ui.fpp", true);
 
     Services.telemetry.setEventRecordingEnabled("pwmgr", true);
 
@@ -899,6 +936,15 @@ var gPrivacyPane = {
     Preferences.get("privacy.firstparty.isolate").on(
       "change",
       gPrivacyPane.networkCookieBehaviorReadPrefs.bind(gPrivacyPane)
+    );
+
+    Preferences.get("privacy.fingerprintingProtection").on(
+      "change",
+      gPrivacyPane.fingerprintingProtectionReadPrefs.bind(gPrivacyPane)
+    );
+    Preferences.get("privacy.fingerprintingProtection.pbmode").on(
+      "change",
+      gPrivacyPane.fingerprintingProtectionReadPrefs.bind(gPrivacyPane)
     );
 
     setEventListener(
@@ -992,6 +1038,7 @@ var gPrivacyPane = {
 
     this._pane = document.getElementById("panePrivacy");
 
+    this._initGlobalPrivacyControlUI();
     this._initPasswordGenerationUI();
     this._initRelayIntegrationUI();
     this._initMasterPasswordUI();
@@ -1198,6 +1245,20 @@ var gPrivacyPane = {
       "command",
       this.trackingProtectionWritePrefs
     );
+    setEventListener(
+      "contentBlockingFingerprintingProtectionCheckbox",
+      "command",
+      e => {
+        const extra = { checked: e.target.checked };
+        Glean.privacyUiFppClick.checkbox.record(extra);
+        this.fingerprintingProtectionWritePrefs();
+      }
+    );
+    setEventListener("fingerprintingProtectionMenu", "command", e => {
+      const extra = { value: e.target.value };
+      Glean.privacyUiFppClick.menu.record(extra);
+      this.fingerprintingProtectionWritePrefs();
+    });
     setEventListener("standardArrow", "command", this.toggleExpansion);
     setEventListener("strictArrow", "command", this.toggleExpansion);
     setEventListener("customArrow", "command", this.toggleExpansion);
@@ -1277,6 +1338,15 @@ var gPrivacyPane = {
         "sitedata-option-block-cross-site-tracking-cookies"
       );
     }
+
+    Preferences.get("privacy.resistFingerprinting").on(
+      "change",
+      setUpContentBlockingWarnings
+    );
+    Preferences.get("privacy.resistFingerprinting.pbmode").on(
+      "change",
+      setUpContentBlockingWarnings
+    );
 
     setUpContentBlockingWarnings();
 
@@ -1589,6 +1659,32 @@ var gPrivacyPane = {
   },
 
   /**
+   * Selects the right item of the Fingerprinting Protection menulist and
+   * checkbox.
+   */
+  fingerprintingProtectionReadPrefs() {
+    let enabledPref = Preferences.get("privacy.fingerprintingProtection");
+    let pbmPref = Preferences.get("privacy.fingerprintingProtection.pbmode");
+    let fppMenu = document.getElementById("fingerprintingProtectionMenu");
+    let fppCheckbox = document.getElementById(
+      "contentBlockingFingerprintingProtectionCheckbox"
+    );
+
+    // Global enable takes precedence over enabled in Private Browsing.
+    if (enabledPref.value) {
+      fppMenu.value = "always";
+      fppCheckbox.checked = true;
+    } else if (pbmPref.value) {
+      fppMenu.value = "private";
+      fppCheckbox.checked = true;
+    } else {
+      fppMenu.value = "never";
+      fppCheckbox.checked = false;
+    }
+    fppMenu.disabled = !fppCheckbox.checked;
+  },
+
+  /**
    * Selects the right items of the new Cookies & Site Data UI.
    */
   networkCookieBehaviorReadPrefs() {
@@ -1696,6 +1792,43 @@ var gPrivacyPane = {
         if (stpCookiePref.value) {
           stpPref.value = false;
         }
+        break;
+    }
+  },
+
+  fingerprintingProtectionWritePrefs() {
+    let enabledPref = Preferences.get("privacy.fingerprintingProtection");
+    let pbmPref = Preferences.get("privacy.fingerprintingProtection.pbmode");
+    let fppMenu = document.getElementById("fingerprintingProtectionMenu");
+    let fppCheckbox = document.getElementById(
+      "contentBlockingFingerprintingProtectionCheckbox"
+    );
+
+    let value;
+    if (fppCheckbox.checked) {
+      if (fppMenu.value == "never") {
+        fppMenu.value = "private";
+      }
+      value = fppMenu.value;
+    } else {
+      fppMenu.value = "never";
+      value = "never";
+    }
+
+    fppMenu.disabled = !fppCheckbox.checked;
+
+    switch (value) {
+      case "always":
+        enabledPref.value = true;
+        pbmPref.value = true;
+        break;
+      case "private":
+        enabledPref.value = false;
+        pbmPref.value = true;
+        break;
+      case "never":
+        enabledPref.value = false;
+        pbmPref.value = false;
         break;
     }
   },
@@ -2478,6 +2611,10 @@ var gPrivacyPane = {
     document.getElementById("firefoxSuggestBestMatchContainer").hidden =
       !UrlbarPrefs.get("bestMatchEnabled");
 
+    document.getElementById("clipboardSuggestion").hidden = !UrlbarPrefs.get(
+      "clipboard.featureGate"
+    );
+
     let container = document.getElementById("firefoxSuggestContainer");
 
     if (UrlbarPrefs.get("quickSuggestEnabled")) {
@@ -2885,6 +3022,22 @@ var gPrivacyPane = {
   },
 
   /**
+   * Set up the initial state for the GPC/DNT UI.
+   * The GPC part should only appear if the functionality is
+   * enabled.
+   */
+  _initGlobalPrivacyControlUI() {
+    let gpcEnabledPrefValue = Services.prefs.getBoolPref(
+      "privacy.globalprivacycontrol.functionality.enabled",
+      false
+    );
+    document.getElementById("globalPrivacyControlBox").hidden =
+      !gpcEnabledPrefValue;
+    document.getElementById("doNotTrackBox").hidden = !gpcEnabledPrefValue;
+    document.getElementById("legacyDoNotTrackBox").hidden = gpcEnabledPrefValue;
+  },
+
+  /**
    * Set up the initial state for the password generation UI.
    * It will be hidden unless the .available pref is true
    */
@@ -2954,8 +3107,8 @@ var gPrivacyPane = {
     document.getElementById("passwordExceptions").disabled = !prefValue;
     document.getElementById("generatePasswords").disabled = !prefValue;
     document.getElementById("passwordAutofillCheckbox").disabled = !prefValue;
-    document.getElementById("relayIntegration").disabled = !prefValue;
-
+    document.getElementById("relayIntegration").disabled =
+      !prefValue || Services.prefs.prefIsLocked("signon.firefoxRelay.feature");
     // don't override pref value in UI
     return undefined;
   },
@@ -2994,7 +3147,7 @@ var gPrivacyPane = {
     var warn = Preferences.get("xpinstall.whitelist.required");
     var exceptions = document.getElementById("addonExceptions");
 
-    exceptions.disabled = !warn.value;
+    exceptions.disabled = !warn.value || warn.locked;
 
     // don't override the preference value
     return undefined;

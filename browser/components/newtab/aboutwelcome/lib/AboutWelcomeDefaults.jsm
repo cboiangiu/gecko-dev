@@ -53,7 +53,7 @@ const MR_ABOUT_WELCOME_DEFAULT = {
           string_id: "onboarding-device-migration-title",
         },
         subtitle: {
-          string_id: "onboarding-device-migration-subtitle",
+          string_id: "onboarding-device-migration-subtitle2",
         },
         primary_button: {
           label: {
@@ -690,13 +690,6 @@ async function prepareContentForReact(content) {
     return content;
   }
 
-  // Change content for Windows 7 because non-light themes aren't quite right.
-  if (AppConstants.isPlatformAndVersionAtMost("win", "6.1")) {
-    await lazy.AWScreenUtils.removeScreens(screens, screen =>
-      ["theme"].includes(screen.content?.tiles?.type)
-    );
-  }
-
   // Set the primary import button source based on attribution.
   if (content?.ua) {
     // If available, add the browser source to action data
@@ -771,13 +764,6 @@ async function prepareContentForReact(content) {
         "SHOW_FIREFOX_ACCOUNTS"
     )?.content.secondary_button_top;
     content.skipFxA = true;
-  }
-
-  // Remove the English-only image caption.
-  if (Services.locale.appLocaleAsBCP47.split("-")[0] !== "en") {
-    delete content.screens?.find(
-      screen => screen.content?.help_text?.deleteIfNotEn
-    )?.content.help_text;
   }
 
   let shouldRemoveLanguageMismatchScreen = true;

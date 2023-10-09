@@ -174,7 +174,7 @@ class AsyncFreeSnowWhite : public Runnable {
 
   nsresult Dispatch() {
     nsCOMPtr<nsIRunnable> self(this);
-    return NS_DispatchToCurrentThreadQueue(self.forget(), 500,
+    return NS_DispatchToCurrentThreadQueue(self.forget(), 1000,
                                            EventQueuePriority::Idle);
   }
 
@@ -1836,9 +1836,6 @@ static void ReportRealmStats(const JS::RealmStats& realmStats,
                  realmStats.nonSyntacticLexicalScopesTable,
                  "The non-syntactic lexical scopes table.");
 
-  ZRREPORT_BYTES(realmJSPathPrefix + "jit-realm"_ns, realmStats.jitRealm,
-                 "The JIT realm.");
-
   if (sundriesGCHeap > 0) {
     // We deliberately don't use ZRREPORT_GC_BYTES here.
     REPORT_GC_BYTES(
@@ -2530,10 +2527,6 @@ void JSReporter::CollectReports(WindowPaths* windowPaths,
   REPORT_BYTES("explicit/js-non-window/helper-thread/heap-other"_ns, KIND_HEAP,
                gStats.helperThread.stateData,
                "Memory used by HelperThreadState.");
-
-  REPORT_BYTES("explicit/js-non-window/helper-thread/parse-task"_ns, KIND_HEAP,
-               gStats.helperThread.parseTask,
-               "The memory used by ParseTasks waiting in HelperThreadState.");
 
   REPORT_BYTES(
       "explicit/js-non-window/helper-thread/ion-compile-task"_ns, KIND_HEAP,

@@ -8,11 +8,8 @@ with Files("**"):
     BUG_COMPONENT = ("Core", "MathML")
 
 if CONFIG["ENABLE_TESTS"]:
-    MOCHITEST_MANIFESTS += [
-        "tests/mochitest.ini",
-    ]
     MOCHITEST_CHROME_MANIFESTS += [
-        "tests/chrome.ini",
+        "tests/chrome.toml",
     ]
 
 UNIFIED_SOURCES += [

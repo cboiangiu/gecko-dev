@@ -254,6 +254,27 @@ describe("MultiStageAboutWelcomeProton module", () => {
       assert.equal(wrapper.find(".steps").exists(), false);
     });
 
+    it("should render a steps indicator above action buttons", () => {
+      const SCREEN_PROPS = {
+        content: {
+          title: "test title",
+          progress_bar: true,
+          primary_button: {},
+        },
+        aboveButtonStepsIndicator: true,
+        totalNumberOfScreens: 2,
+      };
+      const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
+      assert.ok(wrapper.exists());
+
+      const stepsIndicator = wrapper.find(".steps");
+      assert.ok(stepsIndicator, true);
+
+      const stepsDOMNode = stepsIndicator.getDOMNode();
+      const siblingElement = stepsDOMNode.nextElementSibling;
+      assert.equal(siblingElement.classList.contains("action-buttons"), true);
+    });
+
     it("should render a progress bar if there are 2 steps", () => {
       const SCREEN_PROPS = {
         content: {
@@ -277,6 +298,77 @@ describe("MultiStageAboutWelcomeProton module", () => {
       const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
       assert.ok(wrapper.exists());
       assert.equal(wrapper.find("[layout='inline']").exists(), true);
+    });
+
+    it("should render an inline image with alt text and height property", async () => {
+      const SCREEN_PROPS = {
+        content: {
+          above_button_content: [
+            {
+              type: "image",
+              url: "https://example.com/test.svg",
+              height: "auto",
+              alt_text: "test alt text",
+            },
+          ],
+        },
+      };
+      const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
+      assert.ok(wrapper.exists());
+      const imageEl = wrapper.find(".inline-image img");
+      assert.equal(imageEl.exists(), true);
+      assert.propertyVal(imageEl.prop("style"), "height", "auto");
+      const altTextCointainer = wrapper.find(".sr-only");
+      assert.equal(altTextCointainer.contains("test alt text"), true);
+    });
+
+    it("should render multiple inline elements in correct order", async () => {
+      const SCREEN_PROPS = {
+        content: {
+          above_button_content: [
+            {
+              type: "image",
+              url: "https://example.com/test.svg",
+              height: "auto",
+              alt_text: "test alt text",
+            },
+            {
+              type: "text",
+              text: {
+                string_id: "test-string-id",
+              },
+              link_keys: ["privacy_policy", "terms_of_use"],
+            },
+            {
+              type: "image",
+              url: "https://example.com/test_2.svg",
+              height: "auto",
+              alt_text: "test alt text 2",
+            },
+            {
+              type: "text",
+              text: {
+                string_id: "test-string-id-2",
+              },
+              link_keys: ["privacy_policy", "terms_of_use"],
+            },
+          ],
+        },
+      };
+
+      const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
+      assert.ok(wrapper.exists());
+      const imageEl = wrapper.find(".inline-image img");
+      const textEl = wrapper.find(".link-paragraph");
+
+      assert.equal(imageEl.length, 2);
+      assert.equal(textEl.length, 2);
+
+      assert.equal(imageEl.at(0).prop("src"), "https://example.com/test.svg");
+      assert.equal(imageEl.at(1).prop("src"), "https://example.com/test_2.svg");
+
+      assert.equal(textEl.at(0).prop("data-l10n-id"), "test-string-id");
+      assert.equal(textEl.at(1).prop("data-l10n-id"), "test-string-id-2");
     });
   });
 
@@ -391,31 +483,6 @@ describe("MultiStageAboutWelcomeProton module", () => {
 
       assert.property(data, "skipFxA", true);
       assert.notProperty(data.screens[0].content, "secondary_button_top");
-    });
-    it("should remove the caption if deleteIfNotEn is true", async () => {
-      sandbox.stub(global.Services.locale, "appLocaleAsBCP47").value("de");
-
-      const data = await prepConfig({
-        id: "DEFAULT_ABOUTWELCOME_PROTON",
-        template: "multistage",
-        transitions: true,
-        background_url:
-          "chrome://activity-stream/content/data/content/assets/confetti.svg",
-        screens: [
-          {
-            id: "AW_PIN_FIREFOX",
-            content: {
-              position: "corner",
-              help_text: {
-                deleteIfNotEn: true,
-                string_id: "mr1-onboarding-welcome-image-caption",
-              },
-            },
-          },
-        ],
-      });
-
-      assert.notProperty(data.screens[0].content, "help_text");
     });
   });
 
@@ -539,72 +606,6 @@ describe("MultiStageAboutWelcomeProton module", () => {
         "source",
         "test"
       );
-    });
-    it("should remove theme screens on win7", async () => {
-      sandbox
-        .stub(global.AppConstants, "isPlatformAndVersionAtMost")
-        .returns(true);
-      sandbox
-        .stub(global.AWScreenUtils, "removeScreens")
-        .callsFake((screens, screen) =>
-          AWScreenUtils.removeScreens(screens, screen)
-        );
-
-      const { screens } = await AboutWelcomeDefaults.prepareContentForReact({
-        screens: [
-          {
-            content: {
-              tiles: { type: "theme" },
-            },
-          },
-          { id: "hello" },
-          {
-            content: {
-              tiles: { type: "theme" },
-            },
-          },
-          { id: "world" },
-        ],
-      });
-
-      assert.deepEqual(screens, [{ id: "hello" }, { id: "world" }]);
-    });
-    it("shouldn't remove colorway screens on win7", async () => {
-      sandbox
-        .stub(global.AppConstants, "isPlatformAndVersionAtMost")
-        .returns(true);
-      sandbox
-        .stub(global.AWScreenUtils, "removeScreens")
-        .callsFake((screens, screen) =>
-          AWScreenUtils.removeScreens(screens, screen)
-        );
-
-      const { screens } = await AboutWelcomeDefaults.prepareContentForReact({
-        screens: [
-          {
-            content: {
-              tiles: { type: "colorway" },
-            },
-          },
-          { id: "hello" },
-          {
-            content: {
-              tiles: { type: "theme" },
-            },
-          },
-          { id: "world" },
-        ],
-      });
-
-      assert.deepEqual(screens, [
-        {
-          content: {
-            tiles: { type: "colorway" },
-          },
-        },
-        { id: "hello" },
-        { id: "world" },
-      ]);
     });
   });
 });

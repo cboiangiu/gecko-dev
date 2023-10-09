@@ -19,6 +19,7 @@
 #include "wasm/WasmFrameIter.h"
 
 #include "jit/JitFrames.h"
+#include "js/ColumnNumber.h"  // JS::WasmFunctionIndex, LimitedColumnNumberZeroOrigin, JS::TaggedColumnNumberZeroOrigin, JS::TaggedColumnNumberOneOrigin
 #include "vm/JitActivation.h"  // js::jit::JitActivation
 #include "vm/JSContext.h"
 #include "wasm/WasmDebugFrame.h"
@@ -267,7 +268,7 @@ JSAtom* WasmFrameIter::functionDisplayAtom() const {
   JSAtom* atom = instance()->getFuncDisplayAtom(cx, codeRange_->funcIndex());
   if (!atom) {
     cx->clearPendingException();
-    return cx->names().empty;
+    return cx->names().empty_;
   }
 
   return atom;
@@ -283,29 +284,23 @@ uint32_t WasmFrameIter::funcIndex() const {
   return codeRange_->funcIndex();
 }
 
-unsigned WasmFrameIter::computeLine(uint32_t* column) const {
+unsigned WasmFrameIter::computeLine(
+    JS::TaggedColumnNumberZeroOrigin* column) const {
   if (instance()->isAsmJS()) {
     if (column) {
-      *column = 1;
+      *column =
+          JS::TaggedColumnNumberZeroOrigin(JS::LimitedColumnNumberZeroOrigin(
+              JS::WasmFunctionIndex::
+                  DefaultBinarySourceColumnNumberZeroOrigin));
     }
     return lineOrBytecode_;
   }
 
-  // As a terrible hack to avoid changing the tons of places that pass around
-  // (url, line, column) tuples to instead passing around a Variant that
-  // stores a (url, func-index, bytecode-offset) tuple for wasm frames,
-  // wasm stuffs its tuple into the existing (url, line, column) tuple,
-  // tagging the high bit of the column to indicate "this is a wasm frame".
-  // When knowing clients see this bit, they shall render the tuple
-  // (url, line, column|bit) as "url:wasm-function[column]:0xline" according
-  // to the WebAssembly Web API's Developer-Facing Display Conventions.
-  //   https://webassembly.github.io/spec/web-api/index.html#conventions
-  // The wasm bytecode offset continues to be passed as the JS line to avoid
-  // breaking existing devtools code written when this used to be the case.
-
-  MOZ_ASSERT(!(codeRange_->funcIndex() & ColumnBit));
+  MOZ_ASSERT(!(codeRange_->funcIndex() &
+               JS::TaggedColumnNumberZeroOrigin::WasmFunctionTag));
   if (column) {
-    *column = codeRange_->funcIndex() | ColumnBit;
+    *column = JS::TaggedColumnNumberZeroOrigin(
+        JS::WasmFunctionIndex(codeRange_->funcIndex()));
   }
   return lineOrBytecode_;
 }
@@ -698,13 +693,48 @@ void wasm::GenerateFunctionPrologue(MacroAssembler& masm,
 
     switch (callIndirectId.kind()) {
       case CallIndirectIdKind::Global: {
-        Register scratch = WasmTableCallScratchReg0;
+        Label fail;
+        Register scratch1 = WasmTableCallScratchReg0;
+        Register scratch2 = WasmTableCallScratchReg1;
+
+        // Check if this function's type is exactly the expected function type
         masm.loadPtr(
-            Address(InstanceReg, Instance::offsetInData(
-                                     callIndirectId.instanceDataOffset())),
-            scratch);
+            Address(InstanceReg,
+                    Instance::offsetInData(
+                        callIndirectId.instanceDataOffset() +
+                        offsetof(wasm::TypeDefInstanceData, superTypeVector))),
+            scratch1);
         masm.branchPtr(Assembler::Condition::Equal, WasmTableCallSigReg,
-                       scratch, &functionBody);
+                       scratch1, &functionBody);
+
+        // Otherwise, we need to see if this function's type is a sub type of
+        // the expected function type. This requires us to check if the
+        // expected's type is in the super type vector of this function's type.
+        //
+        // We can skip this if our function type has no super types.
+        if (callIndirectId.hasSuperType()) {
+          // Check if the expected function type was an immediate, not a
+          // type definition. Because we only allow the immediate form for
+          // final types without super types, this implies that we have a
+          // signature mismatch.
+          masm.branchTestPtr(Assembler::Condition::NonZero, WasmTableCallSigReg,
+                             Imm32(FuncType::ImmediateBit), &fail);
+
+          // Load the subtyping depth of the expected function type. Re-use the
+          // index register, as it's no longer needed.
+          Register subTypingDepth = WasmTableCallIndexReg;
+          masm.load32(
+              Address(WasmTableCallSigReg,
+                      int32_t(SuperTypeVector::offsetOfSubTypingDepth())),
+              subTypingDepth);
+
+          // Perform the check
+          masm.branchWasmSTVIsSubtypeDynamicDepth(scratch1, WasmTableCallSigReg,
+                                                  subTypingDepth, scratch2,
+                                                  &functionBody, true);
+        }
+
+        masm.bind(&fail);
         masm.wasmTrap(Trap::IndirectCallBadSig, BytecodeOffset(0));
         break;
       }
@@ -860,14 +890,16 @@ void wasm::GenerateJitEntryPrologue(MacroAssembler& masm,
     offsets->begin = masm.currentOffset();
     masm.push(ra);
 #elif defined(JS_CODEGEN_ARM64)
-    AutoForbidPoolsAndNops afp(&masm,
-                               /* number of instructions in scope = */ 4);
-    offsets->begin = masm.currentOffset();
-    static_assert(BeforePushRetAddr == 0);
-    // Subtract from SP first as SP must be aligned before offsetting.
-    masm.Sub(sp, sp, 16);
-    static_assert(JitFrameLayout::offsetOfReturnAddress() == 8);
-    masm.Str(ARMRegister(lr, 64), MemOperand(sp, 8));
+    {
+      AutoForbidPoolsAndNops afp(&masm,
+                                 /* number of instructions in scope = */ 4);
+      offsets->begin = masm.currentOffset();
+      static_assert(BeforePushRetAddr == 0);
+      // Subtract from SP first as SP must be aligned before offsetting.
+      masm.Sub(sp, sp, 16);
+      static_assert(JitFrameLayout::offsetOfReturnAddress() == 8);
+      masm.Str(ARMRegister(lr, 64), MemOperand(sp, 8));
+    }
 #else
     // The x86/x64 call instruction pushes the return address.
     offsets->begin = masm.currentOffset();
@@ -895,23 +927,25 @@ void wasm::GenerateJitEntryEpilogue(MacroAssembler& masm,
                                     CallableOffsets* offsets) {
   DebugOnly<uint32_t> poppedFP{};
 #ifdef JS_CODEGEN_ARM64
-  RegisterOrSP sp = masm.getStackPointer();
-  AutoForbidPoolsAndNops afp(&masm,
-                             /* number of instructions in scope = */ 5);
-  masm.loadPtr(Address(sp, 8), lr);
-  masm.loadPtr(Address(sp, 0), FramePointer);
-  poppedFP = masm.currentOffset();
+  {
+    RegisterOrSP sp = masm.getStackPointer();
+    AutoForbidPoolsAndNops afp(&masm,
+                               /* number of instructions in scope = */ 5);
+    masm.loadPtr(Address(sp, 8), lr);
+    masm.loadPtr(Address(sp, 0), FramePointer);
+    poppedFP = masm.currentOffset();
 
-  masm.addToStackPtr(Imm32(2 * sizeof(void*)));
-  // Copy SP into PSP to enforce return-point invariants (SP == PSP).
-  // `addToStackPtr` won't sync them because SP is the active pointer here.
-  // For the same reason, we can't use initPseudoStackPtr to do the sync, so
-  // we have to do it "by hand".  Omitting this causes many tests to segfault.
-  masm.moveStackPtrTo(PseudoStackPointer);
+    masm.addToStackPtr(Imm32(2 * sizeof(void*)));
+    // Copy SP into PSP to enforce return-point invariants (SP == PSP).
+    // `addToStackPtr` won't sync them because SP is the active pointer here.
+    // For the same reason, we can't use initPseudoStackPtr to do the sync, so
+    // we have to do it "by hand".  Omitting this causes many tests to segfault.
+    masm.moveStackPtrTo(PseudoStackPointer);
 
-  offsets->ret = masm.currentOffset();
-  masm.Ret(ARMRegister(lr, 64));
-  masm.setFramePushed(0);
+    offsets->ret = masm.currentOffset();
+    masm.Ret(ARMRegister(lr, 64));
+    masm.setFramePushed(0);
+  }
 #else
   // Forbid pools for the same reason as described in GenerateCallablePrologue.
 #  if defined(JS_CODEGEN_ARM)
@@ -1069,6 +1103,21 @@ static bool CanUnwindSignatureCheck(uint8_t* fp) {
   // If a JIT call or JIT/interpreter entry was found,
   // unwinding is not possible.
   return code && !codeRange->isEntry();
+}
+
+static bool GetUnwindInfo(const CodeSegment* codeSegment,
+                          const CodeRange* codeRange, uint8_t* pc,
+                          const CodeRangeUnwindInfo** info) {
+  if (!codeSegment->isModule()) {
+    return false;
+  }
+  if (!codeRange->isFunction() || !codeRange->funcHasUnwindInfo()) {
+    return false;
+  }
+
+  const ModuleSegment* segment = codeSegment->asModule();
+  *info = segment->code().lookupUnwindInfo(pc);
+  return *info;
 }
 
 const Instance* js::wasm::GetNearestEffectiveInstance(const Frame* fp) {
@@ -1330,6 +1379,33 @@ bool js::wasm::StartUnwinding(const RegisterState& registers,
           break;
         }
 
+        const CodeRangeUnwindInfo* unwindInfo;
+        if (codeSegment &&
+            GetUnwindInfo(codeSegment, codeRange, pc, &unwindInfo)) {
+          switch (unwindInfo->unwindHow()) {
+            case CodeRangeUnwindInfo::RestoreFpRa:
+              fixedPC = (uint8_t*)registers.tempRA;
+              fixedFP = (uint8_t*)registers.tempFP;
+              break;
+            case CodeRangeUnwindInfo::RestoreFp:
+              fixedPC = sp[0];
+              fixedFP = (uint8_t*)registers.tempFP;
+              break;
+            case CodeRangeUnwindInfo::UseFpLr:
+              fixedPC = (uint8_t*)registers.lr;
+              fixedFP = fp;
+              break;
+            case CodeRangeUnwindInfo::UseFp:
+              fixedPC = sp[0];
+              fixedFP = fp;
+              break;
+            default:
+              MOZ_CRASH();
+          }
+          MOZ_ASSERT(fixedPC && fixedFP);
+          break;
+        }
+
         // Not in the prologue/epilogue.
         fixedPC = pc;
         fixedFP = fp;
@@ -1545,21 +1621,21 @@ static const char* ThunkedNativeToDescription(SymbolicAddress func) {
     case SymbolicAddress::UModI64:
       return "call to native i64.rem_u (in wasm)";
     case SymbolicAddress::TruncateDoubleToUint64:
-      return "call to native i64.trunc_u/f64 (in wasm)";
+      return "call to native i64.trunc_f64_u (in wasm)";
     case SymbolicAddress::TruncateDoubleToInt64:
-      return "call to native i64.trunc_s/f64 (in wasm)";
+      return "call to native i64.trunc_f64_s (in wasm)";
     case SymbolicAddress::SaturatingTruncateDoubleToUint64:
-      return "call to native i64.trunc_u:sat/f64 (in wasm)";
+      return "call to native i64.trunc_sat_f64_u (in wasm)";
     case SymbolicAddress::SaturatingTruncateDoubleToInt64:
-      return "call to native i64.trunc_s:sat/f64 (in wasm)";
+      return "call to native i64.trunc_sat_f64_s (in wasm)";
     case SymbolicAddress::Uint64ToDouble:
-      return "call to native f64.convert_u/i64 (in wasm)";
+      return "call to native f64.convert_i64_u (in wasm)";
     case SymbolicAddress::Uint64ToFloat32:
-      return "call to native f32.convert_u/i64 (in wasm)";
+      return "call to native f32.convert_i64_u (in wasm)";
     case SymbolicAddress::Int64ToDouble:
-      return "call to native f64.convert_s/i64 (in wasm)";
+      return "call to native f64.convert_i64_s (in wasm)";
     case SymbolicAddress::Int64ToFloat32:
-      return "call to native f32.convert_s/i64 (in wasm)";
+      return "call to native f32.convert_i64_s (in wasm)";
 #if defined(JS_CODEGEN_ARM)
     case SymbolicAddress::aeabi_idivmod:
       return "call to native i32.div_s (in wasm)";
@@ -1700,6 +1776,10 @@ static const char* ThunkedNativeToDescription(SymbolicAddress func) {
       return "call to native array.new_data function";
     case SymbolicAddress::ArrayNewElem:
       return "call to native array.new_elem function";
+    case SymbolicAddress::ArrayInitData:
+      return "call to native array.init_data function";
+    case SymbolicAddress::ArrayInitElem:
+      return "call to native array.init_elem function";
     case SymbolicAddress::ArrayCopy:
       return "call to native array.copy function";
 #define OP(op, export, sa_name, abitype, entry, idx) \

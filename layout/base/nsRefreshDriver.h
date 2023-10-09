@@ -300,7 +300,7 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
    * Throttle or unthrottle the refresh driver.  This is done if the
    * corresponding presshell is hidden or shown.
    */
-  void SetActivity(bool aIsActive, bool aIsInActiveTab);
+  void SetActivity(bool aIsActive);
 
   /**
    * Return the prescontext we were initialized with
@@ -419,6 +419,16 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
     mNeedToUpdateIntersectionObservations = true;
   }
 
+  void EnsureResizeObserverUpdateHappens() {
+    EnsureTimerStarted();
+    mNeedToUpdateResizeObservers = true;
+  }
+
+  void ScheduleMediaQueryListenerUpdate() {
+    EnsureTimerStarted();
+    mMightNeedMediaQueryListenerUpdate = true;
+  }
+
   void EnsureContentRelevancyUpdateHappens() {
     EnsureTimerStarted();
     mNeedToUpdateContentRelevancy = true;
@@ -440,6 +450,8 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
     eHasVisualViewportResizeEvents = 1 << 4,
     eHasScrollEvents = 1 << 5,
     eHasVisualViewportScrollEvents = 1 << 6,
+    eHasPendingMediaQueryListeners = 1 << 7,
+    eNeedsToNotifyResizeObservers = 1 << 8,
   };
 
   void AddForceNotifyContentfulPaintPresContext(nsPresContext* aPresContext);
@@ -477,7 +489,7 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
     }
     operator RefPtr<nsARefreshObserver>() { return mObserver; }
   };
-  typedef nsTObserverArray<ObserverData> ObserverArray;
+  using ObserverArray = nsTObserverArray<ObserverData>;
   MOZ_CAN_RUN_SCRIPT
   void FlushAutoFocusDocuments();
   void RunFullscreenSteps();
@@ -486,6 +498,9 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   void RunFrameRequestCallbacks(mozilla::TimeStamp aNowTime);
   void UpdateIntersectionObservations(mozilla::TimeStamp aNowTime);
   void UpdateRelevancyOfContentVisibilityAutoFrames();
+  MOZ_CAN_RUN_SCRIPT void NotifyResizeObservers();
+  void MaybeIncreaseMeasuredTicksSinceLoading();
+  void EvaluateMediaQueriesAndReportChanges();
 
   enum class IsExtraTick {
     No,
@@ -504,8 +519,6 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   void EnsureTimerStarted(EnsureTimerStartedFlags aFlags = eNone);
   void StopTimer();
 
-  bool ComputeShouldBeThrottled() const;
-  bool ShouldStopActivityGracePeriod() const;
   void UpdateThrottledState();
 
   bool HasObservers() const;
@@ -587,13 +600,6 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> mViewManagerFlushCause;
 
   bool mThrottled : 1;
-  bool mIsActive : 1;
-  bool mIsInActiveTab : 1;
-  // We grant a period of activity to out-of-process iframes that are in the
-  // foreground tab but inactive (hidden), in case they can set themselves up
-  // and get shown soon enough (see bug 1745869).
-  bool mIsGrantingActivityGracePeriod : 1;
-  bool mHasGrantedActivityGracePeriod : 1;
   bool mNeedToRecomputeVisibility : 1;
   bool mTestControllingRefreshes : 1;
 
@@ -628,6 +634,14 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   // all our documents.
   bool mNeedToUpdateIntersectionObservations : 1;
 
+  // True if we need to flush in order to update intersection observations in
+  // all our documents.
+  bool mNeedToUpdateResizeObservers : 1;
+
+  // True if we might need to report media query changes in any of our
+  // documents.
+  bool mMightNeedMediaQueryListenerUpdate : 1;
+
   // True if we need to update the relevancy of `content-visibility: auto`
   // elements in our documents.
   bool mNeedToUpdateContentRelevancy : 1;
@@ -651,7 +665,6 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   mozilla::TimeStamp mNextThrottledFrameRequestTick;
   mozilla::TimeStamp mNextRecomputeVisibilityTick;
   mozilla::TimeStamp mBeforeFirstContentfulPaintTimerRunningLimit;
-  mozilla::TimeStamp mActivityGracePeriodStart;
 
   // separate arrays for each flush type we support
   ObserverArray mObservers[4];

@@ -123,6 +123,18 @@ ${helpers.predefined_type(
 )}
 
 ${helpers.predefined_type(
+    "font-synthesis-position",
+    "FontSynthesis",
+    engines="gecko",
+    initial_value="computed::FontSynthesis::Auto",
+    initial_specified_value="specified::FontSynthesis::Auto",
+    gecko_ffi_name="mFont.synthesisPosition",
+    animation_value_type="discrete",
+    spec="https://drafts.csswg.org/css-fonts-4/#font-synthesis-position",
+    affects="layout",
+)}
+
+${helpers.predefined_type(
     "font-stretch",
     "FontStretch",
     engines="gecko servo-2013 servo-2020",
@@ -344,6 +356,17 @@ ${helpers.predefined_type(
     affects="layout",
 )}
 
+${helpers.predefined_type(
+    "line-height",
+    "LineHeight",
+    "computed::LineHeight::normal()",
+    engines="gecko servo-2013 servo-2020",
+    animation_value_type="LineHeight",
+    spec="https://drafts.csswg.org/css2/visudet.html#propdef-line-height",
+    servo_restyle_damage="reflow",
+    affects="layout",
+)}
+
 % if engine == "gecko":
 pub mod system_font {
     //! We deal with system fonts here
@@ -473,7 +496,7 @@ ${helpers.single_keyword(
 ${helpers.predefined_type(
     "-moz-font-smoothing-background-color",
     "color::MozFontSmoothingBackgroundColor",
-    "computed::color::MozFontSmoothingBackgroundColor::TRANSPARENT",
+    "computed::color::MozFontSmoothingBackgroundColor::TRANSPARENT_BLACK",
     engines="gecko",
     animation_value_type="none",
     gecko_ffi_name="mFont.fontSmoothingBackgroundColor",

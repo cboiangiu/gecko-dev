@@ -24,6 +24,7 @@
 #include "mozilla/TextUtils.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <math.h>
 #include <string.h>
@@ -55,7 +56,6 @@
 #include "vm/JSObject.h"
 #include "vm/StringType.h"
 #include "vm/Time.h"
-#include "vm/WellKnownAtom.h"  // js_*_str
 
 #include "vm/Compartment-inl.h"  // For js::UnwrapAndTypeCheckThis
 #include "vm/GeckoProfiler-inl.h"
@@ -157,7 +157,8 @@ class DateTimeHelper {
   static double UTC(DateTimeInfo::ForceUTC forceUTC, double t);
   static JSString* timeZoneComment(JSContext* cx,
                                    DateTimeInfo::ForceUTC forceUTC,
-                                   double utcTime, double localTime);
+                                   const char* locale, double utcTime,
+                                   double localTime);
 #if !JS_HAS_INTL_API
   static size_t formatTime(DateTimeInfo::ForceUTC forceUTC, char* buf,
                            size_t buflen, const char* fmt, double utcTime,
@@ -1252,6 +1253,7 @@ static constexpr CharsAndAction keywords[] = {
   { "december", 12 },
   // Time zone abbreviations.
   { "gmt", 10000 + 0 },
+  { "z", 10000 + 0 },
   { "ut", 10000 + 0 },
   { "utc", 10000 + 0 },
   { "est", 10000 + 5 * 60 },
@@ -1452,7 +1454,16 @@ static bool ParseDate(DateTimeInfo::ForceUTC forceUTC, const CharT* s,
           return false;
         }
       } else if (index < length && c != ',' && c > ' ' && c != '-' &&
-                 c != '(') {
+                 c != '(' &&
+                 // Allow zulu time e.g. "09/26/1995 16:00Z"
+                 !(hour != -1 && strchr("Zz", c)) &&
+                 // Allow '.' after day of month i.e. DD.Mon.YYYY/Mon.DD.YYYY,
+                 // or after year/month in YYYY/MM/DD
+                 (c != '.' || mday != -1) &&
+                 // Allow month or AM/PM directly after a number
+                 (!IsAsciiAlpha(c) ||
+                  (mon != -1 && !(strchr("AaPp", c) && index < length - 1 &&
+                                  strchr("Mm", s[index + 1]))))) {
         return false;
       } else if (seenPlusMinus && n < 60) { /* handle GMT-3:30 */
         if (tzOffset < 0) {
@@ -2841,7 +2852,7 @@ static bool date_toUTCString(JSContext* cx, unsigned argc, Value* vp) {
 
   double utctime = unwrapped->UTCTime().toNumber();
   if (!std::isfinite(utctime)) {
-    args.rval().setString(cx->names().InvalidDate);
+    args.rval().setString(cx->names().Invalid_Date_);
     return true;
   }
 
@@ -2945,8 +2956,8 @@ static bool date_toJSON(JSContext* cx, unsigned argc, Value* vp) {
 #if JS_HAS_INTL_API
 JSString* DateTimeHelper::timeZoneComment(JSContext* cx,
                                           DateTimeInfo::ForceUTC forceUTC,
-                                          double utcTime, double localTime) {
-  const char* locale = cx->runtime()->getDefaultLocale();
+                                          const char* locale, double utcTime,
+                                          double localTime) {
   if (!locale) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_DEFAULT_LOCALE_ERROR);
@@ -2971,7 +2982,7 @@ JSString* DateTimeHelper::timeZoneComment(JSContext* cx,
   // Reject if the result string is empty.
   size_t len = js_strlen(timeZoneStart);
   if (len == 0) {
-    return cx->names().empty;
+    return cx->names().empty_;
   }
 
   // Parenthesize the returned display name.
@@ -3019,7 +3030,8 @@ size_t DateTimeHelper::formatTime(DateTimeInfo::ForceUTC forceUTC, char* buf,
 
 JSString* DateTimeHelper::timeZoneComment(JSContext* cx,
                                           DateTimeInfo::ForceUTC forceUTC,
-                                          double utcTime, double localTime) {
+                                          const char* locale, double utcTime,
+                                          double localTime) {
   char tzbuf[100];
 
   size_t tzlen =
@@ -3049,17 +3061,17 @@ JSString* DateTimeHelper::timeZoneComment(JSContext* cx,
     }
   }
 
-  return cx->names().empty;
+  return cx->names().empty_;
 }
 #endif /* JS_HAS_INTL_API */
 
 enum class FormatSpec { DateTime, Date, Time };
 
 static bool FormatDate(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
-                       double utcTime, FormatSpec format,
+                       const char* locale, double utcTime, FormatSpec format,
                        MutableHandleValue rval) {
   if (!std::isfinite(utcTime)) {
-    rval.setString(cx->names().InvalidDate);
+    rval.setString(cx->names().Invalid_Date_);
     return true;
   }
 
@@ -3092,8 +3104,8 @@ static bool FormatDate(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
     // also means the time zone string may not fit into Latin-1.
 
     // Get a time zone string from the OS or ICU to include as a comment.
-    timeZoneComment =
-        DateTimeHelper::timeZoneComment(cx, forceUTC, utcTime, localTime);
+    timeZoneComment = DateTimeHelper::timeZoneComment(cx, forceUTC, locale,
+                                                      utcTime, localTime);
     if (!timeZoneComment) {
       return false;
     }
@@ -3143,12 +3155,15 @@ static bool FormatDate(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
 }
 
 #if !JS_HAS_INTL_API
-static bool ToLocaleFormatHelper(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
-                                 double utcTime, const char* format,
-                                 MutableHandleValue rval) {
+static bool ToLocaleFormatHelper(JSContext* cx, DateObject* unwrapped,
+                                 const char* format, MutableHandleValue rval) {
+  DateTimeInfo::ForceUTC forceUTC = unwrapped->forceUTC();
+  const char* locale = unwrapped->realm()->getLocale();
+  double utcTime = unwrapped->UTCTime().toNumber();
+
   char buf[100];
   if (!std::isfinite(utcTime)) {
-    strcpy(buf, js_InvalidDate_str);
+    strcpy(buf, "InvalidDate");
   } else {
     double localTime = LocalTime(forceUTC, utcTime);
 
@@ -3158,7 +3173,8 @@ static bool ToLocaleFormatHelper(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
 
     /* If it failed, default to toString. */
     if (result_len == 0) {
-      return FormatDate(cx, forceUTC, utcTime, FormatSpec::DateTime, rval);
+      return FormatDate(cx, forceUTC, locale, utcTime, FormatSpec::DateTime,
+                        rval);
     }
 
     /* Hacked check against undesired 2-digit year 00/00/00 form. */
@@ -3213,9 +3229,7 @@ static bool date_toLocaleString(JSContext* cx, unsigned argc, Value* vp) {
 #  endif
       ;
 
-  return ToLocaleFormatHelper(cx, unwrapped->forceUTC(),
-                              unwrapped->UTCTime().toNumber(), format,
-                              args.rval());
+  return ToLocaleFormatHelper(cx, unwrapped, format, args.rval());
 }
 
 static bool date_toLocaleDateString(JSContext* cx, unsigned argc, Value* vp) {
@@ -3241,9 +3255,7 @@ static bool date_toLocaleDateString(JSContext* cx, unsigned argc, Value* vp) {
 #  endif
       ;
 
-  return ToLocaleFormatHelper(cx, unwrapped->forceUTC(),
-                              unwrapped->UTCTime().toNumber(), format,
-                              args.rval());
+  return ToLocaleFormatHelper(cx, unwrapped, format, args.rval());
 }
 
 static bool date_toLocaleTimeString(JSContext* cx, unsigned argc, Value* vp) {
@@ -3257,9 +3269,7 @@ static bool date_toLocaleTimeString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return ToLocaleFormatHelper(cx, unwrapped->forceUTC(),
-                              unwrapped->UTCTime().toNumber(), "%X",
-                              args.rval());
+  return ToLocaleFormatHelper(cx, unwrapped, "%X", args.rval());
 }
 #endif /* !JS_HAS_INTL_API */
 
@@ -3273,8 +3283,9 @@ static bool date_toTimeString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->UTCTime().toNumber(),
-                    FormatSpec::Time, args.rval());
+  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->realm()->getLocale(),
+                    unwrapped->UTCTime().toNumber(), FormatSpec::Time,
+                    args.rval());
 }
 
 static bool date_toDateString(JSContext* cx, unsigned argc, Value* vp) {
@@ -3287,8 +3298,9 @@ static bool date_toDateString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->UTCTime().toNumber(),
-                    FormatSpec::Date, args.rval());
+  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->realm()->getLocale(),
+                    unwrapped->UTCTime().toNumber(), FormatSpec::Date,
+                    args.rval());
 }
 
 static bool date_toSource(JSContext* cx, unsigned argc, Value* vp) {
@@ -3324,8 +3336,9 @@ bool date_toString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->UTCTime().toNumber(),
-                    FormatSpec::DateTime, args.rval());
+  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->realm()->getLocale(),
+                    unwrapped->UTCTime().toNumber(), FormatSpec::DateTime,
+                    args.rval());
 }
 
 bool js::date_valueOf(JSContext* cx, unsigned argc, Value* vp) {
@@ -3445,21 +3458,21 @@ static const JSFunctionSpec date_methods[] = {
     JS_FN("toTemporalInstant", date_toTemporalInstant, 0, 0),
 #endif
 #if JS_HAS_INTL_API
-    JS_SELF_HOSTED_FN(js_toLocaleString_str, "Date_toLocaleString", 0, 0),
+    JS_SELF_HOSTED_FN("toLocaleString", "Date_toLocaleString", 0, 0),
     JS_SELF_HOSTED_FN("toLocaleDateString", "Date_toLocaleDateString", 0, 0),
     JS_SELF_HOSTED_FN("toLocaleTimeString", "Date_toLocaleTimeString", 0, 0),
 #else
-    JS_FN(js_toLocaleString_str, date_toLocaleString, 0, 0),
+    JS_FN("toLocaleString", date_toLocaleString, 0, 0),
     JS_FN("toLocaleDateString", date_toLocaleDateString, 0, 0),
     JS_FN("toLocaleTimeString", date_toLocaleTimeString, 0, 0),
 #endif
     JS_FN("toDateString", date_toDateString, 0, 0),
     JS_FN("toTimeString", date_toTimeString, 0, 0),
     JS_FN("toISOString", date_toISOString, 0, 0),
-    JS_FN(js_toJSON_str, date_toJSON, 1, 0),
-    JS_FN(js_toSource_str, date_toSource, 0, 0),
-    JS_FN(js_toString_str, date_toString, 0, 0),
-    JS_FN(js_valueOf_str, date_valueOf, 0, 0),
+    JS_FN("toJSON", date_toJSON, 1, 0),
+    JS_FN("toSource", date_toSource, 0, 0),
+    JS_FN("toString", date_toString, 0, 0),
+    JS_FN("valueOf", date_valueOf, 0, 0),
     JS_SYM_FN(toPrimitive, date_toPrimitive, 1, JSPROP_READONLY),
     JS_FS_END};
 
@@ -3481,8 +3494,8 @@ static bool NewDateObject(JSContext* cx, const CallArgs& args, ClippedTime t) {
 }
 
 static bool ToDateString(JSContext* cx, const CallArgs& args, ClippedTime t) {
-  return FormatDate(cx, ForceUTC(cx->realm()), t.toDouble(),
-                    FormatSpec::DateTime, args.rval());
+  return FormatDate(cx, ForceUTC(cx->realm()), cx->realm()->getLocale(),
+                    t.toDouble(), FormatSpec::DateTime, args.rval());
 }
 
 static bool DateNoArguments(JSContext* cx, const CallArgs& args) {
@@ -3673,7 +3686,7 @@ static const ClassSpec DateObjectClassSpec = {
     nullptr,
     FinishDateClassInit};
 
-const JSClass DateObject::class_ = {js_Date_str,
+const JSClass DateObject::class_ = {"Date",
                                     JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS) |
                                         JSCLASS_HAS_CACHED_PROTO(JSProto_Date),
                                     JS_NULL_CLASS_OPS, &DateObjectClassSpec};

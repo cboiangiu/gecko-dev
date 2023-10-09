@@ -45,11 +45,11 @@ def check_args(**kwargs):
 def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
     return {"adb_binary": kwargs["adb_binary"],
             "webdriver_binary": kwargs["webdriver_binary"],
-            "webdriver_args": kwargs["webdriver_args"],
+            "webdriver_args": kwargs["webdriver_args"].copy(),
             "package_name": kwargs["package_name"],
             "device_serial": kwargs["device_serial"],
             "prefs_root": kwargs["prefs_root"],
-            "extra_prefs": kwargs["extra_prefs"],
+            "extra_prefs": kwargs["extra_prefs"].copy(),
             "test_type": test_type,
             "debug_info": kwargs["debug_info"],
             "symbols_path": kwargs["symbols_path"],
@@ -57,7 +57,7 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
             "certutil_binary": kwargs["certutil_binary"],
             "ca_certificate_path": config.ssl_config["ca_cert_path"],
             "stackfix_dir": kwargs["stackfix_dir"],
-            "binary_args": kwargs["binary_args"],
+            "binary_args": kwargs["binary_args"].copy(),
             "timeout_multiplier": get_timeout_multiplier(test_type,
                                                          run_info_data,
                                                          **kwargs),
@@ -125,7 +125,6 @@ class ProfileCreator(FirefoxProfileCreator):
             "dom.disable_open_during_load": False,
             "places.history.enabled": False,
             "dom.send_after_paint_to_content": True,
-            "network.preload": True,
             "browser.tabs.remote.autostart": True,
         })
 
@@ -142,6 +141,17 @@ class ProfileCreator(FirefoxProfileCreator):
                 # Ensure that scrollbars are always painted
                 "layout.testing.overlay-scrollbars.always-visible": True,
             })
+
+        if self.test_type == "testharness":
+            # Allow only touch and wheel events for now to be routed via the
+            # parent process. This is a workaround for tests using testdriver.js
+            # until bug 1773393 is done.
+            #
+            # Note that we don't set it for wdspec tests since it isn't suitable
+            # to ship to WebDriver users.
+            profile.set_preferences({"test.events.async.enabled": True})
+            profile.set_preferences({"test.events.async.key.enabled": False})
+            profile.set_preferences({"test.events.async.mouse.enabled": False})
 
         profile.set_preferences({"fission.autostart": True})
         if self.disable_fission:
@@ -356,7 +366,6 @@ class FirefoxAndroidWdSpecBrowser(FirefoxWdSpecBrowser):
     def get_env(self, binary, debug_info, headless, chaos_mode_flags):
         env = get_environ(chaos_mode_flags)
         env["RUST_BACKTRACE"] = "1"
-        del env["MOZ_DISABLE_NONLOCAL_CONNECTIONS"]
         return env
 
     def executor_browser(self):

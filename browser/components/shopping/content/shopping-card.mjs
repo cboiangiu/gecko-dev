@@ -14,12 +14,13 @@ import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
  *
  * @property {string} label - The label text that will be used for the card header
  * @property {string} type - (optional) The type of card. No type specified
- *   will be the default card. The other available type is "accordion".
+ *   will be the default card. The other available types are "accordion" and "show-more".
  */
 class ShoppingCard extends MozLitElement {
   static properties = {
     label: { type: String },
     type: { type: String },
+    _isExpanded: { type: Boolean },
   };
 
   static get queries() {
@@ -33,10 +34,11 @@ class ShoppingCard extends MozLitElement {
       if (this.type === "accordion") {
         return html`
           <div id="label-wrapper">
-            <span id="header">${this.label}</span>
+            <h2 id="header">${this.label}</h2>
             <button
               tabindex="-1"
               class="icon chevron-icon ghost-button"
+              aria-labelledby="header"
               @click=${this.handleChevronButtonClick}
             ></button>
           </div>
@@ -44,7 +46,8 @@ class ShoppingCard extends MozLitElement {
       }
       return html`
         <div id="label-wrapper">
-          <span id="header">${this.label}</span><slot name="rating"></slot>
+          <h2 id="header">${this.label}</h2>
+          <slot name="rating"></slot>
         </div>
       `;
     }
@@ -54,10 +57,31 @@ class ShoppingCard extends MozLitElement {
   cardTemplate() {
     if (this.type === "accordion") {
       return html`
-        <details id="shopping-details">
+        <details id="shopping-details" @toggle=${this.onCardToggle}>
           <summary>${this.labelTemplate()}</summary>
           <div id="content"><slot name="content"></slot></div>
         </details>
+      `;
+    } else if (this.type === "show-more") {
+      return html`
+        ${this.labelTemplate()}
+        <article
+          id="content"
+          class="show-more"
+          aria-describedby="content"
+          expanded="false"
+        >
+          <slot name="content"></slot>
+
+          <footer>
+            <button
+              aria-controls="content"
+              class="small-button"
+              data-l10n-id="shopping-show-more-button"
+              @click=${this.handleShowMoreButtonClick}
+            ></button>
+          </footer>
+        </article>
       `;
     }
     return html`
@@ -66,6 +90,40 @@ class ShoppingCard extends MozLitElement {
         <slot name="content"></slot>
       </div>
     `;
+  }
+
+  onCardToggle() {
+    const action = this.detailsEl.open ? "expanded" : "collapsed";
+    let l10nId = this.getAttribute("data-l10n-id");
+    switch (l10nId) {
+      case "shopping-settings-label":
+        Glean.shopping.surfaceSettingsExpandClicked.record({ action });
+        break;
+      case "shopping-analysis-explainer-label":
+        Glean.shopping.surfaceShowQualityExplainerClicked.record({
+          action,
+        });
+        break;
+    }
+  }
+
+  handleShowMoreButtonClick(e) {
+    this._isExpanded = !this._isExpanded;
+    // toggle show more/show less text
+    e.target.setAttribute(
+      "data-l10n-id",
+      this._isExpanded
+        ? "shopping-show-less-button"
+        : "shopping-show-more-button"
+    );
+    // toggle content expanded attribute
+    e.target.parentElement.parentElement.attributes.expanded.value =
+      this._isExpanded;
+
+    let action = this._isExpanded ? "expanded" : "collapsed";
+    Glean.shopping.surfaceShowMoreReviewsButtonClicked.record({
+      action,
+    });
   }
 
   handleChevronButtonClick() {

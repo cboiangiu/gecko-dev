@@ -12,7 +12,7 @@ mozglue-static = { path = "../../../../mozglue/static/rust" }
 geckoservo = { path = "../../../../servo/ports/geckolib" }
 kvstore = { path = "../../../components/kvstore" }
 lmdb-rkv-sys = { version = "0.11", features = ["mdb_idl_logn_9"] }
-mp4parse_capi = { git = "https://github.com/mozilla/mp4parse-rust", rev = "12142fda2ba0870e1f00dd89506a8ace993aabe4", features = ["missing-pixi-permitted"] }
+mp4parse_capi = { git = "https://github.com/mozilla/mp4parse-rust", rev = "d262e40e7b80f949dcdb4db21caa6dbf1a8b2043", features = ["missing-pixi-permitted"] }
 nserror = { path = "../../../../xpcom/rust/nserror" }
 nsstring = { path = "../../../../xpcom/rust/nsstring" }
 netwerk_helper = { path = "../../../../netwerk/base/rust-helper" }
@@ -39,6 +39,7 @@ jsrust_shared = { path = "../../../../js/src/rust/shared" }
 cascade_bloom_filter = { path = "../../../components/cascade_bloom_filter" }
 cert_storage = { path = "../../../../security/manager/ssl/cert_storage" }
 crypto_hash = { path = "../../../../security/manager/ssl/crypto_hash" }
+data_storage = { path = "../../../../security/manager/ssl/data_storage" }
 bitsdownload = { path = "../../../components/bitsdownload", optional = true }
 storage = { path = "../../../../storage/rust" }
 bookmark_sync = { path = "../../../components/places/bookmark_sync", optional = true }
@@ -95,13 +96,10 @@ processtools = { path = "../../../components/processtools" }
 qcms = { path = "../../../../gfx/qcms", features = ["c_bindings", "neon"], default-features = false }
 
 wpf-gpu-raster = { git = "https://github.com/FirefoxGraphics/wpf-gpu-raster", rev = "5ab6fe33d00021325ee920b3c10526dc8301cf46" }
-aa-stroke = { git = "https://github.com/FirefoxGraphics/aa-stroke", rev = "cfe9ee39f5af56ae26004835d90c4bb2973ce519" }
+aa-stroke = { git = "https://github.com/FirefoxGraphics/aa-stroke", rev = "ed4206ea11703580cd1d4fc63371a527b29d8252" }
 
 # Force url to stay at 2.1.0. See bug 1734538.
 url = "=2.1.0"
-
-# Force mio to stay at 0.8.0 to avoid windows-sys dependencies.
-mio = "=0.8.0"
 
 # Since we're building with at least rustc 1.63, enable rust 1.57 features (use of try_reserve methods).
 fallible_collections = { version = "0.4", features = ["rust_1_57"] }
@@ -110,6 +108,7 @@ fallible_collections = { version = "0.4", features = ["rust_1_57"] }
 viaduct = "0.1"
 webext_storage_bridge = { path = "../../../components/extensions/storage/webext_storage_bridge" }
 tabs = { version = "0.1" }
+suggest = { version = "0.1" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 detect_win32k_conflicts = { path = "../../../xre/detect_win32k_conflicts" }
@@ -128,7 +127,7 @@ spidermonkey_rust = []
 smoosh = ["jsrust_shared/smoosh"]
 gecko_profiler = ["gecko-profiler/enabled", "profiler_helper"]
 gecko_profiler_parse_elf = ["profiler_helper/parse_elf"]
-libfuzzer = []
+libfuzzer = ["authrs_bridge/fuzzing"]
 webrtc = ["mdns_service"]
 glean_disable_upload = ["fog_control/disable_upload"]
 glean_million_queue = ["fog_control/million_queue"]
@@ -143,6 +142,7 @@ uniffi_fixtures = [
     "uniffi-fixture-external-types",
 ]
 webmidi_midir_impl = ["midir_impl"]
+icu4x = ["jsrust_shared/icu4x"]
 
 [lib]
 path = "lib.rs"

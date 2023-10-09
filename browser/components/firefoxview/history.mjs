@@ -43,11 +43,7 @@ class HistoryInView extends ViewPage {
   async connectedCallback() {
     super.connectedCallback();
     await this.updateHistoryData();
-    this.placesQuery.observeHistory(newHistory => {
-      this.resetHistoryMaps();
-      this.allHistoryItems = newHistory;
-      this.lists.forEach(list => list.requestUpdate());
-    });
+    this.placesQuery.observeHistory(data => this.#updateAllHistoryItems(data));
     XPCOMUtils.defineLazyPreferenceGetter(
       this,
       "importHistoryDismissedPref",
@@ -79,10 +75,29 @@ class HistoryInView extends ViewPage {
   disconnectedCallback() {
     super.disconnectedCallback();
     this.placesQuery.close();
-    this.migrationWizardDialog.removeEventListener(
+    this.migrationWizardDialog?.removeEventListener(
       "MigrationWizard:Close",
       this.migrationWizardDialog
     );
+  }
+
+  async #updateAllHistoryItems(allHistoryItems) {
+    if (allHistoryItems) {
+      this.allHistoryItems = allHistoryItems;
+    } else {
+      await this.updateHistoryData();
+    }
+    this.resetHistoryMaps();
+    this.lists.forEach(list => list.requestUpdate());
+  }
+
+  viewTabVisibleCallback() {
+    this.#updateAllHistoryItems();
+    this.placesQuery.observeHistory(data => this.#updateAllHistoryItems(data));
+  }
+
+  viewTabHiddenCallback() {
+    this.placesQuery.close();
   }
 
   static queries = {
@@ -90,6 +105,9 @@ class HistoryInView extends ViewPage {
     migrationWizardDialog: "#migrationWizardDialog",
     emptyState: "fxview-empty-state",
     lists: { all: "fxview-tab-list" },
+    showAllHistoryBtn: ".show-all-history-button",
+    sortInputs: { all: "input[name=history-sort-option]" },
+    panelList: "panel-list",
   };
 
   static properties = {
@@ -174,6 +192,15 @@ class HistoryInView extends ViewPage {
   }
 
   onPrimaryAction(e) {
+    // Record telemetry
+    Services.telemetry.recordEvent(
+      "firefoxview_next",
+      "history",
+      "visits",
+      null,
+      {}
+    );
+
     let currentWindow = this.getWindow();
     if (currentWindow.openTrustedLinkIn) {
       let where = lazy.BrowserUtils.whereToOpenLink(
@@ -195,14 +222,33 @@ class HistoryInView extends ViewPage {
 
   deleteFromHistory(e) {
     lazy.PlacesUtils.history.remove(this.triggerNode.url);
+    this.recordContextMenuTelemetry("delete-from-history", e);
   }
 
   async onChangeSortOption(e) {
     this.sortOption = e.target.value;
-    this.updateHistoryData();
+    Services.telemetry.recordEvent(
+      "firefoxview_next",
+      "sort_history",
+      "tabs",
+      null,
+      {
+        sort_type: this.sortOption,
+      }
+    );
+    await this.updateHistoryData();
   }
 
   showAllHistory() {
+    // Record telemetry
+    Services.telemetry.recordEvent(
+      "firefoxview_next",
+      "show_all_history",
+      "tabs",
+      null,
+      {}
+    );
+
     // Open History view in Library window
     this.getWindow().PlacesCommandHook.showPlacesOrganizer("History");
   }
@@ -253,7 +299,7 @@ class HistoryInView extends ViewPage {
 
   panelListTemplate() {
     return html`
-      <panel-list slot="menu">
+      <panel-list slot="menu" data-tab-type="history">
         <panel-item
           @click=${this.deleteFromHistory}
           data-l10n-id="firefoxview-history-context-delete"
@@ -287,14 +333,14 @@ class HistoryInView extends ViewPage {
         if (historyItem.items.length) {
           let dateArg = JSON.stringify({ date: historyItem.items[0].time });
           cardsTemplate.push(html`<card-container>
-            <h2
+            <h3
               slot="header"
               data-l10n-id=${historyItem.l10nId}
               data-l10n-args=${dateArg}
-            ></h2>
+            ></h3>
             <fxview-tab-list
               slot="main"
-              class="history"
+              class="with-context-menu"
               dateTimeFormat=${historyItem.l10nId.includes("prev-month")
                 ? "dateTime"
                 : "time"}
@@ -313,12 +359,12 @@ class HistoryInView extends ViewPage {
       this.historyMapBySite.forEach(historyItem => {
         if (historyItem.items.length) {
           cardsTemplate.push(html`<card-container>
-            <h2 slot="header" data-l10n-id="${ifDefined(historyItem.l10nId)}">
+            <h3 slot="header" data-l10n-id="${ifDefined(historyItem.l10nId)}">
               ${historyItem.domain}
-            </h2>
+            </h3>
             <fxview-tab-list
               slot="main"
-              class="history"
+              class="with-context-menu"
               dateTimeFormat="dateTime"
               hasPopup="menu"
               maxTabsLength=${this.maxTabsLength}
@@ -389,7 +435,10 @@ class HistoryInView extends ViewPage {
       />
       <dialog id="migrationWizardDialog"></dialog>
       <div class="sticky-container bottom-fade">
-        <h2 class="page-header" data-l10n-id="firefoxview-history-header"></h2>
+        <h2
+          class="page-header heading-large"
+          data-l10n-id="firefoxview-history-header"
+        ></h2>
         <div class="history-sort-options">
           <div class="history-sort-option">
             <input
@@ -456,11 +505,11 @@ class HistoryInView extends ViewPage {
         class="show-all-history-footer"
         ?hidden=${!this.allHistoryItems.size}
       >
-        <span
-          class="show-all-history-link"
+        <button
+          class="show-all-history-button"
           data-l10n-id="firefoxview-show-all-history"
           @click=${this.showAllHistory}
-        ></span>
+        ></button>
       </div>
     `;
   }

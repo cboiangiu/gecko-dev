@@ -11,6 +11,7 @@ from test_toolchain_helpers import CompilerResult
 
 from common import BaseConfigureTest
 from mozbuild.configure.options import InvalidOptionError
+from mozbuild.configure.util import Version
 
 
 class TestToolkitMozConfigure(BaseConfigureTest):
@@ -153,14 +154,19 @@ class TestToolkitMozConfigure(BaseConfigureTest):
             # Trick the sandbox into not running too much
             dep = sandbox._depends[sandbox["c_compiler"]]
             value_for_depends[(dep,)] = CompilerResult(
-                compiler="/usr/bin/mockcc", language="C", flags=[]
+                compiler="/usr/bin/mockcc",
+                language="C",
+                type="clang",
+                version=Version("16.0"),
+                flags=[],
             )
             dep = sandbox._depends[sandbox["readelf"]]
             value_for_depends[(dep,)] = "/usr/bin/readelf"
 
             return (
-                sandbox._value_for(sandbox["pack_relative_relocs"]),
-                sandbox._value_for(sandbox["use_elf_hack"]),
+                sandbox._value_for(sandbox["select_linker"]).KIND,
+                sandbox._value_for(sandbox["pack_relative_relocs_flags"]),
+                sandbox._value_for(sandbox["which_elf_hack"]),
             )
 
         PACK = ["-Wl,-z,pack-relative-relocs"]
@@ -178,36 +184,68 @@ class TestToolkitMozConfigure(BaseConfigureTest):
             # Linker doesn't error out for unknown flags. Glibc is new.
             (MockCC(True, True), ReadElf(False)),
         ):
-            self.assertEqual(get_values(mockcc, readelf), (None, None))
+            self.assertEqual(get_values(mockcc, readelf), ("lld", None, None))
             self.assertEqual(
-                get_values(mockcc, readelf, ["--enable-release"]), (None, True)
+                get_values(mockcc, readelf, ["--enable-release"]),
+                ("lld", None, None),
             )
             # LLD is picked by default and enabling elfhack fails because of that.
             with self.assertRaises(SystemExit):
                 get_values(mockcc, readelf, ["--enable-elf-hack"])
+            with self.assertRaises(SystemExit):
+                get_values(mockcc, readelf, ["--enable-elf-hack=legacy"])
+            if readelf.with_relr:
+                # Explicitly enabling relrhack works because pack-relative-relocs are supported.
+                self.assertEqual(
+                    get_values(mockcc, readelf, ["--enable-elf-hack=relr"]),
+                    ("lld", None, "relr"),
+                )
+            else:
+                # relrhack doesn't work without pack-relative-relocs support.
+                with self.assertRaises(SystemExit):
+                    get_values(mockcc, readelf, ["--enable-elf-hack=relr"])
             # If we force to use BFD ld, it works.
             self.assertEqual(
                 get_values(
                     mockcc, readelf, ["--enable-elf-hack", "--enable-linker=bfd"]
                 ),
-                (None, True),
+                ("bfd", None, "legacy"),
+            )
+            self.assertEqual(
+                get_values(
+                    mockcc, readelf, ["--enable-elf-hack=legacy", "--enable-linker=bfd"]
+                ),
+                ("bfd", None, "legacy"),
             )
 
         # Linker supports pack-relative-relocs, and glibc too. We use pack-relative-relocs
         # unless elfhack is explicitly enabled.
         mockcc = MockCC(True, True)
         readelf = ReadElf(True)
-        self.assertEqual(get_values(mockcc, readelf), (PACK, None))
+        self.assertEqual(get_values(mockcc, readelf), ("lld", PACK, None))
         self.assertEqual(
-            get_values(mockcc, readelf, ["--enable-release"]), (PACK, None)
+            get_values(mockcc, readelf, ["--enable-release"]), ("lld", PACK, None)
         )
         # LLD is picked by default and enabling elfhack fails because of that.
         with self.assertRaises(SystemExit):
             get_values(mockcc, readelf, ["--enable-elf-hack"])
+        with self.assertRaises(SystemExit):
+            get_values(mockcc, readelf, ["--enable-elf-hack=legacy"])
         # If we force to use BFD ld, it works.
         self.assertEqual(
             get_values(mockcc, readelf, ["--enable-elf-hack", "--enable-linker=bfd"]),
-            (None, True),
+            ("bfd", None, "legacy"),
+        )
+        self.assertEqual(
+            get_values(
+                mockcc, readelf, ["--enable-elf-hack=legacy", "--enable-linker=bfd"]
+            ),
+            ("bfd", None, "legacy"),
+        )
+        # Explicitly enabling relrhack works because pack-relative-relocs are supported.
+        self.assertEqual(
+            get_values(mockcc, readelf, ["--enable-elf-hack=relr"]),
+            ("lld", None, "relr"),
         )
 
 

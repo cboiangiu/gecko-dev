@@ -8,7 +8,6 @@ file-whitespace:
         - tools/lint/rst/requirements.txt
         - tools/lint/tox/tox_requirements.txt
         - tools/lint/spell/codespell_requirements.txt
-        - tools/tryselect/selectors/chooser/requirements.txt
     exclude:
         - accessible/tests/crashtests
         - accessible/tests/mochitest
@@ -68,6 +67,7 @@ file-whitespace:
         - image/test/crashtests
         - image/test/mochitest
         - image/test/reftest
+        - intl/icu_testdata
         - intl/lwbrk/crashtests
         - intl/uconv/crashtests
         - intl/uconv/tests
@@ -84,7 +84,6 @@ file-whitespace:
         - layout/generic/crashtests
         - layout/generic/test
         - layout/inspector/tests
-        - layout/mathml/tests
         - layout/painting/crashtests/1405881-1.html
         - layout/painting/crashtests/1407470-1.html
         - layout/reftests
@@ -152,6 +151,7 @@ file-whitespace:
         - .py
         - .rs
         - .rst
+        - .toml
         - .webidl
         - .xhtml
     support-files:

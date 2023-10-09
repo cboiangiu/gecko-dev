@@ -13,6 +13,7 @@
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/HashTable.h"
+#include "nsAtomHashKeys.h"
 #include "nsContainerFrame.h"
 #include "nsILineIterator.h"
 
@@ -151,7 +152,7 @@ class nsGridContainerFrame final : public nsContainerFrame,
   void InsertFrames(ChildListID aListID, nsIFrame* aPrevFrame,
                     const nsLineList::iterator* aPrevFrameLine,
                     nsFrameList&& aFrameList) override;
-  void RemoveFrame(ChildListID aListID, nsIFrame* aOldFrame) override;
+  void RemoveFrame(DestroyContext&, ChildListID, nsIFrame*) override;
   mozilla::StyleAlignFlags CSSAlignmentForAbsPosChild(
       const ReflowInput& aChildRI, LogicalAxis aLogicalAxis) const override;
 
@@ -213,21 +214,8 @@ class nsGridContainerFrame final : public nsContainerFrame,
     return GetProperty(GridFragmentInfo());
   }
 
-  struct AtomKey {
-    RefPtr<nsAtom> mKey;
-
-    explicit AtomKey(nsAtom* aAtom) : mKey(aAtom) {}
-
-    using Lookup = nsAtom*;
-
-    static mozilla::HashNumber hash(const Lookup& aKey) { return aKey->hash(); }
-
-    static bool match(const AtomKey& aFirst, const Lookup& aSecond) {
-      return aFirst.mKey == aSecond;
-    }
-  };
-
-  using ImplicitNamedAreas = mozilla::HashMap<AtomKey, NamedArea, AtomKey>;
+  using ImplicitNamedAreas =
+      mozilla::HashMap<mozilla::AtomHashKey, NamedArea, mozilla::AtomHashKey>;
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(ImplicitNamedAreasProperty,
                                       ImplicitNamedAreas)
   ImplicitNamedAreas* GetImplicitNamedAreas() const {

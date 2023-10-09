@@ -183,6 +183,11 @@ RemoteAccessible* RemoteAccessible::RemoteParent() const {
 
 void RemoteAccessible::ApplyCache(CacheUpdateType aUpdateType,
                                   AccAttributes* aFields) {
+  if (!aFields) {
+    MOZ_ASSERT_UNREACHABLE("ApplyCache called with aFields == null");
+    return;
+  }
+
   const nsTArray<bool> relUpdatesNeeded = PreProcessRelations(aFields);
   if (auto maybeViewportCache =
           aFields->GetAttribute<nsTArray<uint64_t>>(CacheKey::Viewport)) {
@@ -1312,6 +1317,7 @@ void RemoteAccessible::Announce(const nsString& aAnnouncement,
                                 uint16_t aPriority) {
   Unused << mDoc->SendAnnounce(mID, aAnnouncement, aPriority);
 }
+#endif  // !defined(XP_WIN)
 
 void RemoteAccessible::ScrollSubstringToPoint(int32_t aStartOffset,
                                               int32_t aEndOffset,
@@ -1320,7 +1326,6 @@ void RemoteAccessible::ScrollSubstringToPoint(int32_t aStartOffset,
   Unused << mDoc->SendScrollSubstringToPoint(mID, aStartOffset, aEndOffset,
                                              aCoordinateType, aX, aY);
 }
-#endif  // !defined(XP_WIN)
 
 RefPtr<const AccAttributes> RemoteAccessible::GetCachedTextAttributes() {
   MOZ_ASSERT(IsText() || IsHyperText());

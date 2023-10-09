@@ -8,10 +8,7 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
-  QuickSuggestRemoteSettings:
-    "resource:///modules/urlbar/private/QuickSuggestRemoteSettings.sys.mjs",
-  SuggestionsMap:
-    "resource:///modules/urlbar/private/QuickSuggestRemoteSettings.sys.mjs",
+  SuggestionsMap: "resource:///modules/urlbar/private/SuggestBackendJs.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
@@ -59,16 +56,16 @@ export class PocketSuggestions extends BaseFeature {
   get canShowLessFrequently() {
     let cap =
       lazy.UrlbarPrefs.get("pocketShowLessFrequentlyCap") ||
-      lazy.QuickSuggestRemoteSettings.config.show_less_frequently_cap ||
+      lazy.QuickSuggest.jsBackend.config.show_less_frequently_cap ||
       0;
     return !cap || this.showLessFrequentlyCount < cap;
   }
 
   enable(enabled) {
     if (enabled) {
-      lazy.QuickSuggestRemoteSettings.register(this);
+      lazy.QuickSuggest.jsBackend.register(this);
     } else {
-      lazy.QuickSuggestRemoteSettings.unregister(this);
+      lazy.QuickSuggest.jsBackend.unregister(this);
       this.#lowConfidenceSuggestionsMap.clear();
       this.#highConfidenceSuggestionsMap.clear();
     }
@@ -189,7 +186,11 @@ export class PocketSuggestions extends BaseFeature {
           originalUrl: suggestion.url,
           title: [suggestion.title, lazy.UrlbarUtils.HIGHLIGHT.TYPED],
           description: isBestMatch ? suggestion.description : "",
-          icon: "chrome://global/skin/icons/pocket.svg",
+          // Use the favicon for non-best matches so the icon exactly matches
+          // the Pocket favicon in the user's history and tabs.
+          icon: isBestMatch
+            ? "chrome://global/skin/icons/pocket.svg"
+            : "chrome://global/skin/icons/pocket-favicon.ico",
           shouldShowUrl: true,
           bottomTextL10n: {
             id: "firefox-suggest-pocket-bottom-text",
@@ -225,15 +226,24 @@ export class PocketSuggestions extends BaseFeature {
         // provided suggestions, need to use the original URL when adding to the
         // block list.
         lazy.QuickSuggest.blockedSuggestions.add(result.payload.originalUrl);
-        view.acknowledgeDismissal(result, false);
+        result.acknowledgeDismissalL10n = {
+          id: "firefox-suggest-dismissal-acknowledgment-one",
+        };
+        view.controller.removeResult(result);
         break;
       case RESULT_MENU_COMMAND.NOT_INTERESTED:
         lazy.UrlbarPrefs.set("suggest.pocket", false);
-        view.acknowledgeDismissal(result, true);
+        result.acknowledgeDismissalL10n = {
+          id: "firefox-suggest-dismissal-acknowledgment-all",
+        };
+        view.controller.removeResult(result);
         break;
       case RESULT_MENU_COMMAND.SHOW_LESS_FREQUENTLY:
         view.acknowledgeFeedback(result);
         this.incrementShowLessFrequentlyCount();
+        if (!this.canShowLessFrequently) {
+          view.invalidateResultMenuCommands();
+        }
         break;
     }
   }

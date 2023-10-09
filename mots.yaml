@@ -8,7 +8,7 @@
 # documentation and how to modify this file.
 repo: mozilla-central
 created_at: '2021-10-14T12:50:40.073465'
-updated_at: '2023-07-31T11:44:03.490227'
+updated_at: '2023-10-06T16:56:18.186997'
 export:
   path: ./docs/mots/index.rst
   format: rst
@@ -71,10 +71,6 @@ people:
     bmo_id: 505306
     name: Andrew Osmond
     nick: aosmond
-  - &aplacitelli
-    bmo_id: 579791
-    name: Alessio Placitelli
-    nick: aplacitelli
   - &arai
     bmo_id: 310076
     name: Tooru Fujisawa
@@ -252,6 +248,10 @@ people:
     bmo_id: 637163
     name: Deian Stefan
     nick: deian
+  - &Dexter
+    bmo_id: 248036
+    name: Alessio Placitelli
+    nick: Dexter
   - &dholbert
     bmo_id: 278074
     name: Daniel Holbert
@@ -324,14 +324,17 @@ people:
     bmo_id: 5842
     name: Masatoshi Kimura
     nick: emk
-  - &enndeakin
-    bmo_id: 6102
+  - bmo_id: 6102
     name: Neil Deakin
     nick: enndeakin
   - &erahm
     bmo_id: 496127
     name: Eric Rahm
     nick: erahm
+  - &ErichDonGubler
+    bmo_id: 713343
+    name: Erich Gubler
+    nick: ErichDonGubler
   - &evilpie
     bmo_id: 393835
     name: Tom S
@@ -359,6 +362,10 @@ people:
     bmo_id: 417288
     name: Nathan Froyd
     nick: froydnj
+  - &gabriel
+    bmo_id: 697145
+    name: Gabriel Bustamante
+    nick: gabriel
   - &gbrown
     bmo_id: 411471
     name: Geoff Brown
@@ -385,6 +392,10 @@ people:
     bmo_id: 403306
     name: Luke Crouch
     nick: groovecoder
+  - &gstoll
+    bmo_id: 714603
+    name: Greg Stoll
+    nick: gstoll
   - &gsvelto
     bmo_id: 448747
     name: Gabriele Svelto
@@ -401,6 +412,10 @@ people:
     bmo_id: 131213
     name: Hiroyuki Ikezoe
     nick: hiro
+  - &hjones
+    bmo_id: 692246
+    name: Hanna Jones
+    nick: hjones
   - &hneiva
     bmo_id: 693369
     name: Heitor Neiva
@@ -481,6 +496,10 @@ people:
     bmo_id: 456498
     name: Jan-Ivar Bruaroey
     nick: jib
+  - &jimb
+    bmo_id: 298765
+    name: Jim Blandy
+    nick: jimb
   - &jimm
     bmo_id: 279663
     name: Jim Mathies
@@ -537,6 +556,10 @@ people:
     bmo_id: 701257
     name: James Teow
     nick: jteow
+  - &jules
+    bmo_id: 699161
+    name: Jules Simplicio
+    nick: jules
   - &jwatt
     bmo_id: 32767
     name: Jonathan Watt
@@ -568,10 +591,6 @@ people:
     bmo_id: 505624
     name: Kershaw Chang
     nick: kershaw
-  - &kimberlythegeek
-    bmo_id: 607063
-    name: Kimberly Sereduck
-    nick: kimberlythegeek
   - &kinetik
     bmo_id: 274575
     name: Matthew Gregan
@@ -812,6 +831,10 @@ people:
     bmo_id: 573202
     name: Ryan Hunt
     nick: rhunt
+  - &rkraesig
+    bmo_id: 699639
+    name: Ray Kraesig
+    nick: rkraesig
   - &robwu
     bmo_id: 447061
     name: Rob Wu
@@ -919,6 +942,10 @@ people:
     bmo_id: 586681
     name: Ted Campbell
     nick: tcampbell
+  - &teoxoy
+    bmo_id: 715425
+    name: Teodor Tanasoaia
+    nick: teoxoy
   - &teshaq
     bmo_id: 663555
     name: Tarik Eshaq
@@ -1182,6 +1209,7 @@ modules:
     peers:
       - *hneiva
       - *bhearsum
+      - *gabriel
     machine_name: core_build_and_release_tools
 
   - name: 'Core: Build Config'
@@ -2747,16 +2775,28 @@ modules:
     description: WebGPU implementation
     includes:
       - dom/webgpu/**/*
+      - gfx/wgpu_bindings/**/*
+      - third_party/rust/naga/**/*
+      - third_party/rust/wgpu-core/**/*
+      - third_party/rust/wgpu-hal/**/*
+      - third_party/rust/wgpu-types/**/*
     meta:
       group: dev-platform
       url: https://wiki.mozilla.org/Platform/GFX/WebGPU
       components:
         - Core::Graphics::WebGPU
+      review_group: webgpu-reviewers
+      owners_emeritus:
+        - *kvark
+      peers_emeritus:
+        - *josh
     owners:
-      - *kvark
+      - *jimb
     peers:
-      - *josh
+      - *ErichDonGubler
       - *jgilbert
+      - *nical
+      - *teoxoy
     machine_name: core_webgpu_graphics_submodule
 
   - name: 'Core: WebRTC'
@@ -3228,6 +3268,8 @@ modules:
           - *itielyn8
           - *sfoster
           - *amy
+          - *emilio
+          - *jules
         machine_name: desktop_theme
 
       - name: Desktop UI
@@ -3342,9 +3384,11 @@ modules:
           components:
             - Firefox::Launcher Process
         owners:
-          - *mhowell
+          - *rkraesig
         peers:
           - *mhowell
+          - *gstoll
+          - *handyman
         machine_name: launcher_process
 
       - machine_name: localization
@@ -3521,12 +3565,11 @@ modules:
           components:
             - Firefox::Session Restore
         owners:
-          - *dao
-        peers:
-          - *daleharvey
-          - *farre
           - *sclements
           - *sfoster
+          - *farre
+        peers:
+          - *dao
         machine_name: session_restore
 
       - name: Settings UI
@@ -3936,13 +3979,14 @@ modules:
     name: Performance Testing
     description: >
       This module encompasses all of our performance testing projects, e.g.  Raptor,  Talos,
-      MozPerfTest, AWSY, mach try perf, etc.. See our PerfDocs for more information  on
+      MozPerfTest, AWSY, JSShell, mach try perf, etc.. See our PerfDocs for more information  on
       the owners/peers of the various components (linked below).
     includes:
       - testing/raptor/**/*
       - testing/talos/**/*
       - python/mozperftest/**/*
       - testing/awsy/**/*
+      - testing/jsshell/**/*
       - tools/lint/perfdocs/**/*
       - testing/perfdocs/**/*
       - testing/performance/**/*
@@ -3955,7 +3999,6 @@ modules:
     peers:
       - *aglavic
       - *davehunt
-      - *kimberlythegeek
       - *kshampur
     meta:
       components:
@@ -4074,7 +4117,7 @@ modules:
         owners:
           - *chutten
         peers:
-          - *aplacitelli
+          - *Dexter
           - *janerik
           - *perrymcmanis
           - *travis
@@ -4085,11 +4128,16 @@ modules:
         includes:
           - toolkit/content/widgets/**/*
         meta:
+          owners_emeritus:
+            - Neil Deakin
           peers_emeritus:
             - Andrew Swan
         owners:
-          - *enndeakin
+          - *mstriemer
         peers:
+          - *mak
+          - *tgiles
+          - *hjones
         machine_name: ui_widgets
 
       - name: Webextensions
@@ -4134,5 +4182,5 @@ modules:
         - Ryan Tilder
       group: dev-platform
 hashes:
-  config: 3065db57c505f3626a5f196b97e9807bbce4734c
-  export: 68264b6973c70966dc381cf7f6ca7fbec3957b28
+  config: f2394b6182e6748b4f054670caf4e4b35a112e1c
+  export: 3453aad6babd5a5d451fb588d5321161e22cfa58

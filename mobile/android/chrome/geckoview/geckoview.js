@@ -842,6 +842,26 @@ function startup() {
         },
       },
     },
+    {
+      name: "GeckoViewExperimentDelegate",
+      onInit: {
+        actors: {
+          GeckoViewExperimentDelegate: {
+            parent: {
+              esModuleURI:
+                "resource:///actors/GeckoViewExperimentDelegateParent.sys.mjs",
+            },
+            allFrames: true,
+          },
+        },
+      },
+    },
+    {
+      name: "GeckoViewTranslations",
+      onInit: {
+        resource: "resource://gre/modules/GeckoViewTranslations.sys.mjs",
+      },
+    },
   ]);
 
   if (!Services.appinfo.sessionHistoryInParent) {

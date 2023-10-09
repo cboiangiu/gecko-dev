@@ -36,8 +36,8 @@ pub use configuration::{Builder as ConfigurationBuilder, Configuration};
 pub use core_metrics::ClientInfoMetrics;
 pub use glean_core::{
     metrics::{Datetime, DistributionData, MemoryUnit, Rate, RecordedEvent, TimeUnit, TimerId},
-    traits, CommonMetricData, Error, ErrorType, Glean, HistogramType, Lifetime, RecordedExperiment,
-    Result,
+    traits, CommonMetricData, Error, ErrorType, Glean, HistogramType, Lifetime, PingRateLimit,
+    RecordedExperiment, Result,
 };
 
 mod configuration;
@@ -120,6 +120,7 @@ fn initialize_internal(cfg: Configuration, client_info: ClientInfoMetrics) -> Op
         trim_data_to_registered_pings: cfg.trim_data_to_registered_pings,
         log_level: cfg.log_level,
         rate_limit: cfg.rate_limit,
+        enable_event_timestamps: cfg.enable_event_timestamps,
     };
 
     glean_core::glean_initialize(core_cfg, client_info.into(), callbacks);

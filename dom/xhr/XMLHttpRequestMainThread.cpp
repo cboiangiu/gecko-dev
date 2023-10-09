@@ -1528,11 +1528,7 @@ void XMLHttpRequestMainThread::Open(const nsACString& aMethod,
   nsresult rv =
       NS_NewURI(getter_AddRefs(parsedURL), aUrl, originCharset, baseURI);
   if (NS_FAILED(rv)) {
-    if (rv == NS_ERROR_MALFORMED_URI) {
-      aRv.Throw(NS_ERROR_DOM_MALFORMED_URI);
-      return;
-    }
-    aRv.Throw(rv);
+    aRv.ThrowSyntaxError("'"_ns + aUrl + "' is not a valid URL."_ns);
     return;
   }
   if (NS_WARN_IF(NS_FAILED(CheckCurrentGlobalCorrectness()))) {
@@ -2061,9 +2057,9 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest* request) {
       } else {
         mIsHtml = true;
       }
-    } else if (!(type.EqualsLiteral("text/xml") ||
-                 type.EqualsLiteral("application/xml") ||
-                 StringEndsWith(type, "+xml"_ns))) {
+    } else if (!type.IsEmpty() && (!(type.EqualsLiteral("text/xml") ||
+                                     type.EqualsLiteral("application/xml") ||
+                                     StringEndsWith(type, "+xml"_ns)))) {
       // Follow https://xhr.spec.whatwg.org/
       // If final MIME type is not null, text/html, text/xml, application/xml,
       // or does not end in +xml, return null.

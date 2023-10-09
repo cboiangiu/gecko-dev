@@ -17,7 +17,7 @@ const VALID_HIGHLIGHT_L10N_IDs = new Map([
   ["quality", "shopping-highlight-quality"],
   ["shipping", "shopping-highlight-shipping"],
   ["competitiveness", "shopping-highlight-competitiveness"],
-  ["packaging", "shopping-highlight-packaging"],
+  ["packaging/appearance", "shopping-highlight-packaging"],
 ]);
 
 /**
@@ -84,6 +84,7 @@ class ReviewHighlights extends MozLitElement {
     let l10nId = VALID_HIGHLIGHT_L10N_IDs.get(type);
     highlightEl.id = type;
     highlightEl.l10nId = l10nId;
+    highlightEl.highlightType = type;
     highlightEl.reviews = reviews;
     // At present, en is only supported. Once we support more locales,
     // update this attribute accordingly.
@@ -106,10 +107,15 @@ class ReviewHighlights extends MozLitElement {
       let highlightEl = this.createHighlightElement(key, value);
       highlightsTemplate.push(highlightEl);
     }
+
+    // Only use show-more card type if there are more than two highlights.
+    let isShowMore = Array.from(this.#highlightsMap.values()).flat().length > 2;
+
     return html`
       <shopping-card
         data-l10n-id="shopping-highlights-label"
         data-l10n-attrs="label"
+        type=${isShowMore ? "show-more" : ""}
       >
         <div slot="content" id="review-highlights-wrapper">
           <dl id="review-highlights-list">${highlightsTemplate}</dl>

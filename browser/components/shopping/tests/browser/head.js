@@ -45,17 +45,17 @@ const MOCK_POPULATED_DATA = {
         "I've avoided getting a smartwatch for so long due to short battery life on most of them.",
       ],
     },
+    "packaging/appearance": {
+      positive: ["Great cardboard box."],
+      negative: [],
+      neutral: [],
+    },
     shipping: {
       positive: [],
       negative: [],
       neutral: [],
     },
   },
-};
-
-const MOCK_ERROR_OBJ = {
-  status: 422,
-  error: "Unprocessable entity",
 };
 
 const MOCK_INVALID_KEY_OBJ = {
@@ -93,46 +93,119 @@ const MOCK_ANALYZED_PRODUCT_RESPONSE = {
   needs_analysis: false,
 };
 
+const MOCK_UNAVAILABLE_PRODUCT_RESPONSE = {
+  ...MOCK_POPULATED_DATA,
+  product_id: "ABCD123",
+  deleted_product: true,
+};
+
+const MOCK_UNAVAILABLE_PRODUCT_REPORTED_RESPONSE = {
+  ...MOCK_UNAVAILABLE_PRODUCT_RESPONSE,
+  deleted_product_reported: true,
+};
+
+const MOCK_PAGE_NOT_SUPPORTED_RESPONSE = {
+  ...MOCK_UNPOPULATED_DATA,
+  page_not_supported: true,
+};
+
+const MOCK_RECOMMENDED_ADS_RESPONSE = [
+  {
+    name: "VIVO Electric 60 x 24 inch Stand Up Desk | Black Table Top, Black Frame, Height Adjustable Standing Workstation with Memory Preset Controller (DESK-KIT-1B6B)",
+    url: "www.example.com",
+    price: "249.99",
+    currency: "USD",
+    grade: "A",
+    adjusted_rating: 4.6,
+    sponsored: true,
+  },
+];
+
 function verifyAnalysisDetailsVisible(shoppingContainer) {
   ok(
-    shoppingContainer.reviewReliabilityEl &&
-      !shoppingContainer.reviewReliabilityEl.hidden,
+    shoppingContainer.reviewReliabilityEl,
     "review-reliability should be visible"
   );
-  ok(
-    shoppingContainer.adjustedRatingEl &&
-      !shoppingContainer.adjustedRatingEl.hidden,
-    "adjusted-rating should be visible"
-  );
-  ok(
-    shoppingContainer.highlightsEl && !shoppingContainer.highlightsEl.hidden,
-    "review-highlights should be visible"
-  );
-  ok(
-    shoppingContainer.analysisExplainerEl &&
-      !shoppingContainer.analysisExplainerEl.hidden,
-    "analysis-explainer should be visible"
-  );
+  ok(shoppingContainer.adjustedRatingEl, "adjusted-rating should be visible");
+  ok(shoppingContainer.highlightsEl, "review-highlights should be visible");
 }
 
 function verifyAnalysisDetailsHidden(shoppingContainer) {
   ok(
-    !shoppingContainer.reviewReliabilityEl ||
-      shoppingContainer.reviewReliabilityEl.hidden,
+    !shoppingContainer.reviewReliabilityEl,
     "review-reliability should not be visible"
   );
   ok(
-    !shoppingContainer.adjustedRatingEl ||
-      shoppingContainer.adjustedRatingEl.hidden,
+    !shoppingContainer.adjustedRatingEl,
     "adjusted-rating should not be visible"
   );
   ok(
-    !shoppingContainer.highlightsEl || shoppingContainer.highlightsEl.hidden,
+    !shoppingContainer.highlightsEl,
     "review-highlights should not be visible"
   );
+}
+
+function verifyFooterVisible(shoppingContainer) {
+  ok(shoppingContainer.settingsEl, "Got the shopping-settings element");
   ok(
-    !shoppingContainer.analysisExplainerEl ||
-      shoppingContainer.analysisExplainerEl.hidden,
-    "analysis-explainer should not be visible"
+    shoppingContainer.analysisExplainerEl,
+    "Got the analysis-explainer element"
   );
+}
+
+function verifyFooterHidden(shoppingContainer) {
+  ok(!shoppingContainer.settingsEl, "Do not render shopping-settings element");
+  ok(
+    !shoppingContainer.analysisExplainerEl,
+    "Do not render the analysis-explainer element"
+  );
+}
+
+function getAnalysisDetails(browser, data) {
+  return SpecialPowers.spawn(browser, [data], async mockData => {
+    let shoppingContainer =
+      content.document.querySelector("shopping-container").wrappedJSObject;
+    shoppingContainer.data = Cu.cloneInto(mockData, content);
+    await shoppingContainer.updateComplete;
+    let returnState = {};
+    for (let el of [
+      "unanalyzedProductEl",
+      "reviewReliabilityEl",
+      "analysisExplainerEl",
+      "adjustedRatingEl",
+      "highlightsEl",
+      "settingsEl",
+      "shoppingMessageBarEl",
+      "loadingEl",
+    ]) {
+      returnState[el] =
+        !!shoppingContainer[el] &&
+        ContentTaskUtils.is_visible(shoppingContainer[el]);
+    }
+    returnState.shoppingMessageBarType =
+      shoppingContainer.shoppingMessageBarEl?.getAttribute("type");
+    returnState.isOffline = shoppingContainer.isOffline;
+    return returnState;
+  });
+}
+
+function getSettingsDetails(browser, data) {
+  return SpecialPowers.spawn(browser, [data], async mockData => {
+    let shoppingContainer =
+      content.document.querySelector("shopping-container").wrappedJSObject;
+    shoppingContainer.data = Cu.cloneInto(mockData, content);
+    await shoppingContainer.updateComplete;
+    let shoppingSettings = shoppingContainer.settingsEl;
+    await shoppingSettings.updateComplete;
+    let returnState = {
+      settingsEl:
+        !!shoppingSettings && ContentTaskUtils.is_visible(shoppingSettings),
+    };
+    for (let el of ["recommendationsToggleEl", "optOutButtonEl"]) {
+      returnState[el] =
+        !!shoppingSettings[el] &&
+        ContentTaskUtils.is_visible(shoppingSettings[el]);
+    }
+    return returnState;
+  });
 }

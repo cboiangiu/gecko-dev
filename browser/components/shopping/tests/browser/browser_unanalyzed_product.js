@@ -10,15 +10,14 @@
 add_task(async function test_unanalyzed_product() {
   await BrowserTestUtils.withNewTab(
     {
-      url: "chrome://browser/content/shopping/shopping.html",
+      url: "about:shoppingsidebar",
       gBrowser,
     },
     async browser => {
-      const { document } = browser.contentWindow;
-
-      let shoppingContainer = document.querySelector("shopping-container");
-      shoppingContainer.data = MOCK_UNANALYZED_PRODUCT_RESPONSE;
-      await shoppingContainer.updateComplete;
+      let shoppingContainer = await getAnalysisDetails(
+        browser,
+        MOCK_UNANALYZED_PRODUCT_RESPONSE
+      );
 
       ok(
         shoppingContainer.unanalyzedProductEl,
@@ -26,8 +25,7 @@ add_task(async function test_unanalyzed_product() {
       );
 
       verifyAnalysisDetailsHidden(shoppingContainer);
-
-      ok(shoppingContainer.settingsEl, "Got the shopping-settings element");
+      verifyFooterVisible(shoppingContainer);
     }
   );
 });
@@ -39,15 +37,14 @@ add_task(async function test_unanalyzed_product() {
 add_task(async function test_analyzed_product() {
   await BrowserTestUtils.withNewTab(
     {
-      url: "chrome://browser/content/shopping/shopping.html",
+      url: "about:shoppingsidebar",
       gBrowser,
     },
     async browser => {
-      const { document } = browser.contentWindow;
-
-      let shoppingContainer = document.querySelector("shopping-container");
-      shoppingContainer.data = MOCK_ANALYZED_PRODUCT_RESPONSE;
-      await shoppingContainer.updateComplete;
+      let shoppingContainer = await getAnalysisDetails(
+        browser,
+        MOCK_ANALYZED_PRODUCT_RESPONSE
+      );
 
       ok(
         !shoppingContainer.unanalyzedProductEl,
@@ -55,8 +52,7 @@ add_task(async function test_analyzed_product() {
       );
 
       verifyAnalysisDetailsVisible(shoppingContainer);
-
-      ok(shoppingContainer.settingsEl, "Got the shopping-settings element");
+      verifyFooterVisible(shoppingContainer);
     }
   );
 });

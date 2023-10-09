@@ -21,21 +21,47 @@ export class ViewPage extends MozLitElement {
   static get properties() {
     return {
       selectedTab: { type: Boolean },
-      overview: { type: Boolean },
+      recentBrowsing: { type: Boolean },
     };
   }
 
   constructor() {
     super();
     this.selectedTab = false;
-    this.overview = Boolean(this.closest("VIEW-OVERVIEW"));
+    this.recentBrowsing = Boolean(this.closest("VIEW-RECENTBROWSING"));
   }
 
   connectedCallback() {
     super.connectedCallback();
+    this.ownerDocument.addEventListener("visibilitychange", this);
   }
 
-  disconnectedCallback() {}
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.ownerDocument.removeEventListener("visibilitychange", this);
+  }
+
+  handleEvent(event) {
+    switch (event.type) {
+      case "visibilitychange":
+        if (this.ownerDocument.visibilityState === "visible") {
+          this.viewTabVisibleCallback();
+        } else {
+          this.viewTabHiddenCallback();
+        }
+        break;
+    }
+  }
+
+  /**
+   * Override this function to run a callback whenever Firefox View is visible.
+   */
+  viewTabVisibleCallback() {}
+
+  /**
+   * Override this function to run a callback whenever Firefox View is hidden.
+   */
+  viewTabHiddenCallback() {}
 
   enter() {
     this.selectedTab = true;
@@ -95,17 +121,33 @@ export class ViewPage extends MozLitElement {
       null,
       Ci.nsIClipboard.kGlobalClipboard
     );
+    this.recordContextMenuTelemetry("copy-link", e);
   }
 
   openInNewWindow(e) {
     this.getWindow().openTrustedLinkIn(this.triggerNode.url, "window", {
       private: false,
     });
+    this.recordContextMenuTelemetry("open-in-new-window", e);
   }
 
   openInNewPrivateWindow(e) {
     this.getWindow().openTrustedLinkIn(this.triggerNode.url, "window", {
       private: true,
     });
+    this.recordContextMenuTelemetry("open-in-private-window", e);
+  }
+
+  recordContextMenuTelemetry(menuAction, event) {
+    Services.telemetry.recordEvent(
+      "firefoxview_next",
+      "context_menu",
+      "tabs",
+      null,
+      {
+        menu_action: menuAction,
+        data_type: event.target.panel.dataset.tabType,
+      }
+    );
   }
 }

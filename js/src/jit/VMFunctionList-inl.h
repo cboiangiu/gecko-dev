@@ -115,6 +115,7 @@ namespace jit {
   _(CheckOverRecursed, js::jit::CheckOverRecursed)                             \
   _(CheckOverRecursedBaseline, js::jit::CheckOverRecursedBaseline)             \
   _(CheckPrivateFieldOperation, js::CheckPrivateFieldOperation)                \
+  _(CheckProxyGetByValueResult, js::jit::CheckProxyGetByValueResult)           \
   _(ClassBodyLexicalEnvironmentObjectCreateWithoutEnclosing,                   \
     js::ClassBodyLexicalEnvironmentObject::createWithoutEnclosing)             \
   _(CloneRegExpObject, js::CloneRegExpObject)                                  \
@@ -159,6 +160,7 @@ namespace jit {
   _(DoInstanceOfFallback, js::jit::DoInstanceOfFallback, 2)                    \
   _(DoNewArrayFallback, js::jit::DoNewArrayFallback)                           \
   _(DoNewObjectFallback, js::jit::DoNewObjectFallback)                         \
+  _(DoOptimizeGetIteratorFallback, js::jit::DoOptimizeGetIteratorFallback)     \
   _(DoOptimizeSpreadCallFallback, js::jit::DoOptimizeSpreadCallFallback)       \
   _(DoRestFallback, js::jit::DoRestFallback)                                   \
   _(DoSetElemFallback, js::jit::DoSetElemFallback, 2)                          \
@@ -220,6 +222,7 @@ namespace jit {
   _(IonHasOwnICUpdate, js::jit::IonHasOwnIC::update)                           \
   _(IonInICUpdate, js::jit::IonInIC::update)                                   \
   _(IonInstanceOfICUpdate, js::jit::IonInstanceOfIC::update)                   \
+  _(IonOptimizeGetIteratorICUpdate, js::jit::IonOptimizeGetIteratorIC::update) \
   _(IonOptimizeSpreadCallICUpdate, js::jit::IonOptimizeSpreadCallIC::update)   \
   _(IonSetPropertyICUpdate, js::jit::IonSetPropertyIC::update)                 \
   _(IonToPropertyKeyICUpdate, js::jit::IonToPropertyKeyIC::update)             \

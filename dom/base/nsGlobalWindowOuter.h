@@ -208,7 +208,8 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   void ReallyCloseWindow();
 
   // nsISupports
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_IMETHOD_(void) DeleteCycleCollectable() override;
 
   // nsWrapperCache
   virtual JSObject* WrapObject(JSContext* cx,
@@ -624,8 +625,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   nsresult OpenDialog(const nsAString& aUrl, const nsAString& aName,
                       const nsAString& aOptions, nsISupports* aExtraArgument,
                       mozilla::dom::BrowsingContext** _retval) override;
-  void UpdateCommands(const nsAString& anAction, mozilla::dom::Selection* aSel,
-                      int16_t aReason) override;
+  void UpdateCommands(const nsAString& anAction) override;
 
   already_AddRefed<mozilla::dom::BrowsingContext> GetContentInternal(
       mozilla::dom::CallerType aCallerType, mozilla::ErrorResult& aError);

@@ -38,46 +38,30 @@ uint8_t* CryptoBuffer::Assign(const nsTArray<uint8_t>& aData) {
 }
 
 uint8_t* CryptoBuffer::Assign(const ArrayBuffer& aData) {
-  aData.ComputeState();
-  return Assign(aData.Data(), aData.Length());
+  Clear();
+  return aData.AppendDataTo(*this) ? Elements() : nullptr;
 }
 
 uint8_t* CryptoBuffer::Assign(const ArrayBufferView& aData) {
-  aData.ComputeState();
-  return Assign(aData.Data(), aData.Length());
+  Clear();
+  return aData.AppendDataTo(*this) ? Elements() : nullptr;
 }
 
 uint8_t* CryptoBuffer::Assign(const ArrayBufferViewOrArrayBuffer& aData) {
-  if (aData.IsArrayBufferView()) {
-    return Assign(aData.GetAsArrayBufferView());
-  }
-  if (aData.IsArrayBuffer()) {
-    return Assign(aData.GetAsArrayBuffer());
-  }
-
-  // If your union is uninitialized, something's wrong
-  MOZ_ASSERT(false);
   Clear();
-  return nullptr;
+
+  return AppendTypedArrayDataTo(aData, *this) ? Elements() : nullptr;
 }
 
 uint8_t* CryptoBuffer::Assign(const OwningArrayBufferViewOrArrayBuffer& aData) {
-  if (aData.IsArrayBufferView()) {
-    return Assign(aData.GetAsArrayBufferView());
-  }
-  if (aData.IsArrayBuffer()) {
-    return Assign(aData.GetAsArrayBuffer());
-  }
-
-  // If your union is uninitialized, something's wrong
-  MOZ_ASSERT(false);
   Clear();
-  return nullptr;
+
+  return AppendTypedArrayDataTo(aData, *this) ? Elements() : nullptr;
 }
 
 uint8_t* CryptoBuffer::Assign(const Uint8Array& aArray) {
-  aArray.ComputeState();
-  return Assign(aArray.Data(), aArray.Length());
+  Clear();
+  return aArray.AppendDataTo(*this) ? Elements() : nullptr;
 }
 
 uint8_t* CryptoBuffer::AppendSECItem(const SECItem* aItem) {
@@ -128,7 +112,12 @@ bool CryptoBuffer::ToSECItem(PLArenaPool* aArena, SECItem* aItem) const {
   if (!::SECITEM_AllocItem(aArena, aItem, Length())) {
     return false;
   }
-
+  // If this CryptoBuffer is of 0 length, aItem->data will be null. Passing
+  // null to memcpy is not valid, even if the length is 0, so return early.
+  if (!aItem->data) {
+    MOZ_ASSERT(Length() == 0);
+    return true;
+  }
   memcpy(aItem->data, Elements(), Length());
   return true;
 }
@@ -139,20 +128,6 @@ JSObject* CryptoBuffer::ToUint8Array(JSContext* aCx) const {
 
 JSObject* CryptoBuffer::ToArrayBuffer(JSContext* aCx) const {
   return ArrayBuffer::Create(aCx, Length(), Elements());
-}
-
-bool CryptoBuffer::ToNewUnsignedBuffer(uint8_t** aBuf,
-                                       uint32_t* aBufLen) const {
-  MOZ_ASSERT(aBuf);
-  MOZ_ASSERT(aBufLen);
-
-  uint32_t dataLen = Length();
-  uint8_t* tmp = reinterpret_cast<uint8_t*>(moz_xmalloc(dataLen));
-
-  memcpy(tmp, Elements(), dataLen);
-  *aBuf = tmp;
-  *aBufLen = dataLen;
-  return true;
 }
 
 // "BigInt" comes from the WebCrypto spec

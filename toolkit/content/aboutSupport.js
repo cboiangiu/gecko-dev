@@ -17,7 +17,6 @@ const { AppConstants } = ChromeUtils.importESModule(
 ChromeUtils.defineESModuleGetters(this, {
   DownloadUtils: "resource://gre/modules/DownloadUtils.sys.mjs",
   PlacesDBUtils: "resource://gre/modules/PlacesDBUtils.sys.mjs",
-  PluralForm: "resource://gre/modules/PluralForm.sys.mjs",
   ProcessType: "resource://gre/modules/ProcessType.sys.mjs",
 });
 
@@ -342,6 +341,12 @@ var snapshotFormatters = {
   },
 
   securitySoftware(data) {
+    if (AppConstants.platform !== "win") {
+      $("security-software").hidden = true;
+      $("security-software-table").hidden = true;
+      return;
+    }
+
     $("security-software-antivirus").textContent = data.registeredAntiVirus;
     $("security-software-antispyware").textContent = data.registeredAntiSpyware;
     $("security-software-firewall").textContent = data.registeredFirewall;
@@ -1176,7 +1181,7 @@ var snapshotFormatters = {
       for (const codec_string of data.codecSupportInfo.split("\n")) {
         const s = codec_string.split(" ");
         const codec_name = s[0];
-        const codec_support = s[1];
+        const codec_support = s.slice(1);
 
         if (!(codec_name in codecs)) {
           codecs[codec_name] = {
@@ -1186,9 +1191,10 @@ var snapshotFormatters = {
           };
         }
 
-        if (codec_support === "SW") {
+        if (codec_support.includes("SW")) {
           codecs[codec_name].sw = true;
-        } else if (codec_support === "HW") {
+        }
+        if (codec_support.includes("HW")) {
           codecs[codec_name].hw = true;
         }
       }
@@ -1220,7 +1226,7 @@ var snapshotFormatters = {
         "media-codec-support-error"
       );
     }
-    if (["win", "macosx", "linux"].includes(AppConstants.platform)) {
+    if (["win", "macosx", "linux", "android"].includes(AppConstants.platform)) {
       insertBasicInfo("media-codec-support-info", supportInfo);
     }
   },

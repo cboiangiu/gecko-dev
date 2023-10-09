@@ -349,6 +349,30 @@ typedef enum {
    */
   JXL_ENC_FRAME_SETTING_BUFFERING = 34,
 
+  /** Keep or discard Exif metadata boxes derived from a JPEG frame when using
+   * JxlEncoderAddJPEGFrame. This has no effect on boxes added using
+   * JxlEncoderAddBox. When JxlEncoderStoreJPEGMetadata is set to 1, this option
+   * cannot be set to 0. Even when Exif metadata is discarded, the orientation
+   * will still be applied. 0 = discard Exif metadata, 1 = keep Exif metadata
+   * (default).
+   */
+  JXL_ENC_FRAME_SETTING_JPEG_KEEP_EXIF = 35,
+
+  /** Keep or discard XMP metadata boxes derived from a JPEG frame when using
+   * JxlEncoderAddJPEGFrame. This has no effect on boxes added using
+   * JxlEncoderAddBox. When JxlEncoderStoreJPEGMetadata is set to 1, this option
+   * cannot be set to 0. 0 = discard XMP metadata, 1 = keep XMP metadata
+   * (default).
+   */
+  JXL_ENC_FRAME_SETTING_JPEG_KEEP_XMP = 36,
+
+  /** Keep or discard JUMBF metadata boxes derived from a JPEG frame when using
+   * JxlEncoderAddJPEGFrame. This has no effect on boxes added using
+   * JxlEncoderAddBox. 0 = discard JUMBF metadata, 1 = keep JUMBF metadata
+   * (default).
+   */
+  JXL_ENC_FRAME_SETTING_JPEG_KEEP_JUMBF = 37,
+
   /** Enum value not to be used as an option. This value is added to force the
    * C compiler to have the enum to take a known size.
    */
@@ -645,47 +669,127 @@ JXL_EXPORT JxlEncoderStatus JxlEncoderAddImageFrame(
     const JxlPixelFormat* pixel_format, const void* buffer, size_t size);
 
 /**
- * TODO(firsching): add documentation
+ * The JxlEncoderOutputProcessor structure provides an interface for the
+ * encoder's output processing. Users of the library, who want to do streaming
+ * encoding, should implement the required callbacks for buffering, writing,
+ * seeking (if supported), and setting a finalized position during the encoding
+ * process.
  *
+ * At a high level, the processor can be in one of two states:
+ * - With an active buffer: This indicates that a buffer has been acquired using
+ *   `get_buffer` and encoded data can be written to it.
+ * - Without an active buffer: In this state, no data can be written. A new
+ * buffer must be acquired after releasing any previously active buffer.
+ *
+ * The library will not acquire more than one buffer at a given time.
+ *
+ * The state of the processor includes `position` and `finalized position`,
+ * which have the following meaning.
+ *
+ * - position: Represents the current position, in bytes, within the output
+ * stream where the encoded data will be written next. This position moves
+ * forward with each `release_buffer` call as data is written, and can also be
+ * adjusted through the optional seek callback, if provided. At this position
+ * the next write will occur.
+ *
+ * - finalized position:  A position in the output stream that ensures all bytes
+ * before this point are finalized and won't be changed by later writes.
+ *
+ * All fields but `seek` are required, `seek` is optional and can be NULL.
  */
-typedef void (*JxlEncoderOutputCallback)(void* run_opaque, size_t pos,
-                                         size_t num_bytes);
+struct JxlEncoderOutputProcessor {
+  /**
+   * Required.
+   * An opaque pointer that the client can use to store custom data.
+   * This data will be passed to the associated callback functions.
+   */
+  void* opaque;
+
+  /**
+   * Required.
+   * Acquires a buffer at the current position into which the library will write
+   * the output data.
+   *
+   * If the `size` argument points to 0 and the returned value is NULL, this
+   * will be interpreted as asking the output writing to stop. In such a case,
+   * the library will return an error. The client is expected to set the size of
+   * the returned buffer based on the suggested `size` when this function is
+   * called.
+   *
+   * @param opaque user supplied parameters to the callback
+   * @param size points to a suggested buffer size when called; must be set to
+   * the size of the returned buffer once the function returns.
+   * @return a pointer to the acquired buffer or NULL to indicate a stop
+   * condition.
+   */
+  void* (*get_buffer)(void* opaque, size_t* size);
+
+  /**
+   * Required.
+   * Notifies the user of library that the current buffer's data has been
+   * written and can be released. This function should advance the current
+   * position of the buffer by `written_bytes` number of bytes.
+   *
+   * @param opaque user supplied parameters to the callback
+   * @param written_bytes the number of bytes written to the buffer.
+   */
+  void (*release_buffer)(void* opaque, size_t written_bytes);
+
+  /**
+   * Optional, can be NULL
+   * Seeks to a specific position in the output. This function is optional and
+   * can be set to NULL if the output doesn't support seeking. Can only be done
+   * when there is no buffer. Cannot be used to seek before the finalized
+   * position.
+   *
+   * @param opaque user supplied parameters to the callback
+   * @param position the position to seek to, in bytes.
+   */
+  void (*seek)(void* opaque, uint64_t position);
+
+  /**
+   * Required.
+   * Sets a finalized position on the output data, at a specific position.
+   * Seeking will never request a position before the finalized position.
+   *
+   * Will only be called if there is no active buffer.
+   *
+   * @param opaque user supplied parameters to the callback
+   * @param finalized_position the position, in bytes, where the finalized
+   * position should be set.
+   */
+  void (*set_finalized_position)(void* opaque, uint64_t finalized_position);
+};
 
 /**
- * TODO(firsching): add documentation
+ * Sets the output processor for the encoder. This processor determines how the
+ * encoder will handle buffering, writing, seeking (if supported), and
+ * setting a finalized position during the encoding process.
  *
+ * This should not be used when using @ref JxlEncoderProcessOutput.
+ *
+ * @param enc encoder object.
+ * @param output_processor the struct containing the callbacks for managing
+ * output.
+ * @return JXL_ENC_SUCCESS on success, JXL_ENC_ERROR on error.
  */
-JXL_EXPORT JxlEncoderStatus
-JxlEncoderSetOutputCallback(JxlEncoderOutputCallback callback);
+JXL_EXPORT JxlEncoderStatus JxlEncoderSetOutputProcessor(
+    JxlEncoder* enc, struct JxlEncoderOutputProcessor output_processor);
 
 /**
- * TODO(firsching): add documentation
+ * Flushes any buffered input in the encoder, ensuring that all available input
+ * data has been processed and written to the output.
  *
- * @param frame_settings
- * @return JXL_ENC_SUCCESS on success, JXL_ENC_ERROR on error
- */
-JXL_EXPORT JxlEncoderStatus
-JxlEncoderChunkedImageFrameStart(const JxlEncoderFrameSettings* frame_settings);
-
-/**
- * TODO(firsching): add documentation
- * We process exactly one 2048x2048 DC-group.
+ * This function can only be used after @ref JxlEncoderSetOutputProcessor.
+ * Before making the last call to @ref JxlEncoderFlushInput, users should call
+ * @ref JxlEncoderCloseInput to signal the end of input data.
  *
- * @param frame_settings
- * @param x horizontal position of the top-left corner of the processed group.
- * Must be divisible by 2048.
- * @param y vertical position of the top-left corner of the processed group.
- * Must be divisible by 2048.
- * @param pixel_format for pixels. Object owned by the caller and its contents
- * are copied internally.
- * @param input_data the input buffer.
- * @param input_size size of the input data in bytes.
- * @return JXL_EXPORT
+ * This should not be used when using @ref JxlEncoderProcessOutput.
+ *
+ * @param enc encoder object.
+ * @return JXL_ENC_SUCCESS on success, JXL_ENC_ERROR on error.
  */
-JXL_EXPORT JxlEncoderStatus JxlEncoderChunkedImageFrameAddPart(
-    const JxlEncoderFrameSettings* frame_settings, size_t x, size_t y,
-    const JxlPixelFormat* pixel_format, const void* input_data,
-    size_t input_size);
+JXL_EXPORT JxlEncoderStatus JxlEncoderFlushInput(JxlEncoder* enc);
 
 /**
  * Sets the buffer to read pixels from for an extra channel at a given index.
@@ -931,6 +1035,26 @@ JXL_EXPORT void JxlEncoderInitBlendInfo(JxlBlendInfo* blend_info);
  */
 JXL_EXPORT JxlEncoderStatus JxlEncoderSetBasicInfo(JxlEncoder* enc,
                                                    const JxlBasicInfo* info);
+
+/**
+ * Sets the upsampling method the decoder will use in case there are frames
+ * with JXL_ENC_FRAME_SETTING_RESAMPLING set. This is useful in combination
+ * with the JXL_ENC_FRAME_SETTING_ALREADY_DOWNSAMPLED option, to control the
+ * type of upsampling that will be used.
+ *
+ * @param enc encoder object.
+ * @param factor upsampling factor to configure (1, 2, 4 or 8; for 1 this
+ * function has no effect at all)
+ * @param mode upsampling mode to use for this upsampling:
+ * -1: default (good for photographic images, no signaling overhead)
+ * 0: nearest neighbor (good for pixel art)
+ * 1: 'pixel dots' (same as NN for 2x, diamond-shaped 'pixel dots' for 4x/8x)
+ * @return JXL_ENC_SUCCESS if the operation was successful,
+ * JXL_ENC_ERROR or JXL_ENC_NOT_SUPPORTED otherwise
+ */
+JXL_EXPORT JxlEncoderStatus JxlEncoderSetUpsamplingMode(JxlEncoder* enc,
+                                                        const int64_t factor,
+                                                        const int64_t mode);
 
 /**
  * Initializes a JxlExtraChannelInfo struct to default values.

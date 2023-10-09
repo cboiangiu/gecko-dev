@@ -140,6 +140,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont {
 
   // math-depth support (used for MathML scriptlevel)
   int8_t mMathDepth;
+  mozilla::StyleLineHeight mLineHeight;
   // MathML  mathvariant support
   mozilla::StyleMathVariant mMathVariant;
   // math-style support (used for MathML displaystyle)
@@ -617,6 +618,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleOutline {
     return false;
   }
 
+  nsSize EffectiveOffsetFor(const nsRect& aRect) const;
+
  protected:
   // The actual value of outline-width is the computed value (an absolute
   // length, forced to zero when outline-style is none) rounded to device
@@ -869,7 +872,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText {
   mozilla::StyleNonNegativeLengthOrNumber mTabSize;
   mozilla::LengthPercentage mWordSpacing;
   mozilla::StyleLetterSpacing mLetterSpacing;
-  mozilla::StyleLineHeight mLineHeight;
   mozilla::LengthPercentage mTextIndent;
 
   mozilla::LengthPercentageOrAuto mTextUnderlineOffset;
@@ -886,6 +888,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText {
 
   mozilla::StyleTextSecurity mWebkitTextSecurity =
       mozilla::StyleTextSecurity::None;
+
+  mozilla::StyleTextWrap mTextWrap = mozilla::StyleTextWrap::Auto;
 
   char16_t TextSecurityMaskChar() const {
     switch (mWebkitTextSecurity) {
@@ -1196,7 +1200,7 @@ struct StyleScrollTimeline {
   // elements.
   void SetInitialValues() {}
 
-  const nsAtom* GetName() const { return mName._0.AsAtom(); }
+  nsAtom* GetName() const { return mName._0.AsAtom(); }
   StyleScrollAxis GetAxis() const { return mAxis; }
 
   bool operator==(const StyleScrollTimeline& aOther) const {
@@ -1220,7 +1224,7 @@ struct StyleViewTimeline {
   // elements.
   void SetInitialValues() {}
 
-  const nsAtom* GetName() const { return mName._0.AsAtom(); }
+  nsAtom* GetName() const { return mName._0.AsAtom(); }
   StyleScrollAxis GetAxis() const { return mAxis; }
   const StyleViewTimelineInset& GetInset() const { return mInset; }
 
@@ -1300,7 +1304,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay {
 
   mozilla::StyleBackfaceVisibility mBackfaceVisibility;
   mozilla::StyleTransformStyle mTransformStyle;
-  mozilla::StyleGeometryBox mTransformBox;
+  mozilla::StyleTransformBox mTransformBox;
 
   mozilla::StyleTransform mTransform;
   mozilla::StyleRotate mRotate;
@@ -1328,6 +1332,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay {
 
   // The threshold used for extracting a shape from shape-outside: <image>.
   float mShapeImageThreshold = 0.0f;
+
+  mozilla::StyleZoom mZoom = mozilla::StyleZoom::ONE;
 
   // The margin around a shape-outside: <image>.
   mozilla::NonNegativeLengthPercentage mShapeMargin;

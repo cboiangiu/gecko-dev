@@ -21,6 +21,7 @@ import { OnboardingVideo } from "./OnboardingVideo";
 import { AdditionalCTA } from "./AdditionalCTA";
 import { EmbeddedMigrationWizard } from "./EmbeddedMigrationWizard";
 import { AddonsPicker } from "./AddonsPicker";
+import { LinkParagraph } from "./LinkParagraph";
 
 export const MultiStageProtonScreen = props => {
   const { autoAdvance, handleAction, order } = props;
@@ -62,6 +63,8 @@ export const MultiStageProtonScreen = props => {
       negotiatedLanguage={props.negotiatedLanguage}
       langPackInstallPhase={props.langPackInstallPhase}
       forceHideStepsIndicator={props.forceHideStepsIndicator}
+      ariaRole={props.ariaRole}
+      aboveButtonStepsIndicator={props.aboveButtonStepsIndicator}
     />
   );
 };
@@ -71,6 +74,15 @@ export const ProtonScreenActionButtons = props => {
   const defaultValue = content.checkbox?.defaultValue;
 
   const [isChecked, setIsChecked] = useState(defaultValue || false);
+  const buttonRef = React.useRef(null);
+
+  const shouldFocusButton = content?.primary_button?.should_focus_button;
+
+  useEffect(() => {
+    if (shouldFocusButton) {
+      buttonRef.current?.focus();
+    }
+  }, [shouldFocusButton]);
 
   if (
     !content.primary_button &&
@@ -96,6 +108,7 @@ export const ProtonScreenActionButtons = props => {
     >
       <Localized text={content.primary_button?.label}>
         <button
+          ref={buttonRef}
           className={`${content.primary_button?.style ?? "primary"}${
             content.primary_button?.has_arrow_icon ? " arrow-icon" : ""
           }`}
@@ -168,27 +181,38 @@ export class ProtonScreen extends React.PureComponent {
   }
 
   renderTitle({ title, title_logo }) {
-    return title_logo ? (
-      <div className="inline-icon-container">
-        {this.renderLogo(title_logo)}
-        <Localized text={title}>
-          <h1 id="mainContentHeader" />
-        </Localized>
-      </div>
-    ) : (
+    if (title_logo) {
+      const { alignment, ...rest } = title_logo;
+      return (
+        <div
+          className="inline-icon-container"
+          alignment={alignment ?? "center"}
+        >
+          {this.renderPicture({ ...rest })}
+          <Localized text={title}>
+            <h1 id="mainContentHeader" />
+          </Localized>
+        </div>
+      );
+    }
+    return (
       <Localized text={title}>
         <h1 id="mainContentHeader" />
       </Localized>
     );
   }
 
-  renderLogo({
+  renderPicture({
     imageURL = "chrome://branding/content/about-logo.svg",
     darkModeImageURL,
     reducedMotionImageURL,
     darkModeReducedMotionImageURL,
     alt = "",
+    width,
     height,
+    marginBlock,
+    marginInline,
+    className = "logo-container",
   }) {
     function getLoadingStrategy() {
       for (let url of [
@@ -205,7 +229,7 @@ export class ProtonScreen extends React.PureComponent {
     }
 
     return (
-      <picture className="logo-container">
+      <picture className={className} style={{ marginInline, marginBlock }}>
         {darkModeReducedMotionImageURL ? (
           <source
             srcSet={darkModeReducedMotionImageURL}
@@ -229,7 +253,7 @@ export class ProtonScreen extends React.PureComponent {
         </Localized>
         <img
           className="brand-logo"
-          style={{ height }}
+          style={{ height, width }}
           src={imageURL}
           alt=""
           loading={getLoadingStrategy()}
@@ -320,12 +344,16 @@ export class ProtonScreen extends React.PureComponent {
   }
 
   renderDismissButton() {
+    const { size, marginBlock, marginInline, label } =
+      this.props.content.dismiss_button;
     return (
       <button
         className="dismiss-button"
         onClick={this.props.handleAction}
         value="dismiss_button"
-        data-l10n-id={"spotlight-dialog-close-button"}
+        data-l10n-id={label?.string_id || "spotlight-dialog-close-button"}
+        button-size={size}
+        style={{ marginBlock, marginInline }}
       ></button>
     );
   }
@@ -338,7 +366,10 @@ export class ProtonScreen extends React.PureComponent {
       <div
         id="steps"
         className={`steps${content.progress_bar ? " progress-bar" : ""}`}
-        data-l10n-id={"onboarding-welcome-steps-indicator-label"}
+        data-l10n-id={
+          content.steps_indicator?.string_id ||
+          "onboarding-welcome-steps-indicator-label"
+        }
         data-l10n-args={JSON.stringify({
           current: currentStep,
           total: total ?? 0,
@@ -395,13 +426,39 @@ export class ProtonScreen extends React.PureComponent {
               </Localized>
               <div className="spacer-bottom" />
             </div>
-            <Localized text={content.help_text}>
-              <span className="attrib-text" />
-            </Localized>
           </React.Fragment>
         )}
       </div>
     );
+  }
+
+  renderOrderedContent(content) {
+    const elements = [];
+    for (const item of content) {
+      switch (item.type) {
+        case "text":
+          elements.push(
+            <LinkParagraph
+              text_content={item}
+              handleAction={this.props.handleAction}
+            />
+          );
+          break;
+        case "image":
+          elements.push(
+            this.renderPicture({
+              imageURL: item.url,
+              darkModeImageURL: item.darkModeImageURL,
+              height: item.height,
+              width: item.width,
+              alt: item.alt_text,
+              marginInline: item.marginInline,
+              className: "inline-image",
+            })
+          );
+      }
+    }
+    return <>{elements}</>;
   }
 
   render() {
@@ -414,6 +471,8 @@ export class ProtonScreen extends React.PureComponent {
       isLastScreen,
       isSingleScreen,
       forceHideStepsIndicator,
+      ariaRole,
+      aboveButtonStepsIndicator,
     } = this.props;
     const includeNoodles = content.has_noodles;
     // The default screen position is "center"
@@ -443,7 +502,7 @@ export class ProtonScreen extends React.PureComponent {
       <main
         className={`screen ${this.props.id || ""}
           ${screenClassName} ${textColorClass}`}
-        role="alertdialog"
+        role={ariaRole ?? "alertdialog"}
         layout={content.layout}
         pos={content.position || "center"}
         tabIndex="-1"
@@ -474,13 +533,18 @@ export class ProtonScreen extends React.PureComponent {
           {includeNoodles ? this.renderNoodles() : null}
           <div
             className={`main-content ${hideStepsIndicator ? "no-steps" : ""}`}
-            style={
-              content.background && isCenterPosition
-                ? { background: content.background }
-                : {}
-            }
+            style={{
+              background:
+                content.background && isCenterPosition
+                  ? content.background
+                  : null,
+              width:
+                content.width && content.position !== "split"
+                  ? content.width
+                  : null,
+            }}
           >
-            {content.logo ? this.renderLogo(content.logo) : null}
+            {content.logo ? this.renderPicture(content.logo) : null}
 
             {isRtamo ? (
               <div className="rtamo-icon">
@@ -528,8 +592,14 @@ export class ProtonScreen extends React.PureComponent {
                   handleAction={this.props.handleAction}
                 />
               ) : null}
+              {content.above_button_content
+                ? this.renderOrderedContent(content.above_button_content)
+                : null}
               {this.renderContentTiles()}
               {this.renderLanguageSwitcher()}
+              {!hideStepsIndicator && aboveButtonStepsIndicator
+                ? this.renderStepsIndicator()
+                : null}
               <ProtonScreenActionButtons
                 content={content}
                 addonName={this.props.addonName}
@@ -537,10 +607,15 @@ export class ProtonScreen extends React.PureComponent {
                 activeMultiSelect={this.props.activeMultiSelect}
               />
             </div>
-            {!hideStepsIndicator ? this.renderStepsIndicator() : null}
+            {!hideStepsIndicator && !aboveButtonStepsIndicator
+              ? this.renderStepsIndicator()
+              : null}
           </div>
           {content.dismiss_button ? this.renderDismissButton() : null}
         </div>
+        <Localized text={content.info_text}>
+          <span className="info-text" />
+        </Localized>
       </main>
     );
   }

@@ -161,7 +161,9 @@ class VendorManifest(MozbuildObject):
                 new_revision, timestamp, ignore_modified, add_to_exports
             )
         elif flavor == "individual-files":
-            self.process_individual(new_revision, timestamp, ignore_modified)
+            self.process_individual(
+                new_revision, timestamp, ignore_modified, add_to_exports
+            )
         elif flavor == "rust":
             self.process_rust(
                 command_context,
@@ -194,7 +196,7 @@ class VendorManifest(MozbuildObject):
 
         self.update_yaml(new_revision, timestamp)
 
-    def process_individual(self, new_revision, timestamp, ignore_modified):
+    def fetch_individual(self, new_revision):
         # This design is used because there is no github API to query
         # for the last commit that modified a file; nor a way to get file
         # blame.  So really all we can do is just download and replace the
@@ -233,28 +235,14 @@ class VendorManifest(MozbuildObject):
             )
             download_and_write_file(url, destination)
 
-        self.spurious_check(new_revision, ignore_modified)
-
-        self.logInfo({}, "Checking for update actions")
-        self.update_files(new_revision)
-
-        self.update_yaml(new_revision, timestamp)
-
-        self.logInfo({"rev": new_revision}, "Updated to '{rev}'.")
-
-        if "patches" in self.manifest["vendoring"]:
-            # Remind the user
-            self.log(
-                logging.CRITICAL,
-                "vendor",
-                {},
-                "Patches present in manifest!!! Please run "
-                "'./mach vendor --patch-mode only' after commiting changes.",
-            )
-
-    def process_regular(self, new_revision, timestamp, ignore_modified, add_to_exports):
+    def process_regular_or_individual(
+        self, is_individual, new_revision, timestamp, ignore_modified, add_to_exports
+    ):
         if self.should_perform_step("fetch"):
-            self.fetch_and_unpack(new_revision)
+            if is_individual:
+                self.fetch_individual(new_revision)
+            else:
+                self.fetch_and_unpack(new_revision)
         else:
             self.logInfo({}, "Skipping fetching upstream source.")
 
@@ -282,6 +270,8 @@ class VendorManifest(MozbuildObject):
         else:
             self.logInfo({}, "Skipping updating the moz.yaml file.")
 
+        # individual flavor does not need this step, but performing it should
+        # always be a no-op
         if self.should_perform_step("update-moz-build"):
             self.logInfo({}, "Updating moz.build files")
             self.update_moz_build(
@@ -304,6 +294,20 @@ class VendorManifest(MozbuildObject):
                 "'./mach vendor --patch-mode only' after commiting changes.",
             )
 
+    def process_regular(self, new_revision, timestamp, ignore_modified, add_to_exports):
+        is_individual = False
+        self.process_regular_or_individual(
+            is_individual, new_revision, timestamp, ignore_modified, add_to_exports
+        )
+
+    def process_individual(
+        self, new_revision, timestamp, ignore_modified, add_to_exports
+    ):
+        is_individual = True
+        self.process_regular_or_individual(
+            is_individual, new_revision, timestamp, ignore_modified, add_to_exports
+        )
+
     def get_source_host(self):
         if self.manifest["vendoring"]["source-hosting"] == "gitlab":
             from mozbuild.vendor.host_gitlab import GitLabHost
@@ -313,6 +317,10 @@ class VendorManifest(MozbuildObject):
             from mozbuild.vendor.host_github import GitHubHost
 
             return GitHubHost(self.manifest)
+        elif self.manifest["vendoring"]["source-hosting"] == "git":
+            from mozbuild.vendor.host_git import GitHost
+
+            return GitHost(self.manifest)
         elif self.manifest["vendoring"]["source-hosting"] == "googlesource":
             from mozbuild.vendor.host_googlesource import GoogleSourceHost
 
@@ -409,14 +417,19 @@ class VendorManifest(MozbuildObject):
             url = self.source_host.upstream_release_artifact(revision, release_artifact)
         else:
             url = self.source_host.upstream_snapshot(revision)
+
         self.logInfo({"url": url}, "Fetching code archive from {url}")
 
         with mozfile.NamedTemporaryFile() as tmptarfile:
             tmpextractdir = tempfile.TemporaryDirectory()
             try:
-                req = requests.get(url, stream=True)
-                for data in req.iter_content(4096):
-                    tmptarfile.write(data)
+                if url.startswith("file://"):
+                    with open(url[len("file://") :], "rb") as tarinput:
+                        tmptarfile.write(tarinput.read())
+                else:
+                    req = requests.get(url, stream=True)
+                    for data in req.iter_content(4096):
+                        tmptarfile.write(data)
                 tmptarfile.seek(0)
 
                 vendor_dir = mozpath.normsep(
@@ -457,7 +470,9 @@ class VendorManifest(MozbuildObject):
                 # GitLab puts everything down a directory; move it up.
                 if has_prefix:
                     tardir = mozpath.join(tmpextractdir.name, one_prefix)
-                    mozfile.copy_contents(tardir, tmpextractdir.name)
+                    mozfile.copy_contents(
+                        tardir, tmpextractdir.name, ignore_dangling_symlinks=True
+                    )
                     mozfile.remove(tardir)
 
                 if self.should_perform_step("include"):

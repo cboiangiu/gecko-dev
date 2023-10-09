@@ -4,6 +4,7 @@
 
 import PropTypes from "prop-types";
 import React, { PureComponent } from "react";
+import { div } from "react-dom-factories";
 import { bindActionCreators } from "redux";
 import ReactDOM from "react-dom";
 import { connect } from "../../utils/connect";
@@ -57,7 +58,7 @@ import {
   lineAtHeight,
   toSourceLine,
   getDocument,
-  scrollToColumn,
+  scrollToPosition,
   toEditorPosition,
   getSourceLocationFromMouseEvent,
   hasDocument,
@@ -140,8 +141,8 @@ class Editor extends PureComponent {
 
     const shouldUpdateText =
       nextProps.selectedSource !== this.props.selectedSource ||
-      nextProps.selectedSourceTextContent !==
-        this.props.selectedSourceTextContent ||
+      nextProps.selectedSourceTextContent?.value !==
+        this.props.selectedSourceTextContent?.value ||
       nextProps.symbols !== this.props.symbols;
 
     const shouldUpdateSize =
@@ -499,25 +500,21 @@ class Editor extends PureComponent {
   }
 
   shouldScrollToLocation(nextProps, editor) {
-    const { selectedLocation, selectedSource, selectedSourceTextContent } =
-      this.props;
     if (
-      !editor ||
-      !nextProps.selectedSource ||
-      !nextProps.selectedLocation ||
-      !nextProps.selectedLocation.line ||
+      !nextProps.selectedLocation?.line ||
       !nextProps.selectedSourceTextContent
     ) {
       return false;
     }
 
-    const isFirstLoad =
-      (!selectedSource || !selectedSourceTextContent) &&
-      nextProps.selectedSourceTextContent;
+    const { selectedLocation, selectedSourceTextContent } = this.props;
+    const contentChanged =
+      !selectedSourceTextContent?.value &&
+      nextProps.selectedSourceTextContent?.value;
     const locationChanged = selectedLocation !== nextProps.selectedLocation;
     const symbolsChanged = nextProps.symbols != this.props.symbols;
 
-    return isFirstLoad || locationChanged || symbolsChanged;
+    return contentChanged || locationChanged || symbolsChanged;
   }
 
   scrollToLocation(nextProps, editor) {
@@ -531,7 +528,7 @@ class Editor extends PureComponent {
       column = Math.max(column, getIndentation(lineText));
     }
 
-    scrollToColumn(editor.codeMirror, line, column);
+    scrollToPosition(editor.codeMirror, line, column);
   }
 
   setText(props, editor) {
@@ -613,34 +610,50 @@ class Editor extends PureComponent {
     if (!selectedSource || !editor || !getDocument(selectedSource.id)) {
       return null;
     }
-
-    return (
-      <div>
-        <DebugLine />
-        <HighlightLine />
-        <EmptyLines editor={editor} />
-        <Breakpoints editor={editor} />
-        <Preview editor={editor} editorRef={this.$editorWrapper} />
-        {highlightedLineRange ? (
-          <HighlightLines editor={editor} range={highlightedLineRange} />
-        ) : null}
-        {isSourceOnIgnoreList || selectedSourceIsBlackBoxed ? (
-          <BlackboxLines
-            editor={editor}
-            selectedSource={selectedSource}
-            isSourceOnIgnoreList={isSourceOnIgnoreList}
-            blackboxedRangesForSelectedSource={
-              blackboxedRanges[selectedSource.url]
-            }
-          />
-        ) : null}
-        <Exceptions />
-        {conditionalPanelLocation ? <ConditionalPanel editor={editor} /> : null}
-        <ColumnBreakpoints editor={editor} />
-        {isPaused && inlinePreviewEnabled ? (
-          <InlinePreviews editor={editor} selectedSource={selectedSource} />
-        ) : null}
-      </div>
+    return div(
+      null,
+      React.createElement(DebugLine, null),
+      React.createElement(HighlightLine, null),
+      React.createElement(EmptyLines, {
+        editor,
+      }),
+      React.createElement(Breakpoints, {
+        editor,
+      }),
+      React.createElement(Preview, {
+        editor,
+        editorRef: this.$editorWrapper,
+      }),
+      highlightedLineRange
+        ? React.createElement(HighlightLines, {
+            editor,
+            range: highlightedLineRange,
+          })
+        : null,
+      isSourceOnIgnoreList || selectedSourceIsBlackBoxed
+        ? React.createElement(BlackboxLines, {
+            editor,
+            selectedSource,
+            isSourceOnIgnoreList,
+            blackboxedRangesForSelectedSource:
+              blackboxedRanges[selectedSource.url],
+          })
+        : null,
+      React.createElement(Exceptions, null),
+      conditionalPanelLocation
+        ? React.createElement(ConditionalPanel, {
+            editor,
+          })
+        : null,
+      React.createElement(ColumnBreakpoints, {
+        editor,
+      }),
+      isPaused && inlinePreviewEnabled
+        ? React.createElement(InlinePreviews, {
+            editor,
+            selectedSource,
+          })
+        : null
     );
   }
 
@@ -648,27 +661,27 @@ class Editor extends PureComponent {
     if (!this.props.selectedSource) {
       return null;
     }
-
-    return <SearchInFileBar editor={this.state.editor} />;
+    return React.createElement(SearchInFileBar, {
+      editor: this.state.editor,
+    });
   }
 
   render() {
     const { selectedSourceIsBlackBoxed, skipPausing } = this.props;
-    return (
-      <div
-        className={classnames("editor-wrapper", {
+    return div(
+      {
+        className: classnames("editor-wrapper", {
           blackboxed: selectedSourceIsBlackBoxed,
           "skip-pausing": skipPausing,
-        })}
-        ref={c => (this.$editorWrapper = c)}
-      >
-        <div
-          className="editor-mount devtools-monospace"
-          style={this.getInlineEditorStyles()}
-        />
-        {this.renderSearchInFileBar()}
-        {this.renderItems()}
-      </div>
+        }),
+        ref: c => (this.$editorWrapper = c),
+      },
+      div({
+        className: "editor-mount devtools-monospace",
+        style: this.getInlineEditorStyles(),
+      }),
+      this.renderSearchInFileBar(),
+      this.renderItems()
     );
   }
 }

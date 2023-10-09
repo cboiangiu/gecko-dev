@@ -320,7 +320,14 @@ class NotificationWorkerRunnable : public MainThreadWorkerRunnable {
   bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override {
     aWorkerPrivate->AssertIsOnWorkerThread();
     aWorkerPrivate->ModifyBusyCountFromWorker(true);
-    WorkerRunInternal(aWorkerPrivate);
+    // WorkerScope might start dying at the moment. And WorkerRunInternal()
+    // should not be executed once WorkerScope is dying, since
+    // WorkerRunInternal() might access resources which already been freed
+    // during WorkerRef::Notify().
+    if (aWorkerPrivate->GlobalScope() &&
+        !aWorkerPrivate->GlobalScope()->IsDying()) {
+      WorkerRunInternal(aWorkerPrivate);
+    }
     return true;
   }
 
@@ -347,10 +354,7 @@ class NotificationEventWorkerRunnable final
         mEventName(aEventName) {}
 
   void WorkerRunInternal(WorkerPrivate* aWorkerPrivate) override {
-    if (aWorkerPrivate->GlobalScope() &&
-        !aWorkerPrivate->GlobalScope()->IsDying()) {
-      mNotification->DispatchTrustedEvent(mEventName);
-    }
+    mNotification->DispatchTrustedEvent(mEventName);
   }
 };
 
@@ -361,6 +365,18 @@ class ReleaseNotificationRunnable final : public NotificationWorkerRunnable {
   explicit ReleaseNotificationRunnable(Notification* aNotification)
       : NotificationWorkerRunnable(aNotification->mWorkerPrivate),
         mNotification(aNotification) {}
+
+  bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override {
+    aWorkerPrivate->AssertIsOnWorkerThread();
+    aWorkerPrivate->ModifyBusyCountFromWorker(true);
+    // ReleaseNotificationRunnable is only used in StrongWorkerRef's shutdown
+    // callback. At the moment, it is supposed to executing
+    // mNotification->ReleaseObject() safely even though the corresponding
+    // WorkerScope::IsDying() is true. It is unlike other
+    // NotificationWorkerRunnable.
+    WorkerRunInternal(aWorkerPrivate);
+    return true;
+  }
 
   void WorkerRunInternal(WorkerPrivate* aWorkerPrivate) override {
     mNotification->ReleaseObject();
@@ -477,6 +493,9 @@ NotificationPermissionRequest::Run() {
   bool blocked = false;
   if (isSystem) {
     mPermission = NotificationPermission::Granted;
+  } else if (mPrincipal->GetPrivateBrowsingId() != 0) {
+    mPermission = NotificationPermission::Denied;
+    blocked = true;
   } else {
     // File are automatically granted permission.
 
@@ -1452,7 +1471,12 @@ already_AddRefed<Promise> Notification::RequestPermission(
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
+
   nsCOMPtr<nsIPrincipal> principal = sop->GetPrincipal();
+  if (!principal) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
 
   RefPtr<Promise> promise = Promise::Create(window->AsGlobal(), aRv);
   if (aRv.Failed()) {
@@ -1481,7 +1505,7 @@ NotificationPermission Notification::GetPermission(const GlobalObject& aGlobal,
 NotificationPermission Notification::GetPermission(nsIGlobalObject* aGlobal,
                                                    ErrorResult& aRv) {
   if (NS_IsMainThread()) {
-    return GetPermissionInternal(aGlobal->AsInnerWindow(), aRv);
+    return GetPermissionInternal(aGlobal->GetAsInnerWindow(), aRv);
   } else {
     WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(worker);
@@ -1506,6 +1530,14 @@ NotificationPermission Notification::GetPermissionInternal(
   }
 
   nsCOMPtr<nsIPrincipal> principal = sop->GetPrincipal();
+  if (!principal) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return NotificationPermission::Denied;
+  }
+
+  if (principal->GetPrivateBrowsingId() != 0) {
+    return NotificationPermission::Denied;
+  }
   // Disallow showing notification if our origin is not the same origin as the
   // toplevel one, see https://github.com/whatwg/notifications/issues/177.
   if (!StaticPrefs::dom_webnotifications_allowcrossoriginiframe()) {

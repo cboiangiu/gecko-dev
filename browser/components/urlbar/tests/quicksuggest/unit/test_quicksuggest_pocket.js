@@ -432,7 +432,7 @@ add_task(async function notRelevant() {
   info("Triggering the 'Not relevant' command");
   QuickSuggest.getFeature("PocketSuggestions").handleCommand(
     {
-      acknowledgeDismissal() {},
+      controller: { removeResult() {} },
     },
     result,
     "not_relevant"
@@ -497,7 +497,7 @@ add_task(async function notInterested() {
   info("Triggering the 'Not interested' command");
   QuickSuggest.getFeature("PocketSuggestions").handleCommand(
     {
-      acknowledgeDismissal() {},
+      controller: { removeResult() {} },
     },
     result,
     "not_interested"
@@ -570,7 +570,9 @@ function makeExpectedResult({
       displayUrl: url.href.replace(/^https:\/\//, ""),
       originalUrl: suggestion.url,
       description: isTopPick ? suggestion.description : "",
-      icon: "chrome://global/skin/icons/pocket.svg",
+      icon: isTopPick
+        ? "chrome://global/skin/icons/pocket.svg"
+        : "chrome://global/skin/icons/pocket-favicon.ico",
       helpUrl: QuickSuggest.HELP_URL,
       shouldShowUrl: true,
       bottomTextL10n: {

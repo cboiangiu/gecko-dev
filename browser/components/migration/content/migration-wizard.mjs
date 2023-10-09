@@ -29,6 +29,7 @@ export class MigrationWizard extends HTMLElement {
   #selectAllCheckbox = null;
   #resourceSummary = null;
   #expandedDetails = false;
+  #extensionsSuccessLink = null;
 
   static get markup() {
     return `
@@ -133,7 +134,7 @@ export class MigrationWizard extends HTMLElement {
               <div data-resource-type="EXTENSIONS" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-extensions-option-label"></span>
-                <a class="message-text deemphasized-text"></a>
+                <a id="extensions-success-link" href="about:addons" class="message-text deemphasized-text"></a>
                 <span class="message-text deemphasized-text"></span>
                 <a class="support-text deemphasized-text"></a>
               </div>
@@ -271,14 +272,7 @@ export class MigrationWizard extends HTMLElement {
         true
       );
     }
-    let fragment = MigrationWizard.#template.content.cloneNode(true);
-    if (window.IS_STORYBOOK) {
-      // If we're using Storybook, load the CSS from the static local file
-      // system rather than chrome:// to take advantage of auto-reloading.
-      fragment.querySelector("link[rel=stylesheet]").href =
-        "./migration/migration-wizard.css";
-    }
-    return fragment;
+    return MigrationWizard.#template.content.cloneNode(true);
   }
 
   constructor() {
@@ -339,6 +333,11 @@ export class MigrationWizard extends HTMLElement {
       "#safari-password-import-select"
     );
     this.#safariPasswordImportSelectButton.addEventListener("click", this);
+
+    this.#extensionsSuccessLink = shadow.querySelector(
+      "#extensions-success-link"
+    );
+    this.#extensionsSuccessLink.addEventListener("click", this);
 
     this.#shadowRoot = shadow;
   }
@@ -534,8 +533,16 @@ export class MigrationWizard extends HTMLElement {
     );
 
     let details = this.#shadowRoot.querySelector("details");
-    selectionPage.toggleAttribute("show-import-all", state.showImportAll);
-    details.open = !state.showImportAll;
+
+    if (this.hasAttribute("force-show-import-all")) {
+      let forceShowImportAll =
+        this.getAttribute("force-show-import-all") == "true";
+      selectionPage.toggleAttribute("show-import-all", forceShowImportAll);
+      details.open = !forceShowImportAll;
+    } else {
+      selectionPage.toggleAttribute("show-import-all", state.showImportAll);
+      details.open = !state.showImportAll;
+    }
 
     this.#expandedDetails = false;
 
@@ -648,6 +655,8 @@ export class MigrationWizard extends HTMLElement {
     let resourceGroups = progressPage.querySelectorAll(
       ".resource-progress-group"
     );
+    this.#extensionsSuccessLink.textContent = "";
+
     let totalProgressGroups = Object.keys(state.progress).length;
     let remainingProgressGroups = totalProgressGroups;
     let totalWarnings = 0;
@@ -662,7 +671,6 @@ export class MigrationWizard extends HTMLElement {
 
       let progressIcon = group.querySelector(".progress-icon");
       let messageText = group.querySelector("span.message-text");
-      let extensionsSuccessLink = group.querySelector("a.message-text");
       let supportLink = group.querySelector(".support-text");
 
       let labelSpan = group.querySelector("span[default-data-l10n-id]");
@@ -680,10 +688,7 @@ export class MigrationWizard extends HTMLElement {
         }
       }
       messageText.textContent = "";
-      if (extensionsSuccessLink) {
-        extensionsSuccessLink.textContent = "";
-        extensionsSuccessLink.removeAttribute("href");
-      }
+
       if (supportLink) {
         supportLink.textContent = "";
         supportLink.removeAttribute("href");
@@ -697,10 +702,6 @@ export class MigrationWizard extends HTMLElement {
           );
           progressIcon.setAttribute("state", "loading");
           messageText.textContent = "";
-          if (extensionsSuccessLink) {
-            extensionsSuccessLink.textContent = "";
-            extensionsSuccessLink.removeAttribute("href");
-          }
           supportLink.textContent = "";
           supportLink.removeAttribute("href");
           // With no status text, we re-insert the &nbsp; so that the status
@@ -720,8 +721,7 @@ export class MigrationWizard extends HTMLElement {
             MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.EXTENSIONS
           ) {
             messageText.textContent = "";
-            extensionsSuccessLink.href = "about:addons";
-            extensionsSuccessLink.textContent =
+            this.#extensionsSuccessLink.textContent =
               state.progress[resourceType].message;
           }
           remainingProgressGroups--;
@@ -754,8 +754,7 @@ export class MigrationWizard extends HTMLElement {
             MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.EXTENSIONS
           ) {
             messageText.textContent = "";
-            extensionsSuccessLink.href = "about:addons";
-            extensionsSuccessLink.textContent =
+            this.#extensionsSuccessLink.textContent =
               state.progress[resourceType].message;
           }
           remainingProgressGroups--;
@@ -1262,6 +1261,13 @@ export class MigrationWizard extends HTMLElement {
           }
         } else if (event.target == this.#safariPasswordImportSelectButton) {
           this.#selectSafariPasswordFile();
+        } else if (event.target == this.#extensionsSuccessLink) {
+          this.dispatchEvent(
+            new CustomEvent("MigrationWizard:OpenAboutAddons", {
+              bubbles: true,
+            })
+          );
+          event.preventDefault();
         }
         break;
       }

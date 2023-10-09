@@ -48,6 +48,7 @@
 #include "nsIConstraintValidation.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventListenerManager.h"
+#include "mozilla/Try.h"
 #include "mozilla/dom/DragEvent.h"
 #include "mozilla/dom/Event.h"     // for Event
 #include "mozilla/dom/File.h"      // for input type=file
@@ -924,10 +925,6 @@ nsDocShellTreeOwner::HandleEvent(Event* aEvent) {
     handler->CanDropLink(dragEvent, false, &canDropLink);
     if (canDropLink) {
       aEvent->PreventDefault();
-      WidgetDragEvent* asWidgetDropEvent =
-          dragEvent->WidgetEventPtr()->AsDragEvent();
-      asWidgetDropEvent->UpdateDefaultPreventedOnContent(
-          asWidgetDropEvent->mCurrentTarget);
     }
   } else if (eventType.EqualsLiteral("drop")) {
     nsCOMPtr<nsIWebNavigation> webnav =
@@ -979,10 +976,6 @@ nsDocShellTreeOwner::HandleEvent(Event* aEvent) {
     } else {
       aEvent->StopPropagation();
       aEvent->PreventDefault();
-      WidgetDragEvent* asWidgetDropEvent =
-          dragEvent->WidgetEventPtr()->AsDragEvent();
-      asWidgetDropEvent->UpdateDefaultPreventedOnContent(
-          asWidgetDropEvent->mCurrentTarget);
     }
   }
 

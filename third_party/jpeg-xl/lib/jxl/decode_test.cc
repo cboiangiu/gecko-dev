@@ -1666,9 +1666,9 @@ TEST(DecodeTest, PixelTestWithICCProfileLossy) {
   EXPECT_THAT(ButteraugliDistance(io0.frames, io1.frames, ba, jxl::GetJxlCms(),
                                   /*distmap=*/nullptr, nullptr),
 #if JXL_HIGH_PRECISION
-              IsSlightlyBelow(0.70f));
+              IsSlightlyBelow(0.9f));
 #else
-              IsSlightlyBelow(0.78f));
+              IsSlightlyBelow(0.98f));
 #endif
 
   JxlDecoderDestroy(dec);
@@ -1928,9 +1928,9 @@ TEST(DecodeTest, PixelTestOpaqueSrgbLossy) {
         ButteraugliDistance(io0.frames, io1.frames, ba, jxl::GetJxlCms(),
                             /*distmap=*/nullptr, nullptr),
 #if JXL_HIGH_PRECISION
-        IsSlightlyBelow(0.74f));
+        IsSlightlyBelow(0.93f));
 #else
-        IsSlightlyBelow(0.75f));
+        IsSlightlyBelow(0.94f));
 #endif
 
     JxlDecoderDestroy(dec);
@@ -4845,8 +4845,7 @@ TEST(DecodeTest, JXL_TRANSCODE_JPEG_TEST(JPEGReconstructionTest)) {
   ASSERT_TRUE(
       EncodeJPEGData(*orig_io.Main().jpeg_data.get(), &jpeg_data, cparams));
   jxl::PaddedBytes container;
-  container.append(jxl::kContainerHeader,
-                   jxl::kContainerHeader + sizeof(jxl::kContainerHeader));
+  container.append(jxl::kContainerHeader.begin(), jxl::kContainerHeader.end());
   jxl::AppendBoxHeader(jxl::MakeBoxType("jbrd"), jpeg_data.size(), false,
                        &container);
   container.append(jpeg_data.data(), jpeg_data.data() + jpeg_data.size());

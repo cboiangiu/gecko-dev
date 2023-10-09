@@ -20,3 +20,19 @@ export class GenericAutocompleteItem {
     });
   }
 }
+
+/**
+ * Show confirmation tooltip
+ *
+ * @param {object} browser - An object representing the browser.
+ * @param {string} messageId - Message ID from browser/browser.properties.
+ * @param {string} [anchorId="identity-icon"] - ID of the element to anchor the hint to.
+ */
+export function showConfirmation(
+  browser,
+  messageId,
+  anchorId = "identity-icon"
+) {
+  const anchor = browser.ownerDocument.getElementById(anchorId);
+  anchor.ownerGlobal.ConfirmationHint.show(anchor, messageId, {});
+}

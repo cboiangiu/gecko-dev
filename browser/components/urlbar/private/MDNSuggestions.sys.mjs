@@ -7,14 +7,18 @@ import { BaseFeature } from "resource:///modules/urlbar/private/BaseFeature.sys.
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
-  QuickSuggestRemoteSettings:
-    "resource:///modules/urlbar/private/QuickSuggestRemoteSettings.sys.mjs",
-  SuggestionsMap:
-    "resource:///modules/urlbar/private/QuickSuggestRemoteSettings.sys.mjs",
+  QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
+  SuggestionsMap: "resource:///modules/urlbar/private/SuggestBackendJs.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
 });
+
+const RESULT_MENU_COMMAND = {
+  HELP: "help",
+  NOT_INTERESTED: "not_interested",
+  NOT_RELEVANT: "not_relevant",
+};
 
 /**
  * A feature that supports MDN suggestions.
@@ -42,9 +46,9 @@ export class MDNSuggestions extends BaseFeature {
 
   enable(enabled) {
     if (enabled) {
-      lazy.QuickSuggestRemoteSettings.register(this);
+      lazy.QuickSuggest.jsBackend.register(this);
     } else {
-      lazy.QuickSuggestRemoteSettings.unregister(this);
+      lazy.QuickSuggest.jsBackend.unregister(this);
     }
   }
 
@@ -89,9 +93,23 @@ export class MDNSuggestions extends BaseFeature {
       return null;
     }
 
+    // Set `is_top_pick` on the suggestion to tell the provider to set
+    // best-match related properties on the result.
+    suggestion.is_top_pick = true;
+
+    const url = new URL(suggestion.url);
+    url.searchParams.set("utm_medium", "firefox-desktop");
+    url.searchParams.set("utm_source", "firefox-suggest");
+    url.searchParams.set(
+      "utm_campaign",
+      "firefox-mdn-web-docs-suggestion-experiment"
+    );
+    url.searchParams.set("utm_content", "treatment");
+
     const payload = {
       icon: "chrome://global/skin/icons/mdn.svg",
-      url: suggestion.url,
+      url: url.href,
+      originalUrl: suggestion.url,
       title: [suggestion.title, lazy.UrlbarUtils.HIGHLIGHT.TYPED],
       description: suggestion.description,
       shouldShowUrl: true,
@@ -109,6 +127,66 @@ export class MDNSuggestions extends BaseFeature {
       ),
       { showFeedbackMenu: true }
     );
+  }
+
+  getResultCommands(result) {
+    return [
+      {
+        l10n: {
+          id: "firefox-suggest-command-dont-show-mdn",
+        },
+        children: [
+          {
+            name: RESULT_MENU_COMMAND.NOT_RELEVANT,
+            l10n: {
+              id: "firefox-suggest-command-not-relevant",
+            },
+          },
+          {
+            name: RESULT_MENU_COMMAND.NOT_INTERESTED,
+            l10n: {
+              id: "firefox-suggest-command-not-interested",
+            },
+          },
+        ],
+      },
+      { name: "separator" },
+      {
+        name: RESULT_MENU_COMMAND.HELP,
+        l10n: {
+          id: "urlbar-result-menu-learn-more-about-firefox-suggest",
+        },
+      },
+    ];
+  }
+
+  handleCommand(view, result, selType) {
+    switch (selType) {
+      case RESULT_MENU_COMMAND.HELP:
+        // "help" is handled by UrlbarInput, no need to do anything here.
+        break;
+      // selType == "dismiss" when the user presses the dismiss key shortcut.
+      case "dismiss":
+      case RESULT_MENU_COMMAND.NOT_RELEVANT:
+        // MDNSuggestions adds the UTM parameters to the original URL and
+        // returns it as payload.url in the result. However, as
+        // UrlbarProviderQuickSuggest filters suggestions with original URL of
+        // provided suggestions, need to use the original URL when adding to the
+        // block list.
+        lazy.QuickSuggest.blockedSuggestions.add(result.payload.originalUrl);
+        result.acknowledgeDismissalL10n = {
+          id: "firefox-suggest-dismissal-acknowledgment-one-mdn",
+        };
+        view.controller.removeResult(result);
+        break;
+      case RESULT_MENU_COMMAND.NOT_INTERESTED:
+        lazy.UrlbarPrefs.set("suggest.mdn", false);
+        result.acknowledgeDismissalL10n = {
+          id: "firefox-suggest-dismissal-acknowledgment-all-mdn",
+        };
+        view.controller.removeResult(result);
+        break;
+    }
   }
 
   #suggestionsMap = null;

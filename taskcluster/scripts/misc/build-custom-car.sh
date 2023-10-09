@@ -31,7 +31,7 @@ PGO_SUBSTR="chrome-linux-main"
 # Logic for macosx64
 if [[ $(uname -s) == "Darwin" ]]; then
   # modify the config with fetched sdk path
-  export MACOS_SYSROOT="$MOZ_FETCHES_DIR/MacOSX13.3.sdk"
+  export MACOS_SYSROOT="$MOZ_FETCHES_DIR/MacOSX14.0.sdk"
   pip3 install importlib-metadata --user
   CONFIG=$(echo $CONFIG mac_sdk_path='"'$MACOS_SYSROOT'"')
 
@@ -96,6 +96,15 @@ if [[ $(uname -o) == "Msys" ]]; then
   # This is ok because we are not doing any development here and don't need
   # the development history, but this file is still needed to proceed.
   python3 build/util/lastchange.py -o build/util/LASTCHANGE
+fi
+
+if [[ $(uname -s) == "Linux" ]] || [[ $(uname -s) == "Darwin" ]]; then
+  # Bug 1847210
+  # Modifications to how the dirname and depot_tools and other env variables
+  # change how cipd is setup for Mac and Linux.
+  # Easily resolved by just running the setup script.
+  source ./third_party/depot_tools/cipd_bin_setup.sh
+  cipd_bin_setup
 fi
 
 # now we can run hooks and fetch PGO + everything else

@@ -7,15 +7,15 @@ use api::{units::*, PremultipliedColorF, ClipMode};
 use api::{ColorF, ImageFormat, LineOrientation, BorderStyle};
 use crate::batch::{AlphaBatchBuilder, AlphaBatchContainer, BatchTextures, add_quad_to_batch};
 use crate::batch::{ClipBatcher, BatchBuilder, INVALID_SEGMENT_INDEX, ClipMaskInstanceList};
-use crate::command_buffer::{CommandBufferList};
+use crate::command_buffer::{CommandBufferList, QuadFlags};
 use crate::segment::EdgeAaSegmentMask;
 use crate::spatial_tree::SpatialTree;
 use crate::clip::{ClipStore, ClipItemKind};
 use crate::frame_builder::{FrameGlobalResources};
 use crate::gpu_cache::{GpuCache, GpuCacheAddress};
 use crate::gpu_types::{BorderInstance, SvgFilterInstance, BlurDirection, BlurInstance, PrimitiveHeaders, ScalingInstance};
-use crate::gpu_types::{TransformPalette, ZBufferIdGenerator, TransformPaletteId, PrimitiveInstanceData, MaskInstance};
-use crate::gpu_types::{ZBufferId};
+use crate::gpu_types::{TransformPalette, ZBufferIdGenerator, MaskInstance, ClipSpace};
+use crate::gpu_types::{ZBufferId, QuadSegment, PrimitiveInstanceData, TransformPaletteId};
 use crate::internal_types::{FastHashMap, TextureSource, CacheTextureId};
 use crate::picture::{SliceId, SurfaceInfo, ResolvedSurfaceTexture, TileCacheInstance};
 use crate::prepare::write_prim_blocks;
@@ -24,10 +24,10 @@ use crate::prim_store::gradient::{
     FastLinearGradientInstance, LinearGradientInstance, RadialGradientInstance,
     ConicGradientInstance,
 };
-use crate::renderer::{GpuBufferBuilder};
+use crate::renderer::{GpuBufferBuilder, GpuBufferAddress};
 use crate::render_backend::DataStores;
-use crate::render_task::{RenderTaskKind, RenderTaskAddress, PrimTask};
-use crate::render_task::{RenderTask, ScalingTask, SvgFilterInfo};
+use crate::render_task::{RenderTaskKind, RenderTaskAddress, SubPass};
+use crate::render_task::{RenderTask, ScalingTask, SvgFilterInfo, MaskSubPass};
 use crate::render_task_graph::{RenderTaskGraph, RenderTaskId};
 use crate::resource_cache::ResourceCache;
 use crate::spatial_tree::{SpatialNodeIndex};
@@ -234,7 +234,8 @@ pub struct ColorRenderTarget {
 
     pub prim_instances: Vec<PrimitiveInstanceData>,
     pub prim_instances_with_scissor: FastHashMap<DeviceIntRect, Vec<PrimitiveInstanceData>>,
-    pub clip_masks: ClipMaskInstanceList,
+
+    pub clip_masks: Vec<ClipMaskInstanceList>,
 }
 
 impl RenderTarget for ColorRenderTarget {
@@ -259,7 +260,7 @@ impl RenderTarget for ColorRenderTarget {
             clear_color: Some(ColorF::TRANSPARENT),
             prim_instances: Vec::new(),
             prim_instances_with_scissor: FastHashMap::default(),
-            clip_masks: ClipMaskInstanceList::new(),
+            clip_masks: Vec::new(),
         }
     }
 
@@ -383,7 +384,7 @@ impl RenderTarget for ColorRenderTarget {
                     ZBufferId(0),
                     render_tasks,
                     |_, instance| {
-                        if info.needs_scissor_rect {
+                        if info.prim_needs_scissor_rect {
                             self.prim_instances_with_scissor
                                 .entry(target_rect)
                                 .or_insert(Vec::new())
@@ -392,19 +393,6 @@ impl RenderTarget for ColorRenderTarget {
                             self.prim_instances.push(instance);
                         }
                     }
-                );
-
-                build_mask_tasks(
-                    info,
-                    render_task_address,
-                    target_rect,
-                    ctx.clip_store,
-                    ctx.data_stores,
-                    ctx.spatial_tree,
-                    gpu_buffer_builder,
-                    transforms,
-                    render_tasks,
-                    &mut self.clip_masks,
                 );
             }
             RenderTaskKind::VerticalBlur(..) => {
@@ -452,6 +440,7 @@ impl RenderTarget for ColorRenderTarget {
             RenderTaskKind::RadialGradient(..) |
             RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::TileComposite(..) |
+            RenderTaskKind::Empty(..) |
             RenderTaskKind::LineDecoration(..) => {
                 panic!("Should not be added to color target!");
             }
@@ -474,6 +463,16 @@ impl RenderTarget for ColorRenderTarget {
             #[cfg(test)]
             RenderTaskKind::Test(..) => {}
         }
+
+        build_sub_pass(
+            task_id,
+            task,
+            gpu_buffer_builder,
+            render_tasks,
+            transforms,
+            ctx,
+            &mut self.clip_masks,
+        );
     }
 
     fn needs_depth(&self) -> bool {
@@ -498,6 +497,7 @@ pub struct AlphaRenderTarget {
     pub zero_clears: Vec<RenderTaskId>,
     pub one_clears: Vec<RenderTaskId>,
     pub texture_id: CacheTextureId,
+    pub clip_masks: Vec<ClipMaskInstanceList>,
 }
 
 impl RenderTarget for AlphaRenderTarget {
@@ -515,6 +515,7 @@ impl RenderTarget for AlphaRenderTarget {
             zero_clears: Vec::new(),
             one_clears: Vec::new(),
             texture_id,
+            clip_masks: Vec::new(),
         }
     }
 
@@ -527,7 +528,7 @@ impl RenderTarget for AlphaRenderTarget {
         task_id: RenderTaskId,
         ctx: &RenderTargetContext,
         gpu_cache: &mut GpuCache,
-        _: &mut GpuBufferBuilder,
+        gpu_buffer_builder: &mut GpuBufferBuilder,
         render_tasks: &RenderTaskGraph,
         clip_store: &ClipStore,
         transforms: &mut TransformPalette,
@@ -537,7 +538,6 @@ impl RenderTarget for AlphaRenderTarget {
         let target_rect = task.get_target_rect();
 
         match task.kind {
-            RenderTaskKind::Prim(..) |
             RenderTaskKind::Image(..) |
             RenderTaskKind::Cached(..) |
             RenderTaskKind::Readback(..) |
@@ -550,8 +550,15 @@ impl RenderTarget for AlphaRenderTarget {
             RenderTaskKind::RadialGradient(..) |
             RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::TileComposite(..) |
+            RenderTaskKind::Prim(..) |
             RenderTaskKind::SvgFilter(..) => {
                 panic!("BUG: should not be added to alpha target!");
+            }
+            RenderTaskKind::Empty(..) => {
+                // TODO(gw): Could likely be more efficient by choosing to clear to 0 or 1
+                //           based on the clip chain, or even skipping clear and masking the
+                //           prim region with blend disabled.
+                self.one_clears.push(task_id);
             }
             RenderTaskKind::VerticalBlur(..) => {
                 self.zero_clears.push(task_id);
@@ -618,6 +625,16 @@ impl RenderTarget for AlphaRenderTarget {
             #[cfg(test)]
             RenderTaskKind::Test(..) => {}
         }
+
+        build_sub_pass(
+            task_id,
+            task,
+            gpu_buffer_builder,
+            render_tasks,
+            transforms,
+            ctx,
+            &mut self.clip_masks,
+        );
     }
 
     fn needs_depth(&self) -> bool {
@@ -773,6 +790,7 @@ impl TextureCacheRenderTarget {
             RenderTaskKind::Readback(..) |
             RenderTaskKind::Scaling(..) |
             RenderTaskKind::TileComposite(..) |
+            RenderTaskKind::Empty(..) |
             RenderTaskKind::SvgFilter(..) => {
                 panic!("BUG: unexpected task kind for texture cache target");
             }
@@ -938,9 +956,13 @@ pub struct LineDecorationJob {
 }
 
 fn build_mask_tasks(
-    info: &PrimTask,
+    info: &MaskSubPass,
     render_task_address: RenderTaskAddress,
+    task_world_rect: WorldRect,
     target_rect: DeviceIntRect,
+    main_prim_address: GpuBufferAddress,
+    prim_spatial_node_index: SpatialNodeIndex,
+    raster_spatial_node_index: SpatialNodeIndex,
     clip_store: &ClipStore,
     data_stores: &DataStores,
     spatial_tree: &SpatialTree,
@@ -953,12 +975,7 @@ fn build_mask_tasks(
         let clip_instance = clip_store.get_instance_from_range(&info.clip_node_range, i);
         let clip_node = &data_stores.clip[clip_instance.handle];
 
-        let is_same_coord_system = spatial_tree.is_matching_coord_system(
-            clip_node.item.spatial_node_index,
-            info.raster_spatial_node_index,
-        );
-
-        match clip_node.item.kind {
+        let (clip_address, fast_path) = match clip_node.item.kind {
             ClipItemKind::RoundedRectangle { rect, radius, mode } => {
                 let (fast_path, clip_address) = if radius.is_uniform().is_some() {
                     let mut writer = gpu_buffer_builder.write_blocks(3);
@@ -989,169 +1006,249 @@ fn build_mask_tasks(
                     (false, clip_address)
                 };
 
-                let draw_clip_prim = is_same_coord_system && mode == ClipMode::Clip;
-
-                let (quad_transform_id, clip_prim_address, aa_flags, mask_transform_id) = if draw_clip_prim {
-                    let quad_transform_id = transforms.get_id(
-                        clip_node.item.spatial_node_index,
-                        info.raster_spatial_node_index,
-                        spatial_tree,
-                    );
-
-                    let clip_prim_address = write_prim_blocks(
-                        gpu_buffer_builder,
-                        rect,
-                        rect,
-                        PremultipliedColorF::WHITE,
-                        &[],
-                    );
-
-                    (quad_transform_id, clip_prim_address, EdgeAaSegmentMask::empty(), TransformPaletteId::IDENTITY)
-                } else {
-                    let mask_transform_id = transforms.get_id(
-                        info.prim_spatial_node_index,
-                        clip_node.item.spatial_node_index,
-                        spatial_tree,
-                    );
-
-                    (info.transform_id, info.prim_address, info.edge_flags, mask_transform_id)
-                };
-
-                add_quad_to_batch(
-                    render_task_address,
-                    quad_transform_id,
-                    clip_prim_address,
-                    info.quad_flags,
-                    aa_flags,
-                    INVALID_SEGMENT_INDEX as u8,
-                    RenderTaskId::INVALID,
-                    ZBufferId(0),
-                    render_tasks,
-                    |_, prim| {
-                        let instance = MaskInstance {
-                            prim,
-                            clip_transform_id: mask_transform_id,
-                            clip_address: clip_address.as_int(),
-                            info: [0; 2],
-                        };
-
-                        if info.needs_scissor_rect {
-                            if fast_path {
-                                results.mask_instances_fast_with_scissor
-                                       .entry(target_rect)
-                                       .or_insert(Vec::new())
-                                       .push(instance);
-                            } else {
-                                results.mask_instances_slow_with_scissor
-                                       .entry(target_rect)
-                                       .or_insert(Vec::new())
-                                       .push(instance);
-                            }
-                        } else {
-                            if fast_path {
-                                results.mask_instances_fast.push(instance);
-                            } else {
-                                results.mask_instances_slow.push(instance);
-                            }
-                        }
-                    }
-                );
+                (clip_address, fast_path)
             }
             ClipItemKind::Rectangle { rect, mode, .. } => {
+                assert_eq!(mode, ClipMode::Clip);
+
                 let mut writer = gpu_buffer_builder.write_blocks(3);
                 writer.push_one(rect);
                 writer.push_one([0.0, 0.0, 0.0, 0.0]);
                 writer.push_one([mode as i32 as f32, 0.0, 0.0, 0.0]);
                 let clip_address = writer.finish();
 
-                let draw_clip_prim = is_same_coord_system && mode == ClipMode::Clip;
+                (clip_address, true)
+            }
+            ClipItemKind::BoxShadow { .. } => {
+                panic!("bug: box-shadow clips not expected on non-legacy rect/quads");
+            }
+            ClipItemKind::Image { rect, .. } => {
+                let clip_transform_id = transforms.get_id(
+                    clip_node.item.spatial_node_index,
+                    raster_spatial_node_index,
+                    spatial_tree,
+                );
 
-                if draw_clip_prim {
-                    let clip_transform_id = transforms.get_id(
-                        clip_node.item.spatial_node_index,
-                        info.raster_spatial_node_index,
-                        spatial_tree,
-                    );
+                let is_same_coord_system = spatial_tree.is_matching_coord_system(
+                    prim_spatial_node_index,
+                    raster_spatial_node_index,
+                );
 
+                let clip_needs_scissor_rect = !is_same_coord_system;
+                let mut quad_flags = QuadFlags::SAMPLE_AS_MASK;
+
+                if is_same_coord_system {
+                    quad_flags |= QuadFlags::APPLY_DEVICE_CLIP;
+                }
+
+                for tile in clip_store.visible_mask_tiles(&clip_instance) {
                     let clip_prim_address = write_prim_blocks(
                         gpu_buffer_builder,
                         rect,
                         rect,
                         PremultipliedColorF::WHITE,
-                        &[],
+                        &[QuadSegment {
+                            rect: tile.tile_rect,
+                            task_id: tile.task_id,
+                        }]
                     );
+
+                    let texture = render_tasks
+                        .resolve_texture(tile.task_id)
+                        .expect("bug: texture not found for tile");
 
                     add_quad_to_batch(
                         render_task_address,
                         clip_transform_id,
                         clip_prim_address,
-                        info.quad_flags,
+                        quad_flags,
                         EdgeAaSegmentMask::empty(),
-                        INVALID_SEGMENT_INDEX as u8,
-                        RenderTaskId::INVALID,
+                        0,
+                        tile.task_id,
                         ZBufferId(0),
                         render_tasks,
                         |_, prim| {
-                            let instance = MaskInstance {
-                                prim,
-                                clip_transform_id: TransformPaletteId::IDENTITY,
-                                clip_address: clip_address.as_int(),
-                                info: [0; 2],
-                            };
-
-                            if info.needs_scissor_rect {
-                                results.mask_instances_fast_with_scissor
-                                       .entry(target_rect)
-                                       .or_insert(Vec::new())
-                                       .push(instance);
+                            if clip_needs_scissor_rect {
+                                results
+                                    .image_mask_instances_with_scissor
+                                    .entry((target_rect, texture))
+                                    .or_insert(Vec::new())
+                                    .push(prim);
                             } else {
-                                results.mask_instances_fast.push(instance);
-                            }
-                        }
-                    );
-                } else {
-                    let clip_transform_id = transforms.get_id(
-                        info.prim_spatial_node_index,
-                        clip_node.item.spatial_node_index,
-                        spatial_tree,
-                    );
-
-                    add_quad_to_batch(
-                        render_task_address,
-                        info.transform_id,
-                        info.prim_address,
-                        info.quad_flags,
-                        info.edge_flags,
-                        INVALID_SEGMENT_INDEX as u8,
-                        RenderTaskId::INVALID,
-                        ZBufferId(0),
-                        render_tasks,
-                        |_, prim| {
-                            let instance = MaskInstance {
-                                prim,
-                                clip_transform_id,
-                                clip_address: clip_address.as_int(),
-                                info: [0; 2],
-                            };
-
-                            if info.needs_scissor_rect {
-                                results.mask_instances_fast_with_scissor
-                                       .entry(target_rect)
-                                       .or_insert(Vec::new())
-                                       .push(instance);
-                            } else {
-                                results.mask_instances_fast.push(instance);
+                                results
+                                    .image_mask_instances
+                                    .entry(texture)
+                                    .or_insert(Vec::new())
+                                    .push(prim);
                             }
                         }
                     );
                 }
-            }
-            ClipItemKind::BoxShadow { .. } => {
-                panic!("bug: box-shadow clips not expected on non-legacy rect/quads");
-            }
-            ClipItemKind::Image { .. } => {
-                panic!("bug: image-masks not expected on rect/quads");
+
+                // TODO(gw): For now, we skip the main mask prim below for image masks. Perhaps
+                //           we can better merge the logic together?
+                // TODO(gw): How to efficiently handle if the image-mask rect doesn't cover local prim rect?
+                continue;
             }
         };
+
+        let prim_spatial_node = spatial_tree.get_spatial_node(prim_spatial_node_index);
+        let clip_spatial_node = spatial_tree.get_spatial_node(clip_node.item.spatial_node_index);
+        let raster_spatial_node = spatial_tree.get_spatial_node(raster_spatial_node_index);
+        let raster_clip = raster_spatial_node.coordinate_system_id == clip_spatial_node.coordinate_system_id;
+
+        let (clip_space, clip_transform_id, main_prim_address, prim_transform_id, is_same_coord_system) = if raster_clip {
+            let prim_transform_id = TransformPaletteId::IDENTITY;
+
+            let clip_transform_id = transforms.get_id(
+                raster_spatial_node_index,
+                clip_node.item.spatial_node_index,
+                spatial_tree,
+            );
+
+            let main_prim_address = write_prim_blocks(
+                gpu_buffer_builder,
+                task_world_rect.cast_unit(),
+                task_world_rect.cast_unit(),
+                PremultipliedColorF::WHITE,
+                &[],
+            );
+
+            (ClipSpace::Raster, clip_transform_id, main_prim_address, prim_transform_id, true)
+        } else {
+            let prim_transform_id = transforms.get_id(
+                prim_spatial_node_index,
+                raster_spatial_node_index,
+                spatial_tree,
+            );
+
+            let clip_transform_id = if prim_spatial_node.coordinate_system_id < clip_spatial_node.coordinate_system_id {
+                transforms.get_id(
+                    clip_node.item.spatial_node_index,
+                    prim_spatial_node_index,
+                    spatial_tree,
+                )
+            } else {
+                transforms.get_id(
+                    prim_spatial_node_index,
+                    clip_node.item.spatial_node_index,
+                    spatial_tree,
+                )
+            };
+
+            let is_same_coord_system = spatial_tree.is_matching_coord_system(
+                prim_spatial_node_index,
+                raster_spatial_node_index,
+            );
+
+            (ClipSpace::Primitive, clip_transform_id, main_prim_address, prim_transform_id, is_same_coord_system)
+        };
+
+        let clip_needs_scissor_rect = !is_same_coord_system;
+
+        let quad_flags = if is_same_coord_system {
+            QuadFlags::APPLY_DEVICE_CLIP
+        } else {
+            QuadFlags::empty()
+        };
+
+        add_quad_to_batch(
+            render_task_address,
+            prim_transform_id,
+            main_prim_address,
+            quad_flags,
+            EdgeAaSegmentMask::all(),
+            INVALID_SEGMENT_INDEX as u8,
+            RenderTaskId::INVALID,
+            ZBufferId(0),
+            render_tasks,
+            |_, prim| {
+                let instance = MaskInstance {
+                    prim,
+                    clip_transform_id,
+                    clip_address: clip_address.as_int(),
+                    clip_space,
+                    unused: 0,
+                };
+
+                if clip_needs_scissor_rect {
+                    if fast_path {
+                        results.mask_instances_fast_with_scissor
+                               .entry(target_rect)
+                               .or_insert(Vec::new())
+                               .push(instance);
+                    } else {
+                        results.mask_instances_slow_with_scissor
+                               .entry(target_rect)
+                               .or_insert(Vec::new())
+                               .push(instance);
+                    }
+                } else {
+                    if fast_path {
+                        results.mask_instances_fast.push(instance);
+                    } else {
+                        results.mask_instances_slow.push(instance);
+                    }
+                }
+            }
+        );
+    }
+}
+
+fn build_sub_pass(
+    task_id: RenderTaskId,
+    task: &RenderTask,
+    gpu_buffer_builder: &mut GpuBufferBuilder,
+    render_tasks: &RenderTaskGraph,
+    transforms: &mut TransformPalette,
+    ctx: &RenderTargetContext,
+    output: &mut Vec<ClipMaskInstanceList>,
+) {
+    if let Some(ref sub_pass) = task.sub_pass {
+        match sub_pass {
+            SubPass::Masks { ref masks } => {
+                let render_task_address = task_id.into();
+                let target_rect = task.get_target_rect();
+
+                let (device_pixel_scale, content_origin, raster_spatial_node_index) = match task.kind {
+                    RenderTaskKind::Picture(ref info) => {
+                        (info.device_pixel_scale, info.content_origin, info.raster_spatial_node_index)
+                    }
+                    RenderTaskKind::Empty(ref info) => {
+                        (info.device_pixel_scale, info.content_origin, info.raster_spatial_node_index)
+                    }
+                    RenderTaskKind::Prim(ref info) => {
+                        (info.device_pixel_scale, info.content_origin, info.raster_spatial_node_index)
+                    }
+                    _ => panic!("unexpected: {}", task.kind.as_str()),
+                };
+
+                let content_rect = DeviceRect::new(
+                    content_origin,
+                    content_origin + target_rect.size().to_f32(),
+                );
+
+                let mut clip_masks = ClipMaskInstanceList::new();
+
+                build_mask_tasks(
+                    masks,
+                    render_task_address,
+                    content_rect / device_pixel_scale,
+                    target_rect,
+                    masks.main_prim_address,
+                    masks.prim_spatial_node_index,
+                    raster_spatial_node_index,
+                    ctx.clip_store,
+                    ctx.data_stores,
+                    ctx.spatial_tree,
+                    gpu_buffer_builder,
+                    transforms,
+                    render_tasks,
+                    &mut clip_masks,
+                );
+
+                output.push(clip_masks);
+            }
+        }
     }
 }

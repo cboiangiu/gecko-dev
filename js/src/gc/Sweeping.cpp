@@ -1131,7 +1131,7 @@ IncrementalProgress GCRuntime::markGray(JS::GCContext* gcx,
                                         SliceBudget& budget) {
   gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::MARK);
 
-  if (markUntilBudgetExhausted(budget, AllowParallelMarking) == NotFinished) {
+  if (markUntilBudgetExhausted(budget, useParallelMarking) == NotFinished) {
     return NotFinished;
   }
 
@@ -1239,7 +1239,6 @@ void GCRuntime::sweepMisc() {
   for (SweepGroupRealmsIter r(this); !r.done(); r.next()) {
     AutoSetThreadIsSweeping threadIsSweeping(r->zone());
     r->traceWeakSavedStacks(&trc);
-    r->traceWeakRegExps(&trc);
   }
   for (SweepGroupCompartmentsIter c(this); !c.done(); c.next()) {
     AutoSetThreadIsSweeping threadIsSweeping(c->zone());
@@ -1373,14 +1372,10 @@ void GCRuntime::sweepJitDataOnMainThread(JS::GCContext* gcx) {
     }
   }
 
-  // JitZone/JitRealm must be swept *after* discarding JIT code, because
+  // JitZone must be swept *after* discarding JIT code, because
   // Zone::discardJitCode might access CacheIRStubInfos deleted here.
   {
     gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::SWEEP_JIT_DATA);
-
-    for (SweepGroupRealmsIter r(rt); !r.done(); r.next()) {
-      r->traceWeakEdgesInJitRealm(&trc);
-    }
 
     for (SweepGroupZonesIter zone(this); !zone.done(); zone.next()) {
       if (jit::JitZone* jitZone = zone->jitZone()) {
@@ -1725,7 +1720,7 @@ IncrementalProgress GCRuntime::markDuringSweeping(JS::GCContext* gcx,
   }
 
   gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::MARK);
-  return markUntilBudgetExhausted(budget, AllowParallelMarking);
+  return markUntilBudgetExhausted(budget, useParallelMarking);
 }
 
 void GCRuntime::beginSweepPhase(JS::GCReason reason, AutoGCSession& session) {

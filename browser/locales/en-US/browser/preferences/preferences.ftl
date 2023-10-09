@@ -3,11 +3,23 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 do-not-track-description = Send websites a “Do Not Track” signal that you don’t want to be tracked
+do-not-track-description2 =
+    .label = Send websites a “Do Not Track” request
+    .accesskey = d
 do-not-track-learn-more = Learn more
 do-not-track-option-default-content-blocking-known =
     .label = Only when { -brand-short-name } is set to block known trackers
 do-not-track-option-always =
     .label = Always
+
+global-privacy-control-description =
+    .label = Tell websites not to sell or share my data
+    .accesskey = s
+
+# Do not translate.
+# "Global Privacy Control" or "GPC" are a web platform feature name and abbreviation
+# included to facilitate power-user search of the about:preferences page.
+global-privacy-control-search = Global Privacy Control (GPC)
 
 settings-page-title = Settings
 
@@ -142,6 +154,11 @@ set-as-my-default-browser =
 startup-restore-windows-and-tabs =
     .label = Open previous windows and tabs
     .accesskey = s
+
+windows-launch-on-login =
+    .label = Open { -brand-short-name } automatically when your computer starts up
+    .accesskey = O
+windows-launch-on-login-disabled = This preference has been disabled in Windows. To change, visit <a data-l10n-name="startup-link">Startup Apps</a> in System settings.
 
 startup-restore-warn-on-quit =
     .label = Warn you when quitting the browser
@@ -1189,6 +1206,9 @@ addressbar-locbar-history-option =
 addressbar-locbar-bookmarks-option =
     .label = Bookmarks
     .accesskey = k
+addressbar-locbar-clipboard-option =
+    .label = Clipboard
+    .accesskey = C
 addressbar-locbar-openpage-option =
     .label = Open tabs
     .accesskey = O
@@ -1219,6 +1239,11 @@ content-blocking-section-top-level-description = Trackers follow you around onli
 content-blocking-learn-more = Learn more
 
 content-blocking-fpi-incompatibility-warning = You are using First Party Isolation (FPI), which overrides some of { -brand-short-name }’s cookie settings.
+
+# There is no need to translate "Resist Fingerprinting (RFP)". This is a
+# feature that can only be enabled via about:config, and it's not exposed to
+# standard users (e.g. via Settings).
+content-blocking-rfp-incompatibility-warning = You’re using Resist Fingerprinting (RFP), which replaces some of { -brand-short-name }’s fingerprinting protection settings. This might cause some sites to break.
 
 ## These strings are used to define the different levels of
 ## Enhanced Tracking Protection.
@@ -1253,6 +1278,10 @@ content-blocking-all-windows-tracking-content = Tracking content in all windows
 content-blocking-all-cross-site-cookies = All cross-site cookies
 content-blocking-cryptominers = Cryptominers
 content-blocking-fingerprinters = Fingerprinters
+# The known fingerprinters are those that are known for collecting browser fingerprints from user devices. And
+# the suspected fingerprinters are those that we are uncertain about browser fingerprinting activities. But they could
+# possibly acquire browser fingerprints because of the behavior on accessing APIs that expose browser fingerprints.
+content-blocking-known-and-suspected-fingerprinters = Known and suspected fingerprinters
 
 # The tcp-rollout strings are no longer used for the rollout but for tcp-by-default in the standard section
 
@@ -1278,7 +1307,7 @@ content-blocking-tracking-protection-option-all-windows =
   .label = In all windows
   .accesskey = A
 content-blocking-option-private =
-  .label = Only in Private Windows
+  .label = Only in private windows
   .accesskey = p
 content-blocking-tracking-protection-change-block-list = Change block list
 
@@ -1296,9 +1325,17 @@ content-blocking-cryptominers-label =
 
 # Browser fingerprinting is a method of tracking users by the configuration and settings information (their "digital fingerprint")
 # that is visible to websites they browse, rather than traditional tracking methods such as IP addresses and unique cookies.
-content-blocking-fingerprinters-label =
-  .label = Fingerprinters
-  .accesskey = F
+#
+# The known fingerprinters are those that are known for collecting browser fingerprints from user devices.
+content-blocking-known-fingerprinters-label =
+  .label = Known fingerprinters
+  .accesskey = K
+
+# The suspected fingerprinters are those that we are uncertain about browser fingerprinting activities. But they could
+# possibly acquire browser fingerprints because of the behavior on accessing APIs that expose browser fingerprints.
+content-blocking-suspected-fingerprinters-label =
+  .label = Suspected fingerprinters
+  .accesskey = S
 
 ## Privacy Section - Tracking
 
@@ -1373,7 +1410,8 @@ permissions-addon-exceptions =
 
 ## Privacy Section - Data Collection
 
-collection-header = { -brand-short-name } Data Collection and Use
+collection-header2 = { -brand-short-name } Data Collection and Use
+    .searchkeywords = telemetry
 
 collection-description = We strive to provide you with choices and collect only what we need to provide and improve { -brand-short-name } for everyone. We always ask permission before receiving personal information.
 collection-privacy-notice = Privacy Notice
@@ -1448,6 +1486,10 @@ certs-view =
 certs-devices =
     .label = Security Devices…
     .accesskey = D
+
+certs-thirdparty-toggle =
+    .label = Allow { -brand-short-name } to automatically trust third-party root certificates you install
+    .accesskey = t
 
 space-alert-over-5gb-settings-button =
     .label = Open Settings

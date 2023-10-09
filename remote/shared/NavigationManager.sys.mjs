@@ -33,7 +33,7 @@ ChromeUtils.defineLazyGetter(lazy, "logger", () => lazy.Log.get());
 /**
  * @typedef {object} NavigationInfo
  * @property {boolean} finished - Whether the navigation is finished or not.
- * @property {string} id - The UUID for the navigation.
+ * @property {string} navigationId - The UUID for the navigation.
  * @property {string} navigable - The UUID for the navigable.
  * @property {string} url - The target url for the navigation.
  */
@@ -86,10 +86,17 @@ class NavigationRegistry extends EventEmitter {
    *     The last known navigation data, or null.
    */
   getNavigationForBrowsingContext(context) {
+    if (!lazy.TabManager.isValidCanonicalBrowsingContext(context)) {
+      // Bail out if the provided context is not a valid CanonicalBrowsingContext
+      // instance.
+      return null;
+    }
+
     const navigable = lazy.TabManager.getNavigableForBrowsingContext(context);
     if (!this.#navigations.has(navigable)) {
       return null;
     }
+
     return this.#navigations.get(navigable);
   }
 
@@ -146,15 +153,12 @@ class NavigationRegistry extends EventEmitter {
     const navigable = lazy.TabManager.getNavigableForBrowsingContext(context);
     const navigableId = lazy.TabManager.getIdForBrowsingContext(context);
 
-    const id = lazy.generateUUID();
-    const navigation = { finished: true, id, url };
+    const navigationId = lazy.generateUUID();
+    const navigation = { finished: true, navigationId, url };
     this.#navigations.set(navigable, navigation);
 
-    // Same document navigations are immediately done, fire both started and
-    // stopped events immediately, on top of a dedicated event.
-    this.emit("navigation-started", { id, navigableId, url });
-    this.emit("location-changed", { id, navigableId, url });
-    this.emit("navigation-stopped", { id, navigableId, url });
+    // Same document navigations are immediately done, fire a single event.
+    this.emit("location-changed", { navigationId, navigableId, url });
 
     return navigation;
   }
@@ -188,20 +192,20 @@ class NavigationRegistry extends EventEmitter {
       // we did not receive a navigation-stopped event, this navigation
       // is already tracked and we don't want to create another id & event.
       lazy.logger.trace(
-        `[${navigableId}] Skipping already tracked navigation, id: ${navigation.id}`
+        `[${navigableId}] Skipping already tracked navigation, navigationId: ${navigation.navigationId}`
       );
       return navigation;
     }
 
-    const id = lazy.generateUUID();
+    const navigationId = lazy.generateUUID();
     lazy.logger.trace(
-      lazy.truncate`[${navigableId}] Navigation started for url: ${url} (${id})`
+      lazy.truncate`[${navigableId}] Navigation started for url: ${url} (${navigationId})`
     );
 
-    navigation = { finished: false, id, url };
+    navigation = { finished: false, navigationId, url };
     this.#navigations.set(navigable, navigation);
 
-    this.emit("navigation-started", { id, navigableId, url });
+    this.emit("navigation-started", { navigationId, navigableId, url });
 
     return navigation;
   }
@@ -235,19 +239,19 @@ class NavigationRegistry extends EventEmitter {
 
     if (navigation.finished) {
       lazy.logger.trace(
-        `[${navigableId}] Navigation already marked as finished, id: ${navigation.id}`
+        `[${navigableId}] Navigation already marked as finished, navigationId: ${navigation.navigationId}`
       );
       return navigation;
     }
 
     lazy.logger.trace(
-      lazy.truncate`[${navigableId}] Navigation finished for url: ${url} (${navigation.id})`
+      lazy.truncate`[${navigableId}] Navigation finished for url: ${url} (${navigation.navigationId})`
     );
 
     navigation.finished = true;
 
     this.emit("navigation-stopped", {
-      id: navigation.id,
+      navigationId: navigation.navigationId,
       navigableId,
       url,
     });
@@ -312,13 +316,13 @@ export function notifyNavigationStopped(data) {
  * @fires navigation-started
  *    The NavigationManager emits "navigation-started" when a new navigation is
  *    detected, with the following object as payload:
- *      - {string} id - The UUID for the navigation.
+ *      - {string} navigationId - The UUID for the navigation.
  *      - {string} navigableId - The UUID for the navigable.
  *      - {string} url - The target url for the navigation.
  * @fires navigation-stopped
  *    The NavigationManager emits "navigation-stopped" when a known navigation
  *    is stopped, with the following object as payload:
- *      - {string} id - The UUID for the navigation.
+ *      - {string} navigationId - The UUID for the navigation.
  *      - {string} navigableId - The UUID for the navigable.
  *      - {string} url - The target url for the navigation.
  */

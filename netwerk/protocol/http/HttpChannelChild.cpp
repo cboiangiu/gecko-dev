@@ -8,6 +8,7 @@
 // HttpLog.h should generally be included first
 #include "HttpLog.h"
 
+#include "mozilla/net/PBackgroundDataBridge.h"
 #include "nsHttp.h"
 #include "nsICacheEntry.h"
 #include "mozilla/BasePrincipal.h"
@@ -17,6 +18,7 @@
 #include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/ServiceWorkerUtils.h"
 #include "mozilla/dom/BrowserChild.h"
+#include "mozilla/dom/LinkStyle.h"
 #include "mozilla/extensions/StreamFilterParent.h"
 #include "mozilla/ipc/IPCStreamUtils.h"
 #include "mozilla/net/NeckoChild.h"
@@ -349,28 +351,11 @@ void HttpChannelChild::ProcessOnStartRequest(
   LOG(("HttpChannelChild::ProcessOnStartRequest [this=%p]\n", this));
   MOZ_ASSERT(OnSocketThread());
 
-#ifdef NIGHTLY_BUILD
-  TimeStamp start = TimeStamp::Now();
-#endif
-
   mAltDataInputStream = DeserializeIPCStream(aAltData.altDataInputStream());
 
   mEventQ->RunOrEnqueue(new NeckoTargetChannelFunctionEvent(
       this, [self = UnsafePtr<HttpChannelChild>(this), aResponseHead,
-#ifdef NIGHTLY_BUILD
-             aUseResponseHead, aRequestHeaders, aArgs, start]() {
-        TimeDuration delay = TimeStamp::Now() - start;
-        if (self->mLoadFlags & nsIRequest::LOAD_RECORD_START_REQUEST_DELAY) {
-          Telemetry::Accumulate(
-              Telemetry::HTTP_PRELOAD_IMAGE_STARTREQUEST_DELAY,
-              static_cast<uint32_t>(delay.ToMilliseconds()));
-        }
-        glean::networking::http_content_onstart_delay.AccumulateRawDuration(
-            delay);
-#else
              aUseResponseHead, aRequestHeaders, aArgs]() {
-#endif
-
         self->OnStartRequest(aResponseHead, aUseResponseHead, aRequestHeaders,
                              aArgs);
       }));
@@ -811,22 +796,11 @@ void HttpChannelChild::ProcessOnStopRequest(
        this, aFromSocketProcess));
   MOZ_ASSERT(OnSocketThread());
 
-#ifdef NIGHTLY_BUILD
-  TimeStamp start = TimeStamp::Now();
-#endif
-
   mEventQ->RunOrEnqueue(new NeckoTargetChannelFunctionEvent(
       this, [self = UnsafePtr<HttpChannelChild>(this), aChannelStatus, aTiming,
              aResponseTrailers,
              consoleReports = CopyableTArray{aConsoleReports.Clone()},
-#ifdef NIGHTLY_BUILD
-             aFromSocketProcess, start]() mutable {
-        TimeDuration delay = TimeStamp::Now() - start;
-        glean::networking::http_content_onstop_delay.AccumulateRawDuration(
-            delay);
-#else
-              aFromSocketProcess]() mutable {
-#endif
+             aFromSocketProcess]() mutable {
         self->OnStopRequest(aChannelStatus, aTiming, aResponseTrailers);
         if (!aFromSocketProcess) {
           self->DoOnConsoleReport(std::move(consoleReports));
@@ -868,6 +842,41 @@ void HttpChannelChild::DoOnConsoleReport(
   MaybeFlushConsoleReports();
 }
 
+void HttpChannelChild::RecordChannelCompletionDurationForEarlyHint() {
+  if (!mLoadGroup) {
+    return;
+  }
+
+  uint32_t earlyHintType = 0;
+  nsCOMPtr<nsIRequest> req;
+  Unused << mLoadGroup->GetDefaultLoadRequest(getter_AddRefs(req));
+  if (nsCOMPtr<nsIHttpChannelInternal> httpChannel = do_QueryInterface(req)) {
+    Unused << httpChannel->GetEarlyHintLinkType(&earlyHintType);
+  }
+
+  if (!earlyHintType) {
+    return;
+  }
+
+  nsAutoCString earlyHintKey;
+  if (mIsFromCache) {
+    earlyHintKey.Append("cache_"_ns);
+  } else {
+    earlyHintKey.Append("net_"_ns);
+  }
+  if (earlyHintType & LinkStyle::ePRECONNECT) {
+    earlyHintKey.Append("preconnect_"_ns);
+  }
+  if (earlyHintType & LinkStyle::ePRELOAD) {
+    earlyHintKey.Append("preload_"_ns);
+    earlyHintKey.Append(mEarlyHintPreloaderId ? "1"_ns : "0"_ns);
+  }
+
+  Telemetry::AccumulateTimeDelta(Telemetry::EH_PERF_CHANNEL_COMPLETION_TIME,
+                                 earlyHintKey, mAsyncOpenTime,
+                                 TimeStamp::Now());
+}
+
 void HttpChannelChild::OnStopRequest(
     const nsresult& aChannelStatus, const ResourceTimingStructArgs& aTiming,
     const nsHttpHeaderArray& aResponseTrailers) {
@@ -905,6 +914,8 @@ void HttpChannelChild::OnStopRequest(
   mCacheReadStart = aTiming.cacheReadStart();
   mCacheReadEnd = aTiming.cacheReadEnd();
 
+  const TimeStamp now = TimeStamp::Now();
+
   if (profiler_thread_is_being_profiled_for_markers()) {
     nsAutoCString requestMethod;
     GetRequestMethod(requestMethod);
@@ -916,14 +927,16 @@ void HttpChannelChild::OnStopRequest(
     GetPriority(&priority);
     profiler_add_network_marker(
         mURI, requestMethod, priority, mChannelId, NetworkLoadType::LOAD_STOP,
-        mLastStatusReported, TimeStamp::Now(), mTransferSize, kCacheUnknown,
+        mLastStatusReported, now, mTransferSize, kCacheUnknown,
         mLoadInfo->GetInnerWindowID(),
         mLoadInfo->GetOriginAttributes().mPrivateBrowsingId > 0,
         &mTransactionTimings, std::move(mSource),
         Some(nsDependentCString(contentType.get())));
   }
 
-  TimeDuration channelCompletionDuration = TimeStamp::Now() - mAsyncOpenTime;
+  RecordChannelCompletionDurationForEarlyHint();
+
+  TimeDuration channelCompletionDuration = now - mAsyncOpenTime;
   if (mIsFromCache) {
     PerfStats::RecordMeasurement(PerfStats::Metric::HttpChannelCompletion_Cache,
                                  channelCompletionDuration);
@@ -940,10 +953,10 @@ void HttpChannelChild::OnStopRequest(
     ClassOfService::ToString(mClassOfService, cosString);
     Telemetry::AccumulateTimeDelta(
         Telemetry::NETWORK_RESPONSE_END_PARENT_TO_CONTENT_MS, cosString,
-        aTiming.responseEnd(), TimeStamp::Now());
+        aTiming.responseEnd(), now);
     PerfStats::RecordMeasurement(
         PerfStats::Metric::HttpChannelResponseEndParentToContent,
-        TimeStamp::Now() - aTiming.responseEnd());
+        now - aTiming.responseEnd());
   }
 
   mResponseTrailers = MakeUnique<nsHttpHeaderArray>(aResponseTrailers);
@@ -2087,9 +2100,6 @@ nsresult HttpChannelChild::AsyncOpenInternal(nsIStreamListener* aListener) {
   StoreWasOpened(true);
   mListener = listener;
 
-  // add ourselves to the load group.
-  if (mLoadGroup) mLoadGroup->AddRequest(this, nullptr);
-
   if (mCanceled) {
     // We may have been canceled already, either by on-modify-request
     // listeners or by load group observers; in that case, don't create IPDL
@@ -2190,6 +2200,20 @@ nsresult HttpChannelChild::ContinueAsyncOpen() {
   }
   SetTopLevelContentWindowId(contentWindowId);
 
+  if (browserChild && !browserChild->IPCOpen()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  ContentChild* cc = static_cast<ContentChild*>(gNeckoChild->Manager());
+  if (cc->IsShuttingDown()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // add ourselves to the load group.
+  if (mLoadGroup) {
+    mLoadGroup->AddRequest(this, nullptr);
+  }
+
   HttpChannelOpenArgs openArgs;
   // No access to HttpChannelOpenArgs members, but they each have a
   // function with the struct name that returns a ref.
@@ -2265,15 +2289,6 @@ nsresult HttpChannelChild::ContinueAsyncOpen() {
   LOG(("HttpChannelChild::ContinueAsyncOpen this=%p gid=%" PRIu64
        " browser id=%" PRIx64,
        this, mChannelId, mBrowserId));
-
-  if (browserChild && !browserChild->IPCOpen()) {
-    return NS_ERROR_FAILURE;
-  }
-
-  ContentChild* cc = static_cast<ContentChild*>(gNeckoChild->Manager());
-  if (cc->IsShuttingDown()) {
-    return NS_ERROR_FAILURE;
-  }
 
   openArgs.launchServiceWorkerStart() = mLaunchServiceWorkerStart;
   openArgs.launchServiceWorkerEnd() = mLaunchServiceWorkerEnd;
@@ -3166,11 +3181,20 @@ void HttpChannelChild::MaybeConnectToSocketProcess() {
   }
   SocketProcessBridgeChild::GetSocketProcessBridge()->Then(
       GetCurrentSerialEventTarget(), __func__,
-      [bgChild]() {
+      [bgChild, channelId = ChannelId()](
+          const RefPtr<SocketProcessBridgeChild>& aBridge) {
+        Endpoint<PBackgroundDataBridgeParent> parentEndpoint;
+        Endpoint<PBackgroundDataBridgeChild> childEndpoint;
+        PBackgroundDataBridge::CreateEndpoints(&parentEndpoint, &childEndpoint);
+        aBridge->SendInitBackgroundDataBridge(std::move(parentEndpoint),
+                                              channelId);
+
         gSocketTransportService->Dispatch(
-            NewRunnableMethod("HttpBackgroundChannelChild::CreateDataBridge",
-                              bgChild,
-                              &HttpBackgroundChannelChild::CreateDataBridge),
+            NS_NewRunnableFunction(
+                "HttpBackgroundChannelChild::CreateDataBridge",
+                [bgChild, endpoint = std::move(childEndpoint)]() mutable {
+                  bgChild->CreateDataBridge(std::move(endpoint));
+                }),
             NS_DISPATCH_NORMAL);
       },
       []() { NS_WARNING("Failed to create SocketProcessBridgeChild"); });

@@ -257,7 +257,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
    */
   nsRootPresContext* GetRootPresContext() const;
 
-  virtual bool IsRoot() { return false; }
+  virtual bool IsRoot() const { return false; }
 
   mozilla::dom::Document* Document() const {
 #ifdef DEBUG
@@ -511,6 +511,16 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 
   nsDeviceContext* DeviceContext() const { return mDeviceContext; }
   mozilla::EventStateManager* EventStateManager() { return mEventManager; }
+
+  bool UserInputEventsAllowed();
+
+  void MaybeIncreaseMeasuredTicksSinceLoading();
+
+  void ResetUserInputEventsAllowed() {
+    MOZ_ASSERT(IsRoot());
+    mMeasuredTicksSinceLoading = 0;
+    mUserInputEventsAllowed = false;
+  }
 
   // Get the text zoom factor in use.
   float TextZoom() const { return mTextZoom; }
@@ -850,9 +860,13 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 
   void ConstructedFrame() { ++mFramesConstructed; }
   void ReflowedFrame() { ++mFramesReflowed; }
+  void TriggeredAnimationRestyle() { ++mAnimationTriggeredRestyles; }
 
-  uint64_t FramesConstructedCount() { return mFramesConstructed; }
-  uint64_t FramesReflowedCount() { return mFramesReflowed; }
+  uint64_t FramesConstructedCount() const { return mFramesConstructed; }
+  uint64_t FramesReflowedCount() const { return mFramesReflowed; }
+  uint64_t AnimationTriggeredRestylesCount() const {
+    return mAnimationTriggeredRestyles;
+  }
 
   static nscoord GetBorderWidthForKeyword(unsigned int aBorderWidthKeyword) {
     // This table maps border-width enums 'thin', 'medium', 'thick'
@@ -1225,6 +1239,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   uint64_t mElementsRestyled;
   uint64_t mFramesConstructed;
   uint64_t mFramesReflowed;
+  uint64_t mAnimationTriggeredRestyles;
 
   mozilla::TimeStamp mReflowStartTime;
 
@@ -1248,6 +1263,8 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 
   // During page load we use slower frame rate.
   uint32_t mNextFrameRateMultiplier;
+
+  uint32_t mMeasuredTicksSinceLoading;
 
   nsTArray<RefPtr<mozilla::ManagedPostRefreshObserver>>
       mManagedPostRefreshObservers;
@@ -1342,6 +1359,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   // Has NotifyDidPaintForSubtree been called for a contentful paint?
   unsigned mHadContentfulPaintComposite : 1;
 
+  unsigned mUserInputEventsAllowed : 1;
 #ifdef DEBUG
   unsigned mInitialized : 1;
 #endif
@@ -1374,7 +1392,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 class nsRootPresContext final : public nsPresContext {
  public:
   nsRootPresContext(mozilla::dom::Document* aDocument, nsPresContextType aType);
-  virtual bool IsRoot() override { return true; }
+  virtual bool IsRoot() const override { return true; }
 
   /**
    * Add a runnable that will get called before the next paint. They will get

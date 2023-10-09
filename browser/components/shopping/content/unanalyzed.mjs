@@ -15,7 +15,22 @@ class UnanalyzedProductCard extends MozLitElement {
     productURL: { type: String, reflect: true },
   };
 
-  // TODO: add link for product analysis once finalized
+  static get queries() {
+    return {
+      analysisButtonEl: "#unanalyzed-product-analysis-button",
+    };
+  }
+
+  onClickAnalysisButton() {
+    this.dispatchEvent(
+      new CustomEvent("NewAnalysisRequested", {
+        bubbles: true,
+        composed: true,
+      })
+    );
+    Glean.shopping.surfaceAnalyzeReviewsNoneAvailableClicked.record();
+  }
+
   render() {
     return html`
       <link
@@ -24,17 +39,19 @@ class UnanalyzedProductCard extends MozLitElement {
       />
       <shopping-card>
         <div id="unanalyzed-product-wrapper" slot="content">
-          <span id="unanalyzed-product-icon"></span>
+          <img id="unanalyzed-product-icon" role="presentation" alt=""></img>
           <div id="unanalyzed-product-message-content">
-            <strong data-l10n-id="shopping-unanalyzed-product-header"></strong>
-            <p data-l10n-id="shopping-unanalyzed-product-message"></p>
+            <strong
+              data-l10n-id="shopping-unanalyzed-product-header-2"
+            ></strong>
+            <p data-l10n-id="shopping-unanalyzed-product-message-2"></p>
           </div>
-          <a
-            id="unanalyzed-product-analysis-link"
-            data-l10n-id="shopping-unanalyzed-product-analyze-link"
-            target="_blank"
-            href="https://staging.fakespot.com/analyze?url=${this.productURL}"
-          ></a>
+          <button
+            id="unanalyzed-product-analysis-button"
+            class="primary"
+            data-l10n-id="shopping-unanalyzed-product-analyze-button"
+            @click=${this.onClickAnalysisButton}
+          ></button>
         </div>
       </shopping-card>
     `;

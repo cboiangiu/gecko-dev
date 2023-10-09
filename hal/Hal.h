@@ -7,6 +7,7 @@
 #ifndef mozilla_Hal_h
 #define mozilla_Hal_h
 
+#include "base/platform_thread.h"
 #include "nsTArray.h"
 #include "mozilla/hal_sandbox/PHal.h"
 #include "mozilla/HalScreenConfiguration.h"
@@ -235,6 +236,29 @@ void UnlockScreenOrientation();
  * ignore this call entirely.
  */
 void SetProcessPriority(int aPid, hal::ProcessPriority aPriority);
+
+/**
+ * Creates a PerformanceHintSession.
+ *
+ * A PerformanceHintSession represents a workload shared by a group of threads
+ * that should be completed in a target duration each cycle.
+ *
+ * Each cycle, the actual work duration should be reported using
+ * PerformanceHintSession::ReportActualWorkDuration(). The system can then
+ * adjust the scheduling accordingly in order to achieve the target.
+ */
+UniquePtr<hal::PerformanceHintSession> CreatePerformanceHintSession(
+    const nsTArray<PlatformThreadHandle>& aThreads,
+    mozilla::TimeDuration aTargetWorkDuration);
+
+/**
+ * Returns information categorizing the CPUs on the system by performance class.
+ *
+ * Returns Nothing if we are unable to calculate the required information.
+ *
+ * See the definition of hal::HeterogeneousCpuInfo for more details.
+ */
+const Maybe<hal::HeterogeneousCpuInfo>& GetHeterogeneousCpuInfo();
 
 }  // namespace MOZ_HAL_NAMESPACE
 }  // namespace mozilla

@@ -113,6 +113,14 @@ class nsDocShellLoadState final {
 
   void SetTriggeringSandboxFlags(uint32_t aTriggeringSandboxFlags);
 
+  uint64_t TriggeringWindowId() const;
+
+  void SetTriggeringWindowId(uint64_t aTriggeringWindowId);
+
+  bool TriggeringStorageAccess() const;
+
+  void SetTriggeringStorageAccess(bool aTriggeringStorageAccess);
+
   nsIContentSecurityPolicy* Csp() const;
 
   void SetCsp(nsIContentSecurityPolicy* aCsp);
@@ -136,9 +144,9 @@ class nsDocShellLoadState final {
 
   void SetForceAllowDataURI(bool aForceAllowDataURI);
 
-  bool IsExemptFromHTTPSOnlyMode() const;
+  bool IsExemptFromHTTPSFirstMode() const;
 
-  void SetIsExemptFromHTTPSOnlyMode(bool aIsExemptFromHTTPSOnlyMode);
+  void SetIsExemptFromHTTPSFirstMode(bool aIsExemptFromHTTPSFirstMode);
 
   bool OriginalFrameSrc() const;
 
@@ -413,6 +421,12 @@ class nsDocShellLoadState final {
   // SandboxFlags of the document that started the load.
   uint32_t mTriggeringSandboxFlags;
 
+  // The window ID and current "has storage access" value of the entity
+  // triggering the load. This allows the identification of self-initiated
+  // same-origin navigations that should propogate unpartitioned storage access.
+  uint64_t mTriggeringWindowId;
+  bool mTriggeringStorageAccess;
+
   // The CSP of the load, that is, the CSP of the entity responsible for causing
   // the load to occur. Most likely this is the CSP of the document that started
   // the load. In case the entity starting the load did not use a CSP, then mCsp
@@ -462,7 +476,7 @@ class nsDocShellLoadState final {
 
   // If this attribute is true, then the top-level navigaion
   // will be exempt from HTTPS-Only-Mode upgrades.
-  bool mIsExemptFromHTTPSOnlyMode;
+  bool mIsExemptFromHTTPSFirstMode;
 
   // If this attribute is true, this load corresponds to a frame
   // element loading its original src (or srcdoc) attribute.

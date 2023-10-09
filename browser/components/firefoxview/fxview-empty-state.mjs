@@ -5,7 +5,8 @@
 import {
   html,
   ifDefined,
-  map,
+  classMap,
+  repeat,
 } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 
@@ -19,6 +20,7 @@ import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
  * @property {Array} descriptionLabels - (Required) An array of l10n ids for the secondary description text for the empty/error state
  * @property {object} descriptionLink - (Optional) An object describing the l10n name and url needed within a description label
  * @property {string} mainImageUrl - (Optional) The chrome:// url for the main image of the empty/error state
+ * @property {string} errorGrayscale - (Optional) The image should be shown in gray scale
  */
 class FxviewEmptyState extends MozLitElement {
   constructor() {
@@ -34,12 +36,25 @@ class FxviewEmptyState extends MozLitElement {
     descriptionLabels: { type: Array },
     desciptionLink: { type: Object },
     mainImageUrl: { type: String },
+    errorGrayscale: { type: Boolean },
   };
 
   static queries = {
     headerEl: ".header",
     descriptionEls: { all: ".description" },
   };
+
+  linkTemplate(descriptionLink) {
+    if (!descriptionLink) {
+      return html``;
+    }
+    return html` <a
+      aria-details="card-container"
+      data-l10n-name=${descriptionLink.name}
+      href=${descriptionLink.url}
+      target=${descriptionLink?.sameTarget ? "_self" : "_blank"}
+    />`;
+  }
 
   render() {
     return html`
@@ -49,10 +64,18 @@ class FxviewEmptyState extends MozLitElement {
        />
        <card-container hideHeader="true" exportparts="image" ?isInnerCard="${
          this.isInnerCard
-       }">
+       }" id="card-container" isEmptyState="true">
          <div slot="main" class=${this.isSelectedTab ? "selectedTab" : null}>
-           <img class="image" role="presentation" alt="" ?hidden=${!this
-             .mainImageUrl} src=${this.mainImageUrl}/>
+           <div class="image-container">
+             <img class=${classMap({
+               image: true,
+               greyscale: this.errorGrayscale,
+             })}
+              role="presentation"
+              alt=""
+              ?hidden=${!this.mainImageUrl}
+                       src=${this.mainImageUrl}/>
+           </div>
            <div class="main">
              <h2
                id="header"
@@ -63,20 +86,17 @@ class FxviewEmptyState extends MozLitElement {
                    .headerIconUrl} src=${ifDefined(this.headerIconUrl)}></img>
                  <span data-l10n-id="${this.headerLabel}"></span>
              </h2>
-             ${map(
+             ${repeat(
                this.descriptionLabels,
+               descLabel => descLabel,
                (descLabel, index) => html`<p
-                 class="description ${index !== 0 ? "secondary" : null}"
+                 class=${classMap({
+                   description: true,
+                   secondary: index !== 0,
+                 })}
                  data-l10n-id="${descLabel}"
                >
-                 <a
-                   ?hidden=${!this.descriptionLink}
-                   data-l10n-name=${ifDefined(this.descriptionLink?.name)}
-                   href=${ifDefined(this.descriptionLink?.url)}
-                   target=${this.descriptionLink?.sameTarget
-                     ? "_self"
-                     : "_blank"}
-                 />
+                 ${this.linkTemplate(this.descriptionLink)} />
                </p>`
              )}
              <slot name="primary-action"></slot>

@@ -17,8 +17,10 @@
 #include "mozilla/EnumSet.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/dom/RadioGroupContainer.h"
 #include "nsCycleCollectionParticipant.h"  // NS_DECL_CYCLE_*
 #include "nsIContent.h"                    // base class
+#include "nsAtomHashKeys.h"
 #include "nsIHTMLCollection.h"
 #include "nsIWeakReferenceUtils.h"
 
@@ -111,6 +113,14 @@ class FragmentOrElement : public nsIContent {
       return 0;
     }
     return Children()->Length();
+  }
+
+  RadioGroupContainer& OwnedRadioGroupContainer() {
+    auto* slots = ExtendedDOMSlots();
+    if (!slots->mRadioGroupContainer) {
+      slots->mRadioGroupContainer = MakeUnique<RadioGroupContainer>();
+    }
+    return *slots->mRadioGroupContainer;
   }
 
  public:
@@ -208,6 +218,12 @@ class FragmentOrElement : public nsIContent {
     UniquePtr<PopoverData> mPopoverData;
 
     /**
+     * RadioGroupContainer for radio buttons grouped under this disconnected
+     * element.
+     */
+    UniquePtr<RadioGroupContainer> mRadioGroupContainer;
+
+    /**
      * Last remembered size (in CSS pixels) for the element.
      * @see {@link https://drafts.csswg.org/css-sizing-4/#last-remembered}
      */
@@ -230,7 +246,7 @@ class FragmentOrElement : public nsIContent {
      * Explicitly set attr-elements, see
      * https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#explicitly-set-attr-element
      */
-    nsTHashMap<nsRefPtrHashKey<nsAtom>, nsWeakPtr> mExplicitlySetAttrElements;
+    nsTHashMap<RefPtr<nsAtom>, nsWeakPtr> mExplicitlySetAttrElements;
   };
 
   class nsDOMSlots : public nsIContent::nsContentSlots {

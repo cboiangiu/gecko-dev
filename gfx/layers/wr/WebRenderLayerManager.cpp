@@ -11,7 +11,6 @@
 #include "mozilla/StaticPrefs_layers.h"
 #include "mozilla/dom/BrowserChild.h"
 #include "mozilla/gfx/DrawEventRecorder.h"
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/TextureClient.h"
@@ -581,12 +580,6 @@ void WebRenderLayerManager::DiscardLocalImages() {
   mStateManager.DiscardLocalImages();
 }
 
-void WebRenderLayerManager::SetLayersObserverEpoch(LayersObserverEpoch aEpoch) {
-  if (WrBridge()->IPCOpen()) {
-    WrBridge()->SendSetLayersObserverEpoch(aEpoch);
-  }
-}
-
 void WebRenderLayerManager::DidComposite(
     TransactionId aTransactionId, const mozilla::TimeStamp& aCompositeStart,
     const mozilla::TimeStamp& aCompositeEnd) {
@@ -635,6 +628,10 @@ void WebRenderLayerManager::ClearCachedResources() {
   mWebRenderCommandBuilder.ClearCachedResources();
   DiscardImages();
   mStateManager.ClearCachedResources();
+  CompositorBridgeChild* compositorBridge = GetCompositorBridgeChild();
+  if (compositorBridge) {
+    compositorBridge->ClearCachedResources();
+  }
   WrBridge()->EndClearCachedResources();
 }
 
@@ -730,17 +727,11 @@ void WebRenderLayerManager::WaitOnTransactionProcessed() {
 void WebRenderLayerManager::SendInvalidRegion(const nsIntRegion& aRegion) {
   // XXX Webrender does not support invalid region yet.
 
-#ifdef XP_WIN
-  // When DWM is disabled, each window does not have own back buffer. They would
-  // paint directly to a buffer that was to be displayed by the video card.
-  // WM_PAINT via SendInvalidRegion() requests necessary re-paint.
-  const bool needsInvalidate = !gfx::gfxVars::DwmCompositionEnabled();
-#else
-  const bool needsInvalidate = true;
-#endif
-  if (needsInvalidate && WrBridge()) {
+#ifndef XP_WIN
+  if (WrBridge()) {
     WrBridge()->SendInvalidateRenderedFrame();
   }
+#endif
 }
 
 void WebRenderLayerManager::ScheduleComposite(wr::RenderReasons aReasons) {
@@ -749,8 +740,12 @@ void WebRenderLayerManager::ScheduleComposite(wr::RenderReasons aReasons) {
 
 already_AddRefed<PersistentBufferProvider>
 WebRenderLayerManager::CreatePersistentBufferProvider(
-    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat) {
-  if (!gfxPlatform::UseRemoteCanvas()) {
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    bool aWillReadFrequently) {
+  // Only initialize devices if hardware acceleration may possibly be used.
+  // Remoting moves hardware usage out-of-process, while will-read-frequently
+  // avoids hardware acceleration entirely.
+  if (!aWillReadFrequently && !gfxPlatform::UseRemoteCanvas()) {
 #ifdef XP_WIN
     // Any kind of hardware acceleration is incompatible with Win32k Lockdown
     // We don't initialize devices here so that PersistentBufferProviderShared
@@ -765,8 +760,8 @@ WebRenderLayerManager::CreatePersistentBufferProvider(
   }
 
   RefPtr<PersistentBufferProvider> provider =
-      PersistentBufferProviderShared::Create(aSize, aFormat,
-                                             AsKnowsCompositor());
+      PersistentBufferProviderShared::Create(
+          aSize, aFormat, AsKnowsCompositor(), aWillReadFrequently);
   if (provider) {
     return provider.forget();
   }

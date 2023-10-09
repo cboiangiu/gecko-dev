@@ -22,13 +22,13 @@
 
 (function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
-		module.exports = factory();
+		module.exports = root.pdfjsScripting = factory();
 	else if(typeof define === 'function' && define.amd)
-		define("pdfjs-dist/build/pdf.scripting", [], factory);
+		define("pdfjs-dist/build/pdf.scripting", [], () => { return (root.pdfjsScripting = factory()); });
 	else if(typeof exports === 'object')
-		exports["pdfjs-dist/build/pdf.scripting"] = factory();
+		exports["pdfjs-dist/build/pdf.scripting"] = root.pdfjsScripting = factory();
 	else
-		root.pdfjsScripting = factory();
+		root["pdfjs-dist/build/pdf.scripting"] = root.pdfjsScripting = factory();
 })(globalThis, () => {
 return /******/ (() => { // webpackBootstrap
 /******/ 	"use strict";
@@ -3417,7 +3417,7 @@ class Doc extends _pdf_object.PDFObject {
   removeWeblinks() {}
   replacePages() {}
   resetForm(aFields = null) {
-    if (aFields && typeof aFields === "object") {
+    if (aFields && typeof aFields === "object" && !Array.isArray(aFields)) {
       aFields = aFields.aFields;
     }
     if (aFields && !Array.isArray(aFields)) {
@@ -4250,8 +4250,8 @@ Object.defineProperty(exports, "initSandbox", ({
   }
 }));
 var _initialization = __w_pdfjs_require__(1);
-const pdfjsVersion = '3.10.27';
-const pdfjsBuild = '399475247';
+const pdfjsVersion = '3.11.208';
+const pdfjsBuild = '3ca63c68e';
 })();
 
 /******/ 	return __webpack_exports__;

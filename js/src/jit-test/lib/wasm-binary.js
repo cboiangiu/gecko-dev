@@ -45,12 +45,13 @@ const V128Code         = 0x7b;
 const AnyFuncCode      = 0x70;
 const ExternRefCode    = 0x6f;
 const EqRefCode        = 0x6d;
-const OptRefCode       = 0x6c; // (ref null $t), needs heap type immediate
-const RefCode          = 0x6b; // (ref $t), needs heap type immediate
+const OptRefCode       = 0x63; // (ref null $t), needs heap type immediate
+const RefCode          = 0x64; // (ref $t), needs heap type immediate
 const FuncCode         = 0x60;
 const StructCode       = 0x5f;
 const ArrayCode        = 0x5e;
 const VoidCode         = 0x40;
+const BadType          = 0x79; // reserved for testing
 
 // Opcodes
 const UnreachableCode  = 0x00
@@ -65,6 +66,7 @@ const CallCode         = 0x10;
 const CallIndirectCode = 0x11;
 const ReturnCallCode   = 0x12;
 const ReturnCallIndirectCode = 0x13;
+const ReturnCallRefCode      = 0x15;
 const DelegateCode     = 0x18;
 const DropCode         = 0x1a;
 const SelectCode       = 0x1b;
@@ -121,21 +123,6 @@ const RefFuncCode      = 0xd2;
 // SIMD opcodes
 const V128LoadCode = 0x00;
 const V128StoreCode = 0x0b;
-const I32x4DotSI16x8Code = 0xba;
-const F32x4CeilCode = 0xd8;
-const F32x4FloorCode = 0xd9;
-const F32x4TruncCode = 0xda;
-const F32x4NearestCode = 0xdb;
-const F64x2CeilCode = 0xdc;
-const F64x2FloorCode = 0xdd;
-const F64x2TruncCode = 0xde;
-const F64x2NearestCode = 0xdf;
-const F32x4PMinCode = 0xea;
-const F32x4PMaxCode = 0xeb;
-const F64x2PMinCode = 0xf6;
-const F64x2PMaxCode = 0xf7;
-const V128Load32ZeroCode = 0xfc;
-const V128Load64ZeroCode = 0xfd;
 
 // Relaxed SIMD opcodes.
 const I8x16RelaxedSwizzleCode = 0x100;

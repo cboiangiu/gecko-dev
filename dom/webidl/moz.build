@@ -139,6 +139,9 @@ with Files("GeometryUtils.webidl"):
 with Files("GetUserMediaRequest.webidl"):
     BUG_COMPONENT = ("Core", "WebRTC")
 
+with Files("Glean*.webidl"):
+    BUG_COMPONENT = ("Toolkit", "Telemetry")
+
 with Files("Grid.webidl"):
     BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
 
@@ -583,6 +586,9 @@ WEBIDL_FILES = [
     "GeolocationPositionError.webidl",
     "GeometryUtils.webidl",
     "GetUserMediaRequest.webidl",
+    "Glean.webidl",
+    "GleanMetrics.webidl",
+    "GleanPings.webidl",
     "Grid.webidl",
     "Headers.webidl",
     "Highlight.webidl",
@@ -975,6 +981,7 @@ WEBIDL_FILES = [
     "UIEvent.webidl",
     "URL.webidl",
     "URLSearchParams.webidl",
+    "UserActivation.webidl",
     "ValidityState.webidl",
     "VideoColorSpace.webidl",
     "VideoDecoder.webidl",
@@ -1108,7 +1115,6 @@ WEBIDL_FILES += [
     "PopStateEvent.webidl",
     "PopupBlockedEvent.webidl",
     "ProgressEvent.webidl",
-    "StyleSheetApplicableStateChangeEvent.webidl",
 ]
 
 # WebExtensions API.
@@ -1188,7 +1194,6 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     "PromiseRejectionEvent.webidl",
     "ScrollViewChangeEvent.webidl",
     "SecurityPolicyViolationEvent.webidl",
-    "StyleSheetApplicableStateChangeEvent.webidl",
     "SubmitEvent.webidl",
     "TaskPriorityChangeEvent.webidl",
     "TCPServerSocketEvent.webidl",

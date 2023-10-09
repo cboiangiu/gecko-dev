@@ -49,6 +49,11 @@ Maybe<T> OptionalToMaybe(const Optional<T>& aOptional) {
 }
 
 template <typename T>
+const T* OptionalToPointer(const Optional<T>& aOptional) {
+  return aOptional.WasPassed() ? &aOptional.Value() : nullptr;
+}
+
+template <typename T>
 Maybe<T> NullableToMaybe(const Nullable<T>& aNullable) {
   if (!aNullable.IsNull()) {
     return Some(aNullable.Value());
@@ -67,15 +72,6 @@ Nullable<T> MaybeToNullable(const Maybe<T>& aOptional) {
 /*
  * Below are helpers to operate ArrayBuffer or ArrayBufferView.
  */
-
-template <class T>
-Result<Span<uint8_t>, nsresult> GetArrayBufferData(const T& aBuffer);
-
-Result<Span<uint8_t>, nsresult> GetSharedArrayBufferData(
-    const MaybeSharedArrayBufferViewOrMaybeSharedArrayBuffer& aBuffer);
-
-Result<Span<uint8_t>, nsresult> GetSharedArrayBufferData(
-    const OwningMaybeSharedArrayBufferViewOrMaybeSharedArrayBuffer& aBuffer);
 
 Result<Ok, nsresult> CloneBuffer(
     JSContext* aCx,

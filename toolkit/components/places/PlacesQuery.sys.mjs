@@ -8,12 +8,14 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   BinarySearch: "resource://gre/modules/BinarySearch.sys.mjs",
   BrowserUtils: "resource://gre/modules/BrowserUtils.sys.mjs",
+  DeferredTask: "resource://gre/modules/DeferredTask.sys.mjs",
   ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
-  requestIdleCallback: "resource://gre/modules/Timer.sys.mjs",
 });
 
 const BULK_PLACES_EVENTS_THRESHOLD = 50;
+const OBSERVER_DEBOUNCE_RATE_MS = 500;
+const OBSERVER_DEBOUNCE_TIMEOUT_MS = 5000;
 
 /**
  * An object that contains details of a page visit.
@@ -22,12 +24,19 @@ const BULK_PLACES_EVENTS_THRESHOLD = 50;
  *
  * @property {Date} date
  *   When this page was visited.
- * @property {number} id
- *   Visit ID from the database.
  * @property {string} title
  *   The page's title.
  * @property {string} url
  *   The page's URL.
+ */
+
+/**
+ * Cache key type depends on how visits are currently being grouped.
+ *
+ * By date: number - The start of day timestamp of the visit.
+ * By site: string - The domain name of the visit.
+ *
+ * @typedef {number | string} CacheKey
  */
 
 /**
@@ -37,14 +46,18 @@ const BULK_PLACES_EVENTS_THRESHOLD = 50;
  * remove the listeners.
  */
 export class PlacesQuery {
-  /** @type {Map<any, HistoryVisit[]>} */
+  /** @type {Map<CacheKey, HistoryVisit[]>} */
   cachedHistory = null;
   /** @type {object} */
   cachedHistoryOptions = null;
+  /** @type {Map<string, Set<HistoryVisit>>} */
+  #cachedHistoryPerUrl = null;
   /** @type {function(PlacesEvent[])} */
   #historyListener = null;
   /** @type {function(HistoryVisit[])} */
   #historyListenerCallback = null;
+  /** @type {DeferredTask} */
+  #historyObserverTask = null;
 
   /**
    * Get a snapshot of history visits at this moment.
@@ -86,15 +99,25 @@ export class PlacesQuery {
   initializeCache(options = this.cachedHistoryOptions) {
     this.cachedHistory = new Map();
     this.cachedHistoryOptions = options;
+    this.#cachedHistoryPerUrl = new Map();
   }
 
   /**
    * Run the database query and populate the history cache.
    */
   async fetchHistory() {
-    const { daysOld, limit } = this.cachedHistoryOptions;
+    const { daysOld, limit, sortBy } = this.cachedHistoryOptions;
     const db = await lazy.PlacesUtils.promiseDBConnection();
-    const sql = `SELECT v.id, visit_date, title, url
+    let groupBy;
+    switch (sortBy) {
+      case "date":
+        groupBy = "url, date(visit_date / 1000000, 'unixepoch', 'localtime')";
+        break;
+      case "site":
+        groupBy = "url";
+        break;
+    }
+    const sql = `SELECT MAX(visit_date) as visit_date, title, url
       FROM moz_historyvisits v
       JOIN moz_places h
       ON v.place_id = h.id
@@ -102,13 +125,13 @@ export class PlacesQuery {
         daysOld
       )} days','utc') * 1000000)
       AND hidden = 0
+      GROUP BY ${groupBy}
       ORDER BY visit_date DESC
       LIMIT ${limit > 0 ? limit : -1}`;
     const rows = await db.executeCached(sql);
     for (const row of rows) {
       this.appendToCache({
         date: lazy.PlacesUtils.toDate(row.getResultByName("visit_date")),
-        id: row.getResultByName("id"),
         title: row.getResultByName("title"),
         url: row.getResultByName("url"),
       });
@@ -123,6 +146,7 @@ export class PlacesQuery {
    */
   appendToCache(visit) {
     this.#getContainerForVisit(visit).push(visit);
+    this.#insertIntoCachedHistoryPerUrl(visit);
   }
 
   /**
@@ -135,6 +159,19 @@ export class PlacesQuery {
    */
   insertSortedIntoCache(visit) {
     const container = this.#getContainerForVisit(visit);
+    const existingVisitsForUrl = this.#cachedHistoryPerUrl.get(visit.url) ?? [];
+    for (const existingVisit of existingVisitsForUrl) {
+      if (this.#getContainerForVisit(existingVisit) === container) {
+        if (existingVisit.date.getTime() >= visit.date.getTime()) {
+          // Existing visit is more recent. Don't insert this one.
+          return;
+        }
+        // Remove the existing visit, then insert the new one.
+        container.splice(container.indexOf(existingVisit), 1);
+        existingVisitsForUrl.delete(existingVisit);
+        break;
+      }
+    }
     let insertionPoint = 0;
     if (visit.date.getTime() < container[0]?.date.getTime()) {
       insertionPoint = lazy.BinarySearch.insertionIndexOf(
@@ -144,6 +181,22 @@ export class PlacesQuery {
       );
     }
     container.splice(insertionPoint, 0, visit);
+    this.#insertIntoCachedHistoryPerUrl(visit);
+  }
+
+  /**
+   * Insert a visit into the url-keyed history cache.
+   *
+   * @param {HistoryVisit} visit
+   *   The visit to insert.
+   */
+  #insertIntoCachedHistoryPerUrl(visit) {
+    const container = this.#cachedHistoryPerUrl.get(visit.url);
+    if (container) {
+      container.add(visit);
+    } else {
+      this.#cachedHistoryPerUrl.set(visit.url, new Set().add(visit));
+    }
   }
 
   /**
@@ -155,23 +208,26 @@ export class PlacesQuery {
    *   The container it belongs to.
    */
   #getContainerForVisit(visit) {
-    let mapKey;
+    const mapKey = this.#getMapKeyForVisit(visit);
+    let container = this.cachedHistory?.get(mapKey);
+    if (!container) {
+      container = [];
+      this.cachedHistory?.set(mapKey, container);
+    }
+    return container;
+  }
+
+  #getMapKeyForVisit(visit) {
     switch (this.cachedHistoryOptions.sortBy) {
       case "date":
-        mapKey = this.getStartOfDayTimestamp(visit.date);
-        break;
+        return this.getStartOfDayTimestamp(visit.date);
       case "site":
         const { protocol } = new URL(visit.url);
-        mapKey =
-          protocol === "http:" || protocol === "https:"
-            ? lazy.BrowserUtils.formatURIStringForDisplay(visit.url)
-            : "";
-        break;
+        return protocol === "http:" || protocol === "https:"
+          ? lazy.BrowserUtils.formatURIStringForDisplay(visit.url)
+          : "";
     }
-    if (!this.cachedHistory.has(mapKey)) {
-      this.cachedHistory.set(mapKey, []);
-    }
-    return this.cachedHistory.get(mapKey);
+    return null;
   }
 
   /**
@@ -192,18 +248,40 @@ export class PlacesQuery {
   close() {
     this.cachedHistory = null;
     this.cachedHistoryOptions = null;
-    PlacesObservers.removeListener(
-      ["page-removed", "page-visited", "history-cleared", "page-title-changed"],
-      this.#historyListener
-    );
+    this.#cachedHistoryPerUrl = null;
+    if (this.#historyListener) {
+      PlacesObservers.removeListener(
+        [
+          "page-removed",
+          "page-visited",
+          "history-cleared",
+          "page-title-changed",
+        ],
+        this.#historyListener
+      );
+    }
     this.#historyListener = null;
     this.#historyListenerCallback = null;
+    if (!this.#historyObserverTask.isFinalized) {
+      this.#historyObserverTask.disarm();
+      this.#historyObserverTask.finalize();
+    }
   }
 
   /**
    * Listen for changes to the visits table and update caches accordingly.
    */
   #initHistoryListener() {
+    this.#historyObserverTask = new lazy.DeferredTask(
+      async () => {
+        if (typeof this.#historyListenerCallback === "function") {
+          const history = await this.getHistory(this.cachedHistoryOptions);
+          this.#historyListenerCallback(history);
+        }
+      },
+      OBSERVER_DEBOUNCE_RATE_MS,
+      OBSERVER_DEBOUNCE_TIMEOUT_MS
+    );
     this.#historyListener = async events => {
       if (
         events.length >= BULK_PLACES_EVENTS_THRESHOLD ||
@@ -223,21 +301,12 @@ export class PlacesQuery {
               this.initializeCache();
               break;
             case "page-title-changed":
-              this.cachedHistory.forEach(visits =>
-                visits
-                  .filter(({ url }) => url === event.url)
-                  .forEach(visit => (visit.title = event.title))
-              );
+              this.handlePageTitleChanged(event);
               break;
           }
         }
       }
-      lazy.requestIdleCallback(async () => {
-        if (typeof this.#historyListenerCallback === "function") {
-          const history = await this.getHistory(this.cachedHistoryOptions);
-          this.#historyListenerCallback(history);
-        }
-      });
+      this.#historyObserverTask.arm();
     };
     PlacesObservers.addListener(
       ["page-removed", "page-visited", "history-cleared", "page-title-changed"],
@@ -259,12 +328,27 @@ export class PlacesQuery {
     }
     const visit = {
       date: new Date(event.visitTime),
-      id: event.visitId,
       title: event.lastKnownTitle,
       url: event.url,
     };
     this.insertSortedIntoCache(visit);
     return visit;
+  }
+
+  /**
+   * Handle a page title changed event.
+   *
+   * @param {PlacesEvent} event
+   *   The event.
+   */
+  handlePageTitleChanged(event) {
+    const visits = this.#cachedHistoryPerUrl.get(event.url);
+    if (visits == null) {
+      return;
+    }
+    for (const visit of visits) {
+      visit.title = event.title;
+    }
   }
 
   /**

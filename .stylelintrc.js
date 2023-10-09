@@ -46,9 +46,17 @@ module.exports = {
       true,
       {
         ignoreFunctions: [
+          "light-dark" /* Used for color-scheme dependent colors */,
           "-moz-image-rect" /* Used for cropping images */,
           "add" /* Used in mathml.css */,
         ],
+      },
+    ],
+
+    "max-nesting-depth": [
+      8,
+      {
+        ignore: ["blockless-at-rules", "pseudo-classes"],
       },
     ],
 
@@ -279,12 +287,6 @@ module.exports = {
         "function-url-no-scheme-relative": true,
         indentation: 2,
         "keyframes-name-pattern": null,
-        "max-nesting-depth": [
-          8,
-          {
-            ignore: ["blockless-at-rules", "pseudo-classes"],
-          },
-        ],
         "media-feature-name-no-vendor-prefix": null,
         "no-descending-specificity": null,
         "no-eol-whitespace": true,

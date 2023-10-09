@@ -1000,6 +1000,8 @@ uriloader/exthandler/tests/mochitest/save_filenames.html
 # Also ignore reftest - specially crafted to produce expected output.
 **/reftest/
 **/reftests/
+# Don't ignore the reftest harness files.
+!/layout/tools/reftest/
 
 # Exclude expected objdirs.
 obj*/
@@ -1054,7 +1056,6 @@ devtools/client/debugger/webpack.config.js
 devtools/client/preferences/
 
 # Ignore devtools generated code
-devtools/shared/css/generated/properties-db.js
 devtools/client/webconsole/test/node/fixtures/stubs/*.js
 !devtools/client/webconsole/test/node/fixtures/stubs/index.js
 devtools/client/shared/components/test/node/stubs/reps/*.js
@@ -1299,8 +1300,6 @@ dom/tests/mochitest/ajax/
 dom/tests/mochitest/dom-level1-core/
 dom/tests/mochitest/dom-level2-core/
 dom/tests/mochitest/dom-level2-html/
-dom/u2f/tests/pkijs/
-dom/webauthn/cbor-cpp/
 dom/webauthn/tests/pkijs/
 dom/webgpu/tests/cts/checkout/
 editor/libeditor/tests/browserscope/lib/richtext/
@@ -1368,7 +1367,6 @@ media/libpng/
 media/libsoundtouch/
 media/libspeex_resampler/
 media/libtheora/
-media/libtremor/
 media/libvorbis/
 media/libvpx/
 media/libwebp/
@@ -1472,7 +1470,7 @@ node_modules/
 security/manager/tools/KnownRootHashes.json
 security/manager/tools/PreloadedHPKPins.json
 services/settings/dumps/
-testing/talos/talos/tests/devtools/addon/content/pages/custom/debugger/static/js/minified.js
+testing/talos/talos/tests/devtools/addon/content/pages/custom/debugger/app-build/static/js/minified.js
 toolkit/components/nimbus/schemas/NimbusExperiment.schema.json
 toolkit/components/pdfjs/content/PdfJsDefaultPreferences.sys.mjs
 toolkit/components/uniffi-js/UniFFIGeneratedScaffolding.cpp

@@ -5,6 +5,11 @@
 
 /* import-globals-from head.js */
 
+ChromeUtils.defineESModuleGetters(this, {
+  UrlbarProviderClipboard:
+    "resource:///modules/UrlbarProviderClipboard.sys.mjs",
+});
+
 async function doHeuristicsTest({ trigger, assert }) {
   await doTest(async browser => {
     await openPopup("x");
@@ -106,7 +111,7 @@ async function doTopPickTest({ trigger, assert }) {
   });
 
   await SpecialPowers.popPrefEnv();
-  cleanupQuickSuggest();
+  await cleanupQuickSuggest();
 }
 
 async function doTopSiteTest({ trigger, assert }) {
@@ -119,6 +124,26 @@ async function doTopSiteTest({ trigger, assert }) {
     await trigger();
     await assert();
   });
+}
+
+async function doClipboardTest({ trigger, assert }) {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.urlbar.clipboard.featureGate", true],
+      ["browser.urlbar.suggest.clipboard", true],
+    ],
+  });
+  SpecialPowers.clipboardCopyString("https://example.com/clipboard");
+  await doTest(async browser => {
+    await showResultByArrowDown();
+    await selectRowByURL("https://example.com/clipboard");
+
+    await trigger();
+    await assert();
+  });
+  SpecialPowers.clipboardCopyString("");
+  UrlbarProviderClipboard.setPreviousClipboardValue("");
+  await SpecialPowers.popPrefEnv();
 }
 
 async function doRemoteTabTest({ trigger, assert }) {
@@ -198,7 +223,7 @@ async function doSuggestTest({ trigger, assert }) {
   });
 
   await SpecialPowers.popPrefEnv();
-  cleanupQuickSuggest();
+  await cleanupQuickSuggest();
 }
 
 async function doAboutPageTest({ trigger, assert }) {

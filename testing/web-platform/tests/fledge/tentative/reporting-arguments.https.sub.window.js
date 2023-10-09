@@ -1,7 +1,12 @@
 // META: script=/resources/testdriver.js
 // META: script=/common/utils.js
 // META: script=resources/fledge-util.js
+// META: script=/common/subset-tests.js
 // META: timeout=long
+// META: variant=?1-5
+// META: variant=?6-10
+// META: variant=?11-15
+// META: variant=?16-last
 
 "use strict;"
 
@@ -14,13 +19,15 @@ async function runReportArgumentValidationTest(
     uuid = generateUuid(test);
   await runReportTest(
       test, uuid,
-      // reportResult:
-      reportResultSuccessCondition,
-      `sendReportTo('${createSellerReportUrl(uuid)}');`,
-      // reportWin:
-      reportWinSuccessCondition,
-      `sendReportTo('${createBidderReportUrl(uuid)}');`,
-      [createSellerReportUrl(uuid), createBidderReportUrl(uuid)]
+      { reportResultSuccessCondition:
+          reportResultSuccessCondition,
+        reportResult:
+          `sendReportTo('${createSellerReportURL(uuid)}');`,
+        reportWinSuccessCondition:
+          reportWinSuccessCondition,
+        reportWin:
+          `sendReportTo('${createBidderReportURL(uuid)}');` },
+      [createSellerReportURL(uuid), createBidderReportURL(uuid)]
   );
 }
 
@@ -28,67 +35,67 @@ async function runReportArgumentValidationTest(
 // reportResult() to reportWin() message passing tests
 /////////////////////////////////////////////////////////////////////
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await runReportTest(
       test, uuid,
-      // reportResult:
-      null,
-      `sendReportTo('${createSellerReportUrl(uuid)}');
-      return 45;`,
-      // reportWin:
-      'sellerSignals === 45',
-      `sendReportTo('${createBidderReportUrl(uuid)}');`,
+      { reportResult:
+          `sendReportTo('${createSellerReportURL(uuid)}');
+           return 45;`,
+        reportWinSuccessCondition:
+          'sellerSignals === 45',
+        reportWin:
+          `sendReportTo('${createBidderReportURL(uuid)}');` },
       // expectedReportUrls:
-      [createSellerReportUrl(uuid), createBidderReportUrl(uuid)]
+      [createSellerReportURL(uuid), createBidderReportURL(uuid)]
   );
 }, 'Seller passes number to bidder.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await runReportTest(
       test, uuid,
-      // reportResult:
-      null,
-      `sendReportTo('${createSellerReportUrl(uuid)}');
-      return 'foo';`,
-      // reportWin:
-      'sellerSignals === "foo"',
-      `sendReportTo('${createBidderReportUrl(uuid)}');`,
+      { reportResult:
+          `sendReportTo('${createSellerReportURL(uuid)}');
+           return 'foo';`,
+        reportWinSuccessCondition:
+          'sellerSignals === "foo"',
+        reportWin:
+          `sendReportTo('${createBidderReportURL(uuid)}');` },
       // expectedReportUrls:
-      [createSellerReportUrl(uuid), createBidderReportUrl(uuid)]
+      [createSellerReportURL(uuid), createBidderReportURL(uuid)]
   );
 }, 'Seller passes string to bidder.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await runReportTest(
       test, uuid,
-      // reportResult:
-      null,
-      `sendReportTo('${createSellerReportUrl(uuid)}');
-      return [3, 1, 2];`,
-      // reportWin:
-      'JSON.stringify(sellerSignals) === "[3,1,2]"',
-      `sendReportTo('${createBidderReportUrl(uuid)}');`,
+      { reportResult:
+          `sendReportTo('${createSellerReportURL(uuid)}');
+           return [3, 1, 2];`,
+        reportWinSuccessCondition:
+          'JSON.stringify(sellerSignals) === "[3,1,2]"',
+        reportWin:
+          `sendReportTo('${createBidderReportURL(uuid)}');` },
       // expectedReportUrls:
-      [createSellerReportUrl(uuid), createBidderReportUrl(uuid)]
+      [createSellerReportURL(uuid), createBidderReportURL(uuid)]
   );
 }, 'Seller passes array to bidder.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await runReportTest(
       test, uuid,
-      // reportResult:
-      null,
-      `sendReportTo('${createSellerReportUrl(uuid)}');
-      return {a: 4, b:['c', null, {}]};`,
-      // reportWin:
-      `JSON.stringify(sellerSignals) === '{"a":4,"b":["c",null,{}]}'`,
-      `sendReportTo('${createBidderReportUrl(uuid)}');`,
+      { reportResult:
+          `sendReportTo('${createSellerReportURL(uuid)}');
+           return {a: 4, b:['c', null, {}]};`,
+        reportWinSuccessCondition:
+          `JSON.stringify(sellerSignals) === '{"a":4,"b":["c",null,{}]}'`,
+        reportWin:
+          `sendReportTo('${createBidderReportURL(uuid)}');` },
       // expectedReportUrls:
-      [createSellerReportUrl(uuid), createBidderReportUrl(uuid)]
+      [createSellerReportURL(uuid), createBidderReportURL(uuid)]
   );
 }, 'Seller passes object to bidder.');
 
@@ -96,7 +103,7 @@ promise_test(async test => {
 // reportResult() / reportWin() browserSignals tests.
 /////////////////////////////////////////////////////////////////////
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -106,7 +113,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.topWindowHostname test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -116,7 +123,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.seller test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -128,19 +135,19 @@ promise_test(async test => {
   );
 }, 'browserSignals.topLevelSeller and browserSignals.componentSeller test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
-    `browserSignals.renderUrl === "${createRenderUrl(uuid)}"`,
+    `browserSignals.renderURL === "${createRenderURL(uuid)}"`,
     // reportWinSuccessCondition:
-    `browserSignals.renderUrl === "${createRenderUrl(uuid)}"`,
+    `browserSignals.renderURL === "${createRenderURL(uuid)}"`,
     uuid
   );
-}, 'browserSignals.renderUrl test.');
+}, 'browserSignals.renderURL test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -150,7 +157,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.bid test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -160,7 +167,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.desirability test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -170,7 +177,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.topLevelSellerSignals test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -180,7 +187,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.dataVersion test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -190,7 +197,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.modifiedBid test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await runReportArgumentValidationTest(
     test,
@@ -202,13 +209,15 @@ promise_test(async test => {
   );
 }, 'browserSignals.highestScoringOtherBid with no other interest groups test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await joinInterestGroup(test, uuid,
-                          { biddingLogicUrl: createBiddingScriptUrl({bid: -2}),
+    {
+      biddingLogicURL: createBiddingScriptURL({ bid: -2 }),
                             name: 'other interest group 1' });
   await joinInterestGroup(test, uuid,
-                          { biddingLogicUrl: createBiddingScriptUrl({bid: -1}),
+    {
+      biddingLogicURL: createBiddingScriptURL({ bid: -1 }),
                             name: 'other interest group 2' });
   await runReportArgumentValidationTest(
     test,
@@ -220,16 +229,19 @@ promise_test(async test => {
   );
 }, 'browserSignals.highestScoringOtherBid with other groups that do not bid.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await joinInterestGroup(test, uuid,
-                          { biddingLogicUrl: createBiddingScriptUrl({bid: 2}),
+    {
+      biddingLogicURL: createBiddingScriptURL({ bid: 2 }),
                             name: 'other interest group 1' });
   await joinInterestGroup(test, uuid,
-                          { biddingLogicUrl: createBiddingScriptUrl({bid: 5}),
+    {
+      biddingLogicURL: createBiddingScriptURL({ bid: 5 }),
                             name: 'other interest group 2' });
   await joinInterestGroup(test, uuid,
-                          { biddingLogicUrl: createBiddingScriptUrl({bid: 2}),
+    {
+      biddingLogicURL: createBiddingScriptURL({ bid: 2 }),
                             name: 'other interest group 3' });
   await runReportArgumentValidationTest(
     test,
@@ -241,7 +253,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.highestScoringOtherBid with other bids.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -251,7 +263,7 @@ promise_test(async test => {
   );
 }, 'browserSignals.interestGroupName test.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   await runReportArgumentValidationTest(
     test,
     // reportResultSuccessCondition:
@@ -261,10 +273,11 @@ promise_test(async test => {
   );
 }, 'browserSignals.madeHighestScoringOtherBid with no other bids.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await joinInterestGroup(test, uuid,
-                          { biddingLogicUrl: createBiddingScriptUrl({bid: -1}),
+    {
+      biddingLogicURL: createBiddingScriptURL({ bid: -1 }),
                             name: 'other interest group 2' });
   await runReportArgumentValidationTest(
     test,
@@ -275,10 +288,11 @@ promise_test(async test => {
   );
 }, 'browserSignals.madeHighestScoringOtherBid with group that did not bid.');
 
-promise_test(async test => {
+subsetTest(promise_test, async test => {
   const uuid = generateUuid(test);
   await joinInterestGroup(test, uuid,
-    { biddingLogicUrl: createBiddingScriptUrl({bid: 1}),
+    {
+      biddingLogicURL: createBiddingScriptURL({ bid: 1 }),
       name: 'other interest group 2' });
 await runReportArgumentValidationTest(
     test,

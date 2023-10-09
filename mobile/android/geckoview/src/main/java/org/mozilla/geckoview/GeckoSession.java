@@ -144,6 +144,8 @@ public class GeckoSession {
   private SessionAccessibility mAccessibility;
   private SessionFinder mFinder;
   private SessionPdfFileSaver mPdfFileSaver;
+  private TranslationsController.SessionTranslation mTranslations =
+      new TranslationsController.SessionTranslation(this);
 
   /** {@code SessionMagnifier} handles magnifying glass. */
   /* package */ interface SessionMagnifier {
@@ -839,6 +841,95 @@ public class GeckoSession {
         }
       };
 
+  private final GeckoSessionHandler<ExperimentDelegate> mExperimentHandler =
+      new GeckoSessionHandler<ExperimentDelegate>(
+          "GeckoViewExperiment",
+          this,
+          new String[] {
+            "GeckoView:GetExperimentFeature",
+            "GeckoView:RecordExposure",
+            "GeckoView:RecordExperimentExposure",
+            "GeckoView:RecordMalformedConfig"
+          }) {
+        @Override
+        public void handleMessage(
+            final ExperimentDelegate delegate,
+            final String event,
+            final GeckoBundle message,
+            final EventCallback callback) {
+
+          if (delegate == null) {
+            if (callback != null) {
+              callback.sendError("No experiment delegate registered.");
+            }
+            Log.w(LOGTAG, "No experiment delegate registered.");
+            return;
+          }
+          final String feature = message.getString("feature", "");
+          if ("GeckoView:GetExperimentFeature".equals(event) && callback != null) {
+            final GeckoResult<JSONObject> result = delegate.onGetExperimentFeature(feature);
+            result
+                .accept(
+                    json -> {
+                      try {
+                        callback.sendSuccess(GeckoBundle.fromJSONObject(json));
+                      } catch (final JSONException e) {
+                        callback.sendError("An error occured when serializing the feature data.");
+                      }
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError("An error occurred while retrieving feature data.");
+                      return null;
+                    });
+
+          } else if ("GeckoView:RecordExposure".equals(event) && callback != null) {
+            final GeckoResult<Void> result = delegate.onRecordExposureEvent(feature);
+            result
+                .accept(
+                    a -> {
+                      callback.sendSuccess(true);
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError("An error occurred while recording feature.");
+                      return null;
+                    });
+
+          } else if ("GeckoView:RecordExperimentExposure".equals(event) && callback != null) {
+            final String slug = message.getString("slug", "");
+            final GeckoResult<Void> result =
+                delegate.onRecordExperimentExposureEvent(feature, slug);
+            result
+                .accept(
+                    a -> {
+                      callback.sendSuccess(true);
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError("An error occurred while recording experiment feature.");
+                      return null;
+                    });
+
+          } else if ("GeckoView:RecordMalformedConfig".equals(event) && callback != null) {
+            final String part = message.getString("part", "");
+            final GeckoResult<Void> result =
+                delegate.onRecordMalformedConfigurationEvent(feature, part);
+            result
+                .accept(
+                    a -> {
+                      callback.sendSuccess(true);
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError(
+                          "An error occurred while recording malformed feature config.");
+                      return null;
+                    });
+          }
+        }
+      };
+
   private final GeckoSessionHandler<ContentDelegate> mProcessHangHandler =
       new GeckoSessionHandler<ContentDelegate>(
           "GeckoViewProcessHangMonitor", this, new String[] {"GeckoView:HangReport"}) {
@@ -1130,6 +1221,8 @@ public class GeckoSession {
       };
 
   private final MediaSession.Handler mMediaSessionHandler = new MediaSession.Handler(this);
+  private final TranslationsController.SessionTranslation.Handler mTranslationsHandler =
+      mTranslations.getHandler();
 
   /* package */ int handlersCount;
 
@@ -1145,8 +1238,10 @@ public class GeckoSession {
         mProgressHandler,
         mScrollHandler,
         mSelectionActionDelegate,
+        mTranslationsHandler,
         mContentBlockingHandler,
-        mMediaSessionHandler
+        mMediaSessionHandler,
+        mExperimentHandler
       };
 
   private static class PermissionCallback
@@ -1650,6 +1745,7 @@ public class GeckoSession {
     mId = id;
     mWindow = new Window(runtime, this, mNativeQueue);
     mWebExtensionController.setRuntime(runtime);
+    mExperimentHandler.setDelegate(getRuntimeExperimentDelegate(), this);
 
     onWindowChanged(WINDOW_OPEN, /* inProgress */ true);
 
@@ -2907,7 +3003,7 @@ public class GeckoSession {
    * @param url The URL of the product page.
    * @return a {@link GeckoResult} result of review analysis object.
    */
-  @UiThread
+  @AnyThread
   public @NonNull GeckoResult<ReviewAnalysis> requestAnalysis(@NonNull final String url) {
     final GeckoBundle bundle = new GeckoBundle(1);
     bundle.putString("url", url);
@@ -2917,12 +3013,51 @@ public class GeckoSession {
   }
 
   /**
+   * Request the creation of an analysis of product's reviews for a given product URL.
+   *
+   * @param url The URL of the product page.
+   * @return a {@link GeckoResult} result of status of analysis.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<String> requestCreateAnalysis(@NonNull final String url) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("url", url);
+    return mEventDispatcher.queryString("GeckoView:RequestCreateAnalysis", bundle);
+  }
+
+  /**
+   * Request the status of the current analysis of product's reviews for a given product URL.
+   *
+   * @param url The URL of the product page.
+   * @return a {@link GeckoResult} result of status of analysis.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<String> requestAnalysisCreationStatus(@NonNull final String url) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("url", url);
+    return mEventDispatcher.queryString("GeckoView:RequestAnalysisCreationStatus", bundle);
+  }
+
+  /**
+   * Poll for the status of the current analysis of product's reviews for a given product URL.
+   *
+   * @param url The URL of the product page.
+   * @return a {@link GeckoResult} result of status of analysis.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<String> pollForAnalysisCompleted(@NonNull final String url) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("url", url);
+    return mEventDispatcher.queryString("GeckoView:PollForAnalysisCompleted", bundle);
+  }
+
+  /**
    * Request product recommendations given a specific product url.
    *
    * @param url The URL of the product page.
    * @return a {@link GeckoResult} result of product recommendations.
    */
-  @UiThread
+  @AnyThread
   public @NonNull GeckoResult<List<Recommendation>> requestRecommendations(
       @NonNull final String url) {
     final GeckoBundle bundle = new GeckoBundle(1);
@@ -2933,8 +3068,10 @@ public class GeckoSession {
             recommendationsBundle -> {
               final GeckoBundle[] bundles = recommendationsBundle.getBundleArray("recommendations");
               final ArrayList<Recommendation> recArray = new ArrayList<>(bundles.length);
-              for (final GeckoBundle b : bundles) {
-                recArray.add(new Recommendation(b));
+              if (recArray != null) {
+                for (final GeckoBundle b : bundles) {
+                  recArray.add(new Recommendation(b));
+                }
               }
               return recArray;
             });
@@ -3224,6 +3361,40 @@ public class GeckoSession {
   }
 
   /**
+   * The session translation object coordinates receiving and sending session messages with the
+   * translations toolkit. Notably, it can be used to request translations.
+   *
+   * @return The current translation session coordinator.
+   */
+  @AnyThread
+  public @Nullable TranslationsController.SessionTranslation getSessionTranslation() {
+    return mTranslations;
+  }
+
+  /**
+   * Set the translation delegate, which receives translations events.
+   *
+   * @param delegate An implementation of @link{TranslationsController.SessionTranslation.Delegate}.
+   */
+  @AnyThread
+  public void setTranslationsSessionDelegate(
+      final @Nullable TranslationsController.SessionTranslation.Delegate delegate) {
+    mTranslationsHandler.setDelegate(delegate, this);
+  }
+
+  /**
+   * Get the translations delegate. The application embedder must initially set the translations
+   * delegate for use.
+   *
+   * @return The current translations delegate.
+   */
+  @AnyThread
+  public @Nullable TranslationsController.SessionTranslation.Delegate
+      getTranslationsSessionDelegate() {
+    return mTranslationsHandler.getDelegate();
+  }
+
+  /**
    * Get the current selection action delegate for this GeckoSession.
    *
    * @return SelectionActionDelegate instance or null if not set.
@@ -3446,7 +3617,7 @@ public class GeckoSession {
     @Nullable public final String grade;
 
     /** Product rating adjusted to exclude untrusted reviews. */
-    @NonNull public final Double adjustedRating;
+    @Nullable public final Double adjustedRating;
 
     /** Boolean indicating if the analysis is stale. */
     public final boolean needsAnalysis;
@@ -3455,7 +3626,7 @@ public class GeckoSession {
     @Nullable public final Highlight highlights;
 
     /** Time since the last analysis was performed. */
-    public final int lastAnalysisTime;
+    public final long lastAnalysisTime;
 
     /** Boolean indicating if reported that this product has been deleted. */
     public final boolean deletedProductReported;
@@ -3467,29 +3638,176 @@ public class GeckoSession {
       analysisURL = message.getString("analysis_url");
       productId = message.getString("product_id");
       grade = message.getString("grade");
-      adjustedRating = message.getDouble("adjusted_rating");
+      adjustedRating = message.getDoubleObject("adjusted_rating");
       needsAnalysis = message.getBoolean("needs_analysis", true);
-      highlights = new Highlight(message.getBundle("highlights"));
-      lastAnalysisTime = message.getInt("last_analysis_time");
+      if (message.getBundle("highlights") == null) {
+        highlights = null;
+      } else {
+        highlights = new Highlight(message.getBundle("highlights"));
+      }
+      lastAnalysisTime = message.getLong("last_analysis_time");
       deletedProductReported = message.getBoolean("deleted_product_reported");
       deletedProduct = message.getBoolean("deleted_product");
     }
 
-    /** Empty constructor for tests. */
-    protected ReviewAnalysis() {
-      analysisURL = "";
-      productId = "";
-      grade = null;
-      adjustedRating = 0.0;
-      needsAnalysis = false;
-      highlights = null;
-      lastAnalysisTime = 0;
-      deletedProductReported = false;
-      deletedProduct = false;
+    /**
+     * Initialize a ReviewAnalysis object with a builder object
+     *
+     * @param builder A ReviewAnalysis.Builder instance
+     */
+    protected ReviewAnalysis(final @NonNull Builder builder) {
+      adjustedRating = builder.mAdjustedRating;
+      analysisURL = builder.mAnalysisUrl;
+      productId = builder.mProductId;
+      grade = builder.mGrade;
+      needsAnalysis = builder.mNeedsAnalysis;
+      highlights = builder.mHighlights;
+      lastAnalysisTime = builder.mLastAnalysisTime;
+      deletedProduct = builder.mDeletedProduct;
+      deletedProductReported = builder.mDeletedProductReported;
+    }
+
+    /** This is a Builder used by ReviewAnalysis class */
+    public static class Builder {
+      /* package */ String mAnalysisUrl = "";
+      /* package */ String mProductId = "";
+      /* package */ String mGrade = null;
+      /* package */ Double mAdjustedRating = 0.0;
+      /* package */ Boolean mNeedsAnalysis = false;
+      /* package */ Highlight mHighlights = new Highlight();
+      /* package */ long mLastAnalysisTime = 0;
+      /* package */ Boolean mDeletedProductReported = false;
+      /* package */ Boolean mDeletedProduct = false;
+
+      /**
+       * Construct a Builder instance with the specified product ID.
+       *
+       * @param productId A String with the product ID.
+       */
+      public Builder(final @Nullable String productId) {
+        productId(productId);
+      }
+
+      /**
+       * Set the analysis URL
+       *
+       * @param analysisUrl A URI String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder analysisUrl(final @Nullable String analysisUrl) {
+        mAnalysisUrl = analysisUrl;
+        return this;
+      }
+
+      /**
+       * Set the product identifier
+       *
+       * @param productId A product ID String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder productId(final @Nullable String productId) {
+        mProductId = productId;
+        return this;
+      }
+
+      /**
+       * Set the grade of the product
+       *
+       * @param grade A grade String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder grade(final @Nullable String grade) {
+        mGrade = grade;
+        return this;
+      }
+
+      /**
+       * Set the adjusted rating
+       *
+       * @param adjustedRating the adjusted rating of the product
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder adjustedRating(final @NonNull Double adjustedRating) {
+        mAdjustedRating = adjustedRating;
+        return this;
+      }
+
+      /**
+       * Set the flag that indicates whether this product needs analysis
+       *
+       * @param needsAnalysis indicates whether this product needs analysis
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder needsAnalysis(final @NonNull Boolean needsAnalysis) {
+        mNeedsAnalysis = needsAnalysis;
+        return this;
+      }
+
+      /**
+       * Set an empty highlights object for the product
+       *
+       * @param highlight A Highlight object (can be null) to overwrite the default empty Highlight
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder highlights(final @Nullable Highlight highlight) {
+        mHighlights = highlight;
+        return this;
+      }
+
+      /**
+       * Set the time of the analysis
+       *
+       * @param lastAnalysisTime The time of the analysis
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder lastAnalysisTime(final long lastAnalysisTime) {
+        mLastAnalysisTime = lastAnalysisTime;
+        return this;
+      }
+
+      /**
+       * Set the flag that indicates whether this deleted product was reported
+       *
+       * @param deletedProductReported Boolean to indicate whether this deleted product was reported
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder deletedProductReported(
+          final @NonNull Boolean deletedProductReported) {
+        mDeletedProductReported = deletedProductReported;
+        return this;
+      }
+
+      /**
+       * Set the flag that indicates whether the product is deleted
+       *
+       * @param deletedProduct Boolean to indicate whether the product is deleted
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder deletedProduct(final @NonNull Boolean deletedProduct) {
+        mDeletedProduct = deletedProduct;
+        return this;
+      }
+
+      /**
+       * @return A {@link ReviewAnalysis} constructed with the values from this Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis build() {
+        return new ReviewAnalysis(this);
+      }
     }
 
     /** Contains information about highlights of a product's reviews. */
-    public class Highlight {
+    public static class Highlight {
       /** Highlights about the quality of a product. */
       @Nullable public final String[] quality;
 
@@ -3570,18 +3888,173 @@ public class GeckoSession {
       currency = message.getString("currency");
     }
 
-    /** Empty constructor for tests. */
-    protected Recommendation() {
-      analysisUrl = "";
-      adjustedRating = 0.0;
-      sponsored = false;
-      imageUrl = "";
-      aid = "";
-      url = "";
-      name = "";
-      grade = "";
-      price = "";
-      currency = "";
+    /**
+     * Initialize Recommendation with a builder object
+     *
+     * @param builder A Recommendation.Builder instance
+     */
+    protected Recommendation(final @NonNull Builder builder) {
+      url = builder.mUrl;
+      analysisUrl = builder.mAnalysisUrl;
+      adjustedRating = builder.mAdjustedRating;
+      sponsored = builder.mSponsored;
+      imageUrl = builder.mImageUrl;
+      aid = builder.mAid;
+      name = builder.mName;
+      grade = builder.mGrade;
+      price = builder.mPrice;
+      currency = builder.mCurrency;
+    }
+
+    /** This is a Builder used by Recommendation class */
+    public static class Builder {
+      /* package */ String mAnalysisUrl = "";
+      /* package */ Double mAdjustedRating = 0.0;
+      /* package */ Boolean mSponsored = false;
+      /* package */ String mImageUrl = "";
+      /* package */ String mAid = "";
+      /* package */ String mUrl = "";
+      /* package */ String mName = "";
+      /* package */ String mGrade = "";
+      /* package */ String mPrice = "";
+      /* package */ String mCurrency = "";
+
+      /**
+       * Construct a Builder instance with the specified recommendation URL.
+       *
+       * @param recommendationUrl A URI String.
+       */
+      public Builder(final @NonNull String recommendationUrl) {
+        url(recommendationUrl);
+      }
+
+      /**
+       * Set the analysis URL
+       *
+       * @param analysisUrl A URI String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder analysisUrl(final @NonNull String analysisUrl) {
+        mAnalysisUrl = analysisUrl;
+        return this;
+      }
+
+      /**
+       * Set the adjusted rating
+       *
+       * @param adjustedRating the adjusted rating of the product
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder adjustedRating(final @NonNull Double adjustedRating) {
+        mAdjustedRating = adjustedRating;
+        return this;
+      }
+
+      /**
+       * Set the flag that indicates whether this recommendation is sponsored or not
+       *
+       * @param sponsored indicates whether this recommendation is sponsored
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder sponsored(final @NonNull Boolean sponsored) {
+        mSponsored = sponsored;
+        return this;
+      }
+
+      /**
+       * Set the image URL
+       *
+       * @param imageUrl An image URL String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder imageUrl(final @NonNull String imageUrl) {
+        mImageUrl = imageUrl;
+        return this;
+      }
+
+      /**
+       * Set the ad identifier
+       *
+       * @param aid The id String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder aid(final @NonNull String aid) {
+        mAid = aid;
+        return this;
+      }
+
+      /**
+       * Set the recommendation URL
+       *
+       * @param url A URI String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder url(final @NonNull String url) {
+        mUrl = url;
+        return this;
+      }
+
+      /**
+       * Set the name of the recommended product
+       *
+       * @param name A name String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder name(final @NonNull String name) {
+        mName = name;
+        return this;
+      }
+
+      /**
+       * Set the grade of the recommended product
+       *
+       * @param grade A grade String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder grade(final @NonNull String grade) {
+        mGrade = grade;
+        return this;
+      }
+
+      /**
+       * Set the price of the recommended product
+       *
+       * @param price A price String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder price(final @NonNull String price) {
+        mPrice = price;
+        return this;
+      }
+
+      /**
+       * Set the currency of the price of the recommended product
+       *
+       * @param currency A currency String
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation.Builder currency(final @NonNull String currency) {
+        mCurrency = currency;
+        return this;
+      }
+
+      /**
+       * @return A {@link Recommendation} constructed with the values from this Builder instance.
+       */
+      @AnyThread
+      public @NonNull Recommendation build() {
+        return new Recommendation(this);
+      }
     }
   }
 
@@ -3902,13 +4375,18 @@ public class GeckoSession {
     default void onCookieBannerHandled(@NonNull final GeckoSession session) {}
 
     /**
-     * This method is called when GeckoView is requesting a specific Nimbus feature in using message
-     * `GeckoView:GetNimbusFeature`.
+     * This method is scheduled for deprecation, see Bug 1846074 for details. Please switch to the
+     * [ExperimentDelegate.onGetExperimentFeature] for the same functionality.
+     *
+     * <p>This method is called when GeckoView is requesting a specific Nimbus feature in using
+     * message `GeckoView:GetNimbusFeature`.
      *
      * @param session GeckoSession that initiated the callback.
      * @param featureId Nimbus feature id of the collected data.
      * @return A {@link JSONObject} with the feature.
      */
+    @Deprecated
+    @DeprecationSchedule(version = 122, id = "session-nimbus")
     @AnyThread
     default @Nullable JSONObject onGetNimbusFeature(
         @NonNull final GeckoSession session, @NonNull final String featureId) {
@@ -4792,17 +5270,26 @@ public class GeckoSession {
           /** The id of the provider. */
           public final int id;
 
+          /** The domain of the provider */
+          public final @NonNull String domain;
+
           /**
            * Creates a new {@link Provider} with the given parameters.
            *
            * @param id The identification for this prompt.
            * @param icon A string base64 icon.
            * @param name The name of the {@link Provider}.
+           * @param domain The domain of the {@link Provider}.
            */
-          public Provider(final int id, final @NonNull String name, final @Nullable String icon) {
+          public Provider(
+              final int id,
+              final @NonNull String name,
+              final @Nullable String icon,
+              final @NonNull String domain) {
             this.id = id;
             this.icon = icon;
             this.name = name;
+            this.domain = domain;
           }
 
           /* package */
@@ -4810,7 +5297,8 @@ public class GeckoSession {
             final int id = bundle.getInt("providerIndex");
             final String icon = bundle.getString("icon");
             final String name = bundle.getString("name");
-            return new Provider(id, name, icon);
+            final String domain = bundle.getString("domain");
+            return new Provider(id, name, icon, domain);
           }
         }
       }
@@ -4823,17 +5311,25 @@ public class GeckoSession {
         /** The accounts from which the user could select. */
         public final @NonNull Account[] accounts;
 
+        /** The name of the provider the user is trying to login with */
+        public final @NonNull Provider provider;
+
         /**
          * Creates a new {@link AccountSelectorPrompt} with the given parameters.
          *
          * @param id The identification for this prompt.
          * @param accounts The accounts from which the user could select.
+         * @param provider The provider on which the user is trying to log in.
          * @param observer A callback to notify when the prompt has been completed.
          */
         public AccountSelectorPrompt(
-            @NonNull final String id, @NonNull final Account[] accounts, final Observer observer) {
+            @NonNull final String id,
+            @NonNull final Account[] accounts,
+            @NonNull final Provider provider,
+            final Observer observer) {
           super(id, null, observer);
           this.accounts = accounts;
+          this.provider = provider;
         }
 
         /**
@@ -4853,7 +5349,7 @@ public class GeckoSession {
         /** A representation of an Identity Credential Provider Accounts. */
         public static class ProviderAccounts {
           /** The name of the provider. */
-          public final @Nullable String provider;
+          public final @Nullable Provider provider;
 
           /** The accounts available for this provider. */
           public final @NonNull Account[] accounts;
@@ -4869,7 +5365,7 @@ public class GeckoSession {
            * @param accounts The list of {@link Account}s available for this provider.
            */
           public ProviderAccounts(
-              final int id, @Nullable final String provider, @NonNull final Account[] accounts) {
+              final int id, @Nullable final Provider provider, @NonNull final Account[] accounts) {
             this.id = id;
             this.provider = provider;
             this.accounts = accounts;
@@ -4878,7 +5374,8 @@ public class GeckoSession {
           /* package */
           static @NonNull ProviderAccounts fromBundle(final @NonNull GeckoBundle bundle) {
             final int id = bundle.getInt("accountIndex");
-            final String provider = bundle.getString("provider");
+            final Provider provider = Provider.fromBundle(bundle.getBundle("provider"));
+
             final GeckoBundle[] accountsBundle = bundle.getBundleArray("accounts");
             if (accountsBundle == null) {
               return new ProviderAccounts(id, provider, new Account[0]);
@@ -4932,6 +5429,42 @@ public class GeckoSession {
             final String name = bundle.getString("name");
             final String email = bundle.getString("email");
             return new Account(id, email, name, icon);
+          }
+        }
+
+        /** A representation of an Identity Credential Provider for an Account Selector Prompt */
+        public static class Provider {
+          /** The name of the provider */
+          public final @NonNull String name;
+
+          /** The domain of the provider */
+          public final @NonNull String domain;
+
+          /** A base64 string for given icon for the provider; may be null. */
+          public final @Nullable String icon;
+
+          /**
+           * Creates a new {@link Provider} with the given parameters
+           *
+           * @param name the name of the Provider
+           * @param favicon A string base64 icon for the provider
+           * @param domain A string base64 icon for the provider
+           */
+          public Provider(
+              @NonNull final String name,
+              @NonNull final String domain,
+              @Nullable final String favicon) {
+            this.name = name;
+            this.domain = domain;
+            this.icon = favicon;
+          }
+
+          /* package */
+          static @NonNull Provider fromBundle(final @NonNull GeckoBundle bundle) {
+            final String name = bundle.getString("name");
+            final String domain = bundle.getString("domain");
+            final String icon = bundle.getString("icon");
+            return new Provider(name, domain, icon);
           }
         }
       }
@@ -6274,8 +6807,8 @@ public class GeckoSession {
    * Get a matrix for transforming from screen coordinates to Android's current window coordinates.
    *
    * @param matrix Matrix to be replaced by the transformation matrix.
-   * @see
-   *     https://developer.android.com/guide/topics/large-screens/multi-window-support#window_metrics
+   * @see <a
+   *     href="https://developer.android.com/guide/topics/large-screens/multi-window-support#window_metrics">...</a>
    */
   @UiThread
   /* package */ void getScreenToWindowManagerOffsetMatrix(@NonNull final Matrix matrix) {
@@ -7487,6 +8020,8 @@ public class GeckoSession {
       final @Nullable Long browsingContextId) {
     final GeckoResult<InputStream> geckoResult = new GeckoResult<>();
     if (browsingContextId == null) {
+      // Ensures the canonical browsing context is available
+      setFocused(true);
       this.mWindow.printToPdf(geckoResult);
     } else {
       this.mWindow.printToPdf(geckoResult, browsingContextId);
@@ -7614,6 +8149,45 @@ public class GeckoSession {
   @AnyThread
   public void setPrintDelegate(final @Nullable PrintDelegate delegate) {
     mPrintHandler.setDelegate(delegate, this);
+  }
+
+  /**
+   * Gets the experiment delegate for this session.
+   *
+   * @return The current {@link ExperimentDelegate} for this session, if any.
+   */
+  @AnyThread
+  public @Nullable ExperimentDelegate getExperimentDelegate() {
+    return mExperimentHandler.getDelegate();
+  }
+
+  /**
+   * Gets the experiment delegate from the runtime.
+   *
+   * @return The current {@link ExperimentDelegate} for the runtime or null.
+   */
+  @AnyThread
+  private @Nullable ExperimentDelegate getRuntimeExperimentDelegate() {
+    final GeckoRuntime runtime = this.getRuntime();
+    if (runtime != null) {
+      final GeckoRuntimeSettings runtimeSettings = runtime.getSettings();
+      if (runtimeSettings != null) {
+        return runtimeSettings.getExperimentDelegate();
+      }
+    }
+    Log.w(LOGTAG, "Could not retrieve experiment delegate from runtime.");
+    return null;
+  }
+
+  /**
+   * Sets the experiment delegate for this session. Default is set to the runtime experiment
+   * delegate.
+   *
+   * @param delegate An instance of {@link ExperimentDelegate}.
+   */
+  @AnyThread
+  public void setExperimentDelegate(final @Nullable ExperimentDelegate delegate) {
+    mExperimentHandler.setDelegate(delegate, this);
   }
 
   /** Thrown when failure occurs when printing from a website. */

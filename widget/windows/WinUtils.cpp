@@ -58,6 +58,7 @@
 #include <textstor.h>
 #include "TSFTextStore.h"
 
+#include <shellscalingapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
 
@@ -234,21 +235,6 @@ float WinUtils::SystemDPI() {
 
 // static
 double WinUtils::SystemScaleFactor() { return SystemDPI() / 96.0; }
-
-#if WINVER < 0x603
-typedef enum {
-  MDT_EFFECTIVE_DPI = 0,
-  MDT_ANGULAR_DPI = 1,
-  MDT_RAW_DPI = 2,
-  MDT_DEFAULT = MDT_EFFECTIVE_DPI
-} MONITOR_DPI_TYPE;
-
-typedef enum {
-  PROCESS_DPI_UNAWARE = 0,
-  PROCESS_SYSTEM_DPI_AWARE = 1,
-  PROCESS_PER_MONITOR_DPI_AWARE = 2
-} PROCESS_DPI_AWARENESS;
-#endif
 
 typedef HRESULT(WINAPI* GETDPIFORMONITORPROC)(HMONITOR, MONITOR_DPI_TYPE, UINT*,
                                               UINT*);
@@ -602,18 +588,6 @@ void WinUtils::SetNSWindowPtr(HWND aWnd, nsWindow* aWindow) {
 nsWindow* WinUtils::GetNSWindowPtr(HWND aWnd) {
   MOZ_ASSERT(NS_IsMainThread());
   return sExtantNSWindows.Get(aWnd);  // or nullptr
-}
-
-static BOOL CALLBACK AddMonitor(HMONITOR, HDC, LPRECT, LPARAM aParam) {
-  (*(int32_t*)aParam)++;
-  return TRUE;
-}
-
-/* static */
-int32_t WinUtils::GetMonitorCount() {
-  int32_t monitorCount = 0;
-  EnumDisplayMonitors(nullptr, nullptr, AddMonitor, (LPARAM)&monitorCount);
-  return monitorCount;
 }
 
 /* static */
@@ -1457,6 +1431,42 @@ bool WinUtils::GetAutoRotationState(AR_STATE* aRotationState) {
     return get_auto_rotation_state_func(aRotationState);
   }
   return false;
+}
+
+// static
+void WinUtils::GetClipboardFormatAsString(UINT aFormat, nsAString& aOutput) {
+  wchar_t buf[256] = {};
+  // Get registered format name and ensure the existence of a terminating '\0'
+  // if the registered name is more than 256 characters.
+  if (::GetClipboardFormatNameW(aFormat, buf, ARRAYSIZE(buf) - 1)) {
+    aOutput.Append(buf);
+    return;
+  }
+  // Standard clipboard formats
+  // https://learn.microsoft.com/en-us/windows/win32/dataxchg/standard-clipboard-formats
+  switch (aFormat) {
+    case CF_TEXT:  // 1
+      aOutput.Append(u"CF_TEXT"_ns);
+      break;
+    case CF_BITMAP:  // 2
+      aOutput.Append(u"CF_BITMAP"_ns);
+      break;
+    case CF_DIB:  // 8
+      aOutput.Append(u"CF_DIB"_ns);
+      break;
+    case CF_UNICODETEXT:  // 13
+      aOutput.Append(u"CF_UNICODETEXT"_ns);
+      break;
+    case CF_HDROP:  // 15
+      aOutput.Append(u"CF_HDROP"_ns);
+      break;
+    case CF_DIBV5:  // 17
+      aOutput.Append(u"CF_DIBV5"_ns);
+      break;
+    default:
+      aOutput.AppendPrintf("%u", aFormat);
+      break;
+  }
 }
 
 static bool IsTabletDevice() {

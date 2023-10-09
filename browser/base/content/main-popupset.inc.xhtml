@@ -187,30 +187,19 @@
                     data-l10n-id="bookmark-panel-show-editor-checkbox"
                     oncommand="StarUI.onShowForNewBookmarksCheckboxCommand();"/>
         </vbox>
-        <hbox id="editBookmarkPanelBottomButtons"
+        <html:moz-button-group
               class="panel-footer"
               data-l10n-id="bookmark-panel"
               data-l10n-attrs="style">
-#ifndef XP_UNIX
           <button id="editBookmarkPanelDoneButton"
-                  class="editBookmarkPanelBottomButton"
+                  class="panel-footer-button"
                   data-l10n-id="bookmark-panel-save-button"
                   default="true"
                   oncommand="StarUI.panel.hidePopup();"/>
           <button id="editBookmarkPanelRemoveButton"
-                  class="editBookmarkPanelBottomButton"
+                  class="panel-footer-button"
                   oncommand="StarUI.removeBookmarkButtonCommand();"/>
-#else
-          <button id="editBookmarkPanelRemoveButton"
-                  class="editBookmarkPanelBottomButton"
-                  oncommand="StarUI.removeBookmarkButtonCommand();"/>
-          <button id="editBookmarkPanelDoneButton"
-                  class="editBookmarkPanelBottomButton"
-                  data-l10n-id="bookmark-panel-save-button"
-                  default="true"
-                  oncommand="StarUI.panel.hidePopup();"/>
-#endif
-        </hbox>
+        </html:moz-button-group>
       </vbox>
     </panel>
   </html:template>
@@ -640,6 +629,12 @@
   <menupopup id="translations-panel-settings-menupopup"
              onpopupshown="TranslationsPanel.handleSettingsPopupShownEvent()"
              onpopuphidden="TranslationsPanel.handleSettingsPopupHiddenEvent()">
+    <menuitem class="always-offer-translations-menuitem"
+              data-l10n-id="translations-panel-settings-always-offer-translation"
+              type="checkbox"
+              checked="false"
+              autocheck="false"
+              oncommand="TranslationsPanel.onAlwaysOfferTranslations()"/>
     <menuitem class="always-translate-language-menuitem"
               data-l10n-id="translations-panel-settings-always-translate-unknown-language"
               type="checkbox"

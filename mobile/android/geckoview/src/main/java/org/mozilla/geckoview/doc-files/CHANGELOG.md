@@ -13,6 +13,30 @@ exclude: true
 
 ⚠️  breaking change and deprecation notices
 
+## v120
+- Added [`disableExtensionProcessSpawning`][120.1] for disabling the extension process spawning. ([bug 1855405]({{bugzilla}}1855405))
+- Added `DisabledFlags.SIGNATURE` for extensions disabled because they aren't correctly signed. ([bug 1847266]({{bugzilla}}1847266))
+- Added `Builder` pattern constructors for [`ReviewAnalysis`][120.2] and [`Recommendation`][120.3] (part of [bug 1846341]({{bugzilla}}1846341))
+- Added `DisabledFlags.APP_VERSION` for extensions disabled because they aren't compatible with the application version. ([bug 1847266]({{bugzilla}}1847266))
+- Added more metadata to the [WebExtension][120.4] class. ([bug 1850674]({{bugzilla}}1850674))
+- Added session and translations controller. Includes [`TranslationsController`][120.5], [`TranslationsController.SessionTranslation`][120.6] (notably [translate][120.7]), and a [translations delegate][120.8].
+
+[120.1]: {{javadoc_uri}}/WebExtensionController.html#disableExtensionProcessSpawning
+[120.2]: {{javadoc_uri}}/GeckoSession.html#ReviewAnalysis.Builder.html
+[120.3]: {{javadoc_uri}}/GeckoSession.html#Recommendation.Builder.html
+[120.4]: {{javadoc_uri}}/WebExtension.html)
+[120.5]: {{javadoc_uri}}/TranslationsController.html
+[120.6]: {{javadoc_uri}}/TranslationsController.SessionTranslation.html
+[120.7]: {{javadoc_uri}}/TranslationsController.SessionTranslation.html#translate(java.lang.String,java.lang.String,org.mozilla.geckoview.TranslationsController.SessionTranslation.TranslationOptions)
+[120.8]: {{javadoc_uri}}/TranslationsController.SessionTranslation.Delegate.html
+
+## v119
+- Added `remoteType` to GeckoView child crash intent. ([bug 1851518]({{bugzilla}}1851518))
+
+- [119.1]: {{javadoc_uri}}/GeckoSession.html#requestCreateAnalysis(String)
+[119.2]: {{javadoc_uri}}/GeckoSession.html#requestAnalysisCreationStatus(String)
+[119.3]: {{javadoc_uri}}/GeckoSession.html#pollForAnalysisCompleted(String)
+
 ## v118
 - Added [`ExperimentDelegate`][118.1] to allow GeckoView to send and retrieve experiment information from an embedder.
 - Added [`ERROR_BLOCKLISTED`][118.2] to `WebExtension.InstallException.ErrorCodes`. ([bug 1845745]({{bugzilla}}1845745))
@@ -21,6 +45,14 @@ exclude: true
 - Added [`GeckoSession.requestRecommendations`][118.5] for requesting product recommendations given a specific product url.
 - Added [`ERROR_INCOMPATIBLE`][118.6] to `WebExtension.InstallException.ErrorCodes`. ([bug 1845749]({{bugzilla}}1845749))
 - Added [`GeckoRuntimeSettings.Builder.extensionsWebAPIEnabled`][118.7]. ([bug 1847173]({{bugzilla}}1847173))
+- Changed [`GeckoSession.AccountSelectorPrompt`][118.8]: added the Provider to which the Account belongs ([bug 1847059]({{bugzilla}}1847059))
+- Added [`getExperimentDelegate`][118.9] and [`setExperimentDelegate`][118.10] to the GeckoSession allow GeckoView to get and set the experiment delegate for the session. Default is to use the runtime delegate.
+- ⚠️ Deprecated [`onGetNimbusFeature`][115.5] by 122, please use `ExperimentDelegate.onGetExperimentFeature` instead.
+- Added [`GeckoRuntimeSettings.Builder.extensionsProcessEnabled`][118.11] for setting whether extensions process is enabled. ([bug 1843926]({{bugzilla}}1843926))
+- Added [`ExtensionProcessDelegate`][118.12] to allow GeckoView to notify disabling of the extension process spawning due to excessive crash/kill. ([bug 1819737]({{bugzilla}}1819737))
+- Added [`enableExtensionProcessSpawning`][118.13] for enabling the extension process spawning
+- Add [`WebExtensionController.AddonManagerDelegate.onInstallationFailed`][118.14] ([bug 1848100]({{bugzilla}}1848100).
+- Add [`InstallException.extensionName`][118.15] which indicates the name of the extension that caused the exception.
 
 [118.1]: {{javadoc_uri}}/ExperimentDelegate.html
 [118.2]: {{javadoc_uri}}/WebExtension.InstallException.ErrorCodes.html#ERROR_BLOCKLISTED
@@ -29,6 +61,14 @@ exclude: true
 [118.5]: {{javadoc_uri}}/GeckoSession.html#requestRecommendations(String)
 [118.6]: {{javadoc_uri}}/WebExtension.InstallException.ErrorCodes.html#ERROR_INCOMPATIBLE
 [118.7]: {{javadoc_uri}}/GeckoRuntimeSettings.Builder.html#extensionsWebAPIEnabled(boolean)
+[118.8]: {{javadoc_uri}}/GeckoSession.html#AccountSelectorPrompt
+[118.9]: {{javadoc_uri}}/GeckoSession.html#getExperimentDelegate()
+[118.10]: {{javadoc_uri}}/GeckoSession.html#setExperimentDelegate(org.mozilla.geckoview.ExperimentDelegate)
+[118.11]: {{javadoc_uri}}/GeckoRuntimeSettings.Builder.html#extensionsProcessEnabled(Boolean)
+[118.12]: {{javadoc_uri}}/WebExtensionController.ExtensionProcessDelegate.html
+[118.13]: {{javadoc_uri}}/WebExtensionController.html#enableExtensionProcessSpawning
+[118.14]: {{javadoc_uri}}/WebExtensionController.AddonManagerDelegate.html#onInstallationFailed
+[118.15]: {{javadoc_uri}}/WebExtension.InstallException.html#extensionName
 
 ## v116
 - Added [`GeckoSession.didPrintPageContent`][116.1] to included extra print status for a standard print and new `GeckoPrintException.ERROR_NO_PRINT_DELEGATE`
@@ -1409,4 +1449,4 @@ to allow adding gecko profiler markers.
 [65.24]: {{javadoc_uri}}/CrashReporter.html#sendCrashReport(android.content.Context,android.os.Bundle,java.lang.String)
 [65.25]: {{javadoc_uri}}/GeckoResult.html
 
-[api-version]: 46e76646bf6c92d58aa957771d8fc39402a4cac7
+[api-version]: a3b3103cf8ea7f5d05c8b73c197399196c57d391

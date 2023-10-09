@@ -427,11 +427,6 @@ nsCSPBaseSrc* nsCSPParser::keywordSource() {
   }
 
   if (CSP_IsKeyword(mCurToken, CSP_UNSAFE_INLINE)) {
-    nsWeakPtr ctx = mCSPContext->GetLoadingContext();
-    nsCOMPtr<Document> doc = do_QueryReferent(ctx);
-    if (doc) {
-      doc->SetHasUnsafeInlineCSP(true);
-    }
     // make sure script-src only contains 'unsafe-inline' once;
     // ignore duplicates and log warning
     if (mUnsafeInlineKeywordSrc) {
@@ -448,11 +443,6 @@ nsCSPBaseSrc* nsCSPParser::keywordSource() {
   }
 
   if (CSP_IsKeyword(mCurToken, CSP_UNSAFE_EVAL)) {
-    nsWeakPtr ctx = mCSPContext->GetLoadingContext();
-    nsCOMPtr<Document> doc = do_QueryReferent(ctx);
-    if (doc) {
-      doc->SetHasUnsafeEvalCSP(true);
-    }
     mHasAnyUnsafeEval = true;
     return new nsCSPKeywordSrc(CSP_UTF16KeywordToEnum(mCurToken));
   }
@@ -924,9 +914,16 @@ nsCSPDirective* nsCSPParser::directiveName() {
 
   // special case handling for block-all-mixed-content
   if (directive == nsIContentSecurityPolicy::BLOCK_ALL_MIXED_CONTENT) {
-    // If mixed content upgrade is enabled block-all-mixed content is obsolete
+    // If mixed content upgrade is enabled for all types block-all-mixed-content
+    // is obsolete
     if (mozilla::StaticPrefs::
-            security_mixed_content_upgrade_display_content()) {
+            security_mixed_content_upgrade_display_content() &&
+        mozilla::StaticPrefs::
+            security_mixed_content_upgrade_display_content_image() &&
+        mozilla::StaticPrefs::
+            security_mixed_content_upgrade_display_content_audio() &&
+        mozilla::StaticPrefs::
+            security_mixed_content_upgrade_display_content_video()) {
       // log to the console that if mixed content display upgrading is enabled
       // block-all-mixed-content is obsolete.
       AutoTArray<nsString, 1> params = {mCurToken};

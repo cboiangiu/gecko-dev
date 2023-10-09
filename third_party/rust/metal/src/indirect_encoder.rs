@@ -22,6 +22,13 @@ foreign_obj_type! {
     pub struct IndirectCommandBufferDescriptor;
 }
 
+impl IndirectCommandBufferDescriptor {
+    pub fn new() -> Self {
+        let class = class!(MTLIndirectCommandBufferDescriptor);
+        unsafe { msg_send![class, new] }
+    }
+}
+
 impl IndirectCommandBufferDescriptorRef {
     pub fn command_types(&self) -> MTLIndirectCommandType {
         unsafe { msg_send![self, commandTypes] }
@@ -32,13 +39,7 @@ impl IndirectCommandBufferDescriptorRef {
     }
 
     pub fn inherit_buffers(&self) -> bool {
-        unsafe {
-            match msg_send![self, inheritBuffers] {
-                YES => true,
-                NO => false,
-                _ => unreachable!(),
-            }
-        }
+        unsafe { msg_send_bool![self, inheritBuffers] }
     }
 
     pub fn set_inherit_buffers(&self, inherit: bool) {
@@ -46,13 +47,7 @@ impl IndirectCommandBufferDescriptorRef {
     }
 
     pub fn inherit_pipeline_state(&self) -> bool {
-        unsafe {
-            match msg_send![self, inheritPipelineState] {
-                YES => true,
-                NO => false,
-                _ => unreachable!(),
-            }
-        }
+        unsafe { msg_send_bool![self, inheritPipelineState] }
     }
 
     pub fn set_inherit_pipeline_state(&self, inherit: bool) {

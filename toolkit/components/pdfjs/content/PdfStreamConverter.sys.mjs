@@ -378,7 +378,7 @@ class ChromeActions {
         lazy.PdfJsTelemetry.onTimeToView(probeInfo.timestamp);
         break;
       case "editing":
-        lazy.PdfJsTelemetry.onEditing(probeInfo.data.type);
+        lazy.PdfJsTelemetry.onEditing(probeInfo);
         break;
       case "buttons":
       case "gv-buttons":
@@ -1136,7 +1136,7 @@ PdfStreamConverter.prototype = {
 
         let actor = getActor(domWindow);
         actor?.init(actions.supportsIntegratedFind());
-
+        actor?.sendAsyncMessage("PDFJS:Parent:recordExposure");
         listener.onStopRequest(aRequest, statusCode);
       },
     };

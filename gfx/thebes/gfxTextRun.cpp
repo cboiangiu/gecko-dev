@@ -624,6 +624,7 @@ void gfxTextRun::Draw(const Range aRange, const gfx::Point aPt,
   params.textStrokePattern = aParams.textStrokePattern;
   params.drawOpts = aParams.drawOpts;
   params.drawMode = aParams.drawMode;
+  params.hasTextShadow = aParams.hasTextShadow;
   params.callbacks = aParams.callbacks;
   params.runContextPaint = aParams.contextPaint;
   params.paintSVGGlyphs =
@@ -1993,7 +1994,7 @@ void gfxFontGroup::AddFamilyToFontList(fontlist::Family* aFamily,
   }
   AutoTArray<fontlist::Face*, 4> faceList;
   aFamily->FindAllFacesForStyle(pfl->SharedFontList(), mStyle, faceList);
-  for (auto face : faceList) {
+  for (auto* face : faceList) {
     gfxFontEntry* fe = pfl->GetOrCreateFontEntry(face, aFamily);
     if (fe && !HasFont(fe)) {
       FamilyFace ff(aFamily, fe, aGeneric);
@@ -2242,16 +2243,17 @@ already_AddRefed<gfxFont> gfxFontGroup::GetFirstValidFont(
   uint32_t count = mFonts.Length();
   bool loading = false;
 
-  // Check whether the font supports the given character, unless the char is
-  // SPACE, in which case it is not required to be present in the font, but
-  // we must still check if it was excluded by a unicode-range descriptor.
+  // Check whether the font supports the given character, unless aCh is the
+  // kCSSFirstAvailableFont constant, in which case (as per CSS Fonts spec)
+  // we want the first font whose unicode-range does not exclude <space>,
+  // regardless of whether it in fact supports the <space> character.
   auto isValidForChar = [](gfxFont* aFont, uint32_t aCh) -> bool {
     if (!aFont) {
       return false;
     }
-    if (aCh == 0x20) {
+    if (aCh == kCSSFirstAvailableFont) {
       if (const auto* unicodeRange = aFont->GetUnicodeRangeMap()) {
-        return unicodeRange->test(aCh);
+        return unicodeRange->test(' ');
       }
       return true;
     }
@@ -2282,7 +2284,8 @@ already_AddRefed<gfxFont> gfxFontGroup::GetFirstValidFont(
     gfxFontEntry* fe = ff.FontEntry();
     if (fe && fe->mIsUserFontContainer) {
       gfxUserFontEntry* ufe = static_cast<gfxUserFontEntry*>(fe);
-      bool inRange = ufe->CharacterInUnicodeRange(aCh);
+      bool inRange = ufe->CharacterInUnicodeRange(
+          aCh == kCSSFirstAvailableFont ? ' ' : aCh);
       if (inRange) {
         if (!loading &&
             ufe->LoadState() == gfxUserFontEntry::STATUS_NOT_LOADED) {
@@ -2733,6 +2736,7 @@ void gfxFontGroup::InitScriptRun(DrawTarget* aDrawTarget, gfxTextRun* aTextRun,
       bool syntheticUpper = false;
 
       if (mStyle.variantSubSuper != NS_FONT_VARIANT_POSITION_NORMAL &&
+          mStyle.useSyntheticPosition &&
           (aTextRun->GetShapingState() ==
                gfxTextRun::eShapingState_ForceFallbackFeature ||
            !matchedFont->SupportsSubSuperscript(mStyle.variantSubSuper, aString,

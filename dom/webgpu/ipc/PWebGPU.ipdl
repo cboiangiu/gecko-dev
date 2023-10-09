@@ -16,6 +16,7 @@ using mozilla::dom::GPUBufferDescriptor from "mozilla/dom/WebGPUBinding.h";
 using mozilla::webgpu::PopErrorScopeResult from "mozilla/webgpu/WebGPUTypes.h";
 using mozilla::webgpu::WebGPUCompilationMessage from "mozilla/webgpu/WebGPUTypes.h";
 [MoveOnly] using class mozilla::ipc::UnsafeSharedMemoryHandle from "mozilla/ipc/RawShmem.h";
+using struct mozilla::void_t from "mozilla/ipc/IPCCore.h";
 
 include "mozilla/ipc/ByteBufUtils.h";
 include "mozilla/layers/LayersMessageUtils.h";
@@ -64,6 +65,7 @@ parent:
   async CommandBufferDestroy(RawId selfId);
   async RenderBundleDestroy(RawId selfId);
   async QueueSubmit(RawId selfId, RawId aDeviceId, RawId[] commandBuffers);
+  async QueueOnSubmittedWorkDone(RawId selfId) returns (void_t ok);
   async QueueWriteAction(RawId selfId, RawId aDeviceId, ByteBuf buf, UnsafeSharedMemoryHandle shmem);
 
   async BindGroupLayoutDestroy(RawId selfId);
@@ -73,7 +75,7 @@ parent:
   async ComputePipelineDestroy(RawId selfId);
   async RenderPipelineDestroy(RawId selfId);
   async ImplicitLayoutDestroy(RawId implicitPlId, RawId[] implicitBglIds);
-  async DeviceCreateSwapChain(RawId selfId, RawId queueId, RGBDescriptor desc, RawId[] bufferIds, RemoteTextureOwnerId ownerId);
+  async DeviceCreateSwapChain(RawId selfId, RawId queueId, RGBDescriptor desc, RawId[] bufferIds, RemoteTextureOwnerId ownerId, bool useExternalTextureInSwapChain);
   async SwapChainPresent(RawId textureId, RawId commandEncoderId, RemoteTextureId remoteTextureId, RemoteTextureOwnerId remoteTextureOwnerId);
   async SwapChainDestroy(RemoteTextureOwnerId ownerId);
 

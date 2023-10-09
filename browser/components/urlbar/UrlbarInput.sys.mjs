@@ -246,6 +246,7 @@ export class UrlbarInput {
       "paste",
       "scrollend",
       "select",
+      "selectionchange",
     ];
     for (let name of this._inputFieldEvents) {
       this.addEventListener(name, this);
@@ -1025,7 +1026,7 @@ export class UrlbarInput {
         break;
       }
       case lazy.UrlbarUtils.RESULT_TYPE.TAB_SWITCH: {
-        if (this.hasAttribute("actionoverride")) {
+        if (this.hasAttribute("action-override")) {
           where = "current";
           break;
         }
@@ -1395,6 +1396,15 @@ export class UrlbarInput {
     }
 
     this.setResultForCurrentValue(result);
+
+    // Update placeholder selection and value to the current selected result to
+    // prevent the on_selectionchange event to detect a "accent-character"
+    // insertion.
+    if (!result.autofill && this._autofillPlaceholder) {
+      this._autofillPlaceholder.value = this.value;
+      this._autofillPlaceholder.selectionStart = this.value.length;
+      this._autofillPlaceholder.selectionEnd = this.value.length;
+    }
     return false;
   }
 
@@ -1456,6 +1466,7 @@ export class UrlbarInput {
       return;
     }
     let currentSelectionStart = this.selectionStart;
+    let currentSelectionEnd = this.selectionEnd;
 
     // Overriding this value clears the selection.
     this.inputField.value = this.value.substring(
@@ -1464,7 +1475,7 @@ export class UrlbarInput {
     );
     this._autofillPlaceholder = null;
     // Restore selection
-    this.setSelectionRange(currentSelectionStart, currentSelectionStart);
+    this.setSelectionRange(currentSelectionStart, currentSelectionEnd);
   }
 
   /**
@@ -2353,14 +2364,6 @@ export class UrlbarInput {
     return true;
   }
 
-  _checkForRtlText(value) {
-    let directionality = this.window.windowUtils.getDirectionFromText(value);
-    if (directionality == this.window.windowUtils.DIRECTION_RTL) {
-      return true;
-    }
-    return false;
-  }
-
   /**
    * Invoked on overflow/underflow/scrollend events to update attributes
    * related to the input text directionality. Overflow fade masks use these
@@ -2374,7 +2377,7 @@ export class UrlbarInput {
 
     let isRTL =
       this.getAttribute("domaindir") === "rtl" &&
-      this._checkForRtlText(this.value);
+      lazy.UrlbarUtils.isTextDirectionRTL(this.value, this.window);
 
     this.window.promiseDocumentFlushed(() => {
       // Check overflow again to ensure it didn't change in the meanwhile.
@@ -2459,6 +2462,14 @@ export class UrlbarInput {
       // 3. a url that was confirmed but didn't finish loading yet
       // If it's an url the untrimmedValue should resolve to a valid URI,
       // otherwise it's a search string that should be copied as-is.
+
+      // If the copied text is that autofilled value, return the url including
+      // the protocol from its suggestion.
+      let result = this.view.getResultAtIndex(0);
+      if (result?.autofill?.value == selectedVal) {
+        return result.payload.url;
+      }
+
       try {
         uri = Services.io.newURI(this._untrimmedValue);
       } catch (ex) {
@@ -2524,8 +2535,8 @@ export class UrlbarInput {
     ) {
       if (event.type == "keydown") {
         this._actionOverrideKeyCount++;
-        this.setAttribute("actionoverride", "true");
-        this.view.panel.setAttribute("actionoverride", "true");
+        this.toggleAttribute("action-override", true);
+        this.view.panel.setAttribute("action-override", true);
       } else if (
         this._actionOverrideKeyCount &&
         --this._actionOverrideKeyCount == 0
@@ -2537,8 +2548,8 @@ export class UrlbarInput {
 
   _clearActionOverride() {
     this._actionOverrideKeyCount = 0;
-    this.removeAttribute("actionoverride");
-    this.view.panel.removeAttribute("actionoverride");
+    this.removeAttribute("action-override");
+    this.view.panel.removeAttribute("action-override");
   }
 
   /**
@@ -2588,8 +2599,7 @@ export class UrlbarInput {
       ? lazy.BrowserUIUtils.trimURL(val)
       : val;
     // Only trim value if the directionality doesn't change to RTL.
-    return this.window.windowUtils.getDirectionFromText(trimmedValue) ==
-      this.window.windowUtils.DIRECTION_RTL
+    return lazy.UrlbarUtils.isTextDirectionRTL(trimmedValue, this.window)
       ? val
       : trimmedValue;
   }
@@ -2641,7 +2651,7 @@ export class UrlbarInput {
     try {
       const info = Services.uriFixup.getFixupURIInfo(
         value,
-        Ci.nsIURIFixup.FIXUP_FLAG_FORCE_ALTERNATE_URI
+        Ci.nsIURIFixup.FIXUP_FLAGS_MAKE_ALTERNATE_URI
       );
       value = info.fixedURI.spec;
     } catch (ex) {
@@ -3348,7 +3358,16 @@ export class UrlbarInput {
       if (fixedURI) {
         try {
           let expectedURI = Services.io.newURI(this._untrimmedValue);
-          untrim = fixedURI.displaySpec != expectedURI.displaySpec;
+          if (
+            lazy.UrlbarPrefs.get("trimHttps") &&
+            this._untrimmedValue.startsWith("https://")
+          ) {
+            untrim =
+              fixedURI.displaySpec.replace("http://", "https://") !=
+              expectedURI.displaySpec; // FIXME bug 1847723: Figure out a way to do this without manually messing with the fixed up URI.
+          } else {
+            untrim = fixedURI.displaySpec != expectedURI.displaySpec;
+          }
         } catch (ex) {
           untrim = true;
         }
@@ -3555,6 +3574,21 @@ export class UrlbarInput {
       resetSearchState: false,
       event,
     });
+  }
+
+  _on_selectionchange(event) {
+    // Confirm placeholder as user text if it gets explicitly deselected. This
+    // happens when the user wants to modify the autofilled text by either
+    // clicking on it, or pressing HOME, END, RIGHT, …
+    if (
+      this._autofillPlaceholder &&
+      this._autofillPlaceholder.value == this.value &&
+      (this._autofillPlaceholder.selectionStart != this.selectionStart ||
+        this._autofillPlaceholder.selectionEnd != this.selectionEnd)
+    ) {
+      this._autofillPlaceholder = null;
+      this.window.gBrowser.userTypedValue = this.value;
+    }
   }
 
   _on_select(event) {

@@ -111,6 +111,12 @@ linux1804-64-clang-trunk-qr/opt:
         - awsy
         - browsertime-clang
 
+linux2204-64-wayland/debug:
+    build-platform: linux64/debug
+    test-sets:
+        - linux2204-wayland-tests
+        - web-platform-tests
+
 linux2204-64-wayland/opt:
     build-platform: linux64/opt
     test-sets:
@@ -349,6 +355,7 @@ macosx1015-64-qr/opt:
         - macosx1015-64-qr-tests
         - web-platform-tests
         - web-platform-tests-backlog
+        - browsertime
 
 macosx1015-64-qr/debug:
     build-platform: macosx64/debug
@@ -360,6 +367,11 @@ macosx1015-64-ccov-qr/opt:
     build-platform: macosx64-ccov/opt
     test-sets:
         - macosx1015-64-qr-tests
+
+macosx1300-64-shippable-qr/opt:
+    build-platform: macosx64-shippable/opt
+    test-sets:
+        - macosx1300-64-qr-tests
 
 ##
 # Android platforms (matching /android-em.*/)

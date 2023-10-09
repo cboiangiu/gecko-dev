@@ -57,6 +57,8 @@ derive_neq = true
 # These depend on the build.
 "target_pointer_width = 32" = "SERVO_32_BITS"
 "target_pointer_width = 64" = "HAVE_64BIT_BUILD"
+"unix" = "XP_UNIX"
+"windows" = "XP_WIN"
 
 [macro_expansion]
 bitflags = true
@@ -166,6 +168,7 @@ include = [
   "NonNegativeLengthOrNumberRect",
   "Perspective",
   "ZIndex",
+  "TransformBox",
   "TransformOrigin",
   "LineBreak",
   "LineClamp",
@@ -279,6 +282,7 @@ include = [
   "PiecewiseLinearFunction",
   "BeforeFlag",
   "XTextScale",
+  "Zoom",
 ]
 item_types = ["enums", "structs", "unions", "typedefs", "functions", "constants"]
 renaming_overrides_prefixing = true
@@ -293,6 +297,7 @@ renaming_overrides_prefixing = true
 "nsSimpleContentList" = "nsSimpleContentList"
 "nsACString" = "nsACString"
 "nsAString" = "nsAString"
+"nsCString" = "nsCString"
 "nsString" = "nsString"
 "CopyableTArray" = "CopyableTArray"
 "nsTArray" = "nsTArray"
@@ -335,6 +340,8 @@ renaming_overrides_prefixing = true
 "FontPaletteValueSet" = "gfx::FontPaletteValueSet"
 "PaletteValues" = "gfx::FontPaletteValueSet::PaletteValues"
 "ThinVec" = "nsTArray"
+"RawPthread" = "pthread_t"
+"RawHandle" = "void*"
 
 [export.body]
 "CSSPixelLength" = """
@@ -549,11 +556,11 @@ renaming_overrides_prefixing = true
 """
 
 "GenericColor" = """
-  static const StyleGenericColor TRANSPARENT;
-  static const StyleGenericColor BLACK;
-  static const StyleGenericColor WHITE;
-
   static inline StyleGenericColor FromColor(nscolor);
+
+  static inline StyleGenericColor Transparent();
+  static inline StyleGenericColor Black();
+  static inline StyleGenericColor White();
 
   bool MaybeTransparent() const;
 
@@ -891,13 +898,6 @@ renaming_overrides_prefixing = true
   // pixel within its bounds opaquely, and the bounds contains at least a pixel.
   bool IsOpaque() const;
 
-  struct ActualCropRect {
-    nsIntRect mRect; // in image pixels
-    bool mIsEntireImage;
-  };
-
-  Maybe<ActualCropRect> ComputeActualCropRect() const;
-
   // Resolves the underlying image request if any.
   void ResolveImage(dom::Document&, const StyleGenericImage* aOld);
 
@@ -939,13 +939,14 @@ renaming_overrides_prefixing = true
 
 "FontWeight" = """
  SERVO_FIXED_POINT_HELPERS(StyleFontWeight, uint16_t, StyleFONT_WEIGHT_FRACTION_BITS);
+ bool IsNormal() const { return *this == NORMAL; }
 
  inline bool IsBold() const;
 """
 
 "FontStyle" = """
  SERVO_FIXED_POINT_HELPERS(StyleFontStyle, int16_t, StyleFONT_STYLE_FRACTION_BITS);
-
+ bool IsNormal() const { return *this == NORMAL; }
  inline bool IsItalic() const;
  inline bool IsOblique() const;
  inline float ObliqueAngle() const;  // Only for use when IsOblique() is true
@@ -955,6 +956,11 @@ renaming_overrides_prefixing = true
 
 "FontStretch" = """
  SERVO_FIXED_POINT_HELPERS(StyleFontStretch, uint16_t, StyleFONT_STRETCH_FRACTION_BITS);
+ bool IsNormal() const { return *this == NORMAL; }
+"""
+
+"Zoom" = """
+ SERVO_FIXED_POINT_HELPERS(StyleZoom, uint16_t, StyleZOOM_FRACTION_BITS);
 """
 
 "AnimationName" = """
@@ -992,6 +998,15 @@ renaming_overrides_prefixing = true
 
   const StyleRayFunction& AsRay() const {
     return AsOffsetPath().path->AsRay();
+  }
+
+  // Return true if the <offset-path> is url().
+  bool IsUrl() const {
+    return IsOffsetPath() && AsOffsetPath().path->IsUrl();
+  }
+
+  const StyleComputedUrl& AsUrl() const {
+    return AsOffsetPath().path->AsUrl();
   }
 
   // Return true if the <basic-shape> is path().

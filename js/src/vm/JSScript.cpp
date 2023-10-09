@@ -46,6 +46,7 @@
 #include "jit/JitOptions.h"
 #include "jit/JitRuntime.h"
 #include "js/CharacterEncoding.h"  // JS_EncodeStringToUTF8
+#include "js/ColumnNumber.h"  // JS::LimitedColumnNumberZeroOrigin, JS::ColumnNumberOffset
 #include "js/CompileOptions.h"
 #include "js/experimental/SourceHook.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
@@ -1871,7 +1872,7 @@ template bool ScriptSource::initializeUnretrievableUncompressedSource(
 // For example:
 //   foo.js line 7 > eval
 // indicating code compiled by the call to 'eval' on line 7 of foo.js.
-UniqueChars js::FormatIntroducedFilename(const char* filename, unsigned lineno,
+UniqueChars js::FormatIntroducedFilename(const char* filename, uint32_t lineno,
                                          const char* introducer) {
   // Compute the length of the string in advance, so we can allocate a
   // buffer of the right size on the first shot.
@@ -1906,7 +1907,8 @@ bool ScriptSource::initFromOptions(FrontendContext* fc,
   delazificationMode_ = options.eagerDelazificationStrategy();
 
   startLine_ = options.lineno;
-  startColumn_ = options.column;
+  startColumn_ =
+      JS::LimitedColumnNumberZeroOrigin::fromUnlimited(options.column);
   introductionType_ = options.introductionType;
   setIntroductionOffset(options.introductionOffset);
   // The parameterListEnd_ is initialized later by setParameterListEnd, before
@@ -2621,78 +2623,13 @@ void JSScript::addSizeOfJitScript(mozilla::MallocSizeOf mallocSizeOf,
 
 js::GlobalObject& JSScript::uninlinedGlobal() const { return global(); }
 
-static const uint32_t GSN_CACHE_THRESHOLD = 100;
-
-void GSNCache::purge() {
-  code = nullptr;
-  map.clearAndCompact();
-}
-
-const js::SrcNote* js::GetSrcNote(GSNCache& cache, JSScript* script,
-                                  jsbytecode* pc) {
-  size_t target = pc - script->code();
-  if (target >= script->length()) {
-    return nullptr;
-  }
-
-  if (cache.code == script->code()) {
-    GSNCache::Map::Ptr p = cache.map.lookup(pc);
-    return p ? p->value() : nullptr;
-  }
-
-  size_t offset = 0;
-  const js::SrcNote* result;
-  for (SrcNoteIterator iter(script->notes());; ++iter) {
-    const auto* sn = *iter;
-    if (sn->isTerminator()) {
-      result = nullptr;
-      break;
-    }
-    offset += sn->delta();
-    if (offset == target && sn->isGettable()) {
-      result = sn;
-      break;
-    }
-  }
-
-  if (cache.code != script->code() && script->length() >= GSN_CACHE_THRESHOLD) {
-    unsigned nsrcnotes = 0;
-    for (SrcNoteIterator iter(script->notes()); !iter.atEnd(); ++iter) {
-      const auto* sn = *iter;
-      if (sn->isGettable()) {
-        ++nsrcnotes;
-      }
-    }
-    if (cache.code) {
-      cache.map.clear();
-      cache.code = nullptr;
-    }
-    if (cache.map.reserve(nsrcnotes)) {
-      pc = script->code();
-      for (SrcNoteIterator iter(script->notes()); !iter.atEnd(); ++iter) {
-        const auto* sn = *iter;
-        pc += sn->delta();
-        if (sn->isGettable()) {
-          cache.map.putNewInfallible(pc, sn);
-        }
-      }
-      cache.code = script->code();
-    }
-  }
-
-  return result;
-}
-
-const js::SrcNote* js::GetSrcNote(JSContext* cx, JSScript* script,
-                                  jsbytecode* pc) {
-  return GetSrcNote(cx->caches().gsnCache, script, pc);
-}
-
-unsigned js::PCToLineNumber(unsigned startLine, unsigned startCol,
-                            SrcNote* notes, jsbytecode* code, jsbytecode* pc,
-                            unsigned* columnp) {
+unsigned js::PCToLineNumber(unsigned startLine,
+                            JS::LimitedColumnNumberZeroOrigin startCol,
+                            SrcNote* notes, SrcNote* notesEnd, jsbytecode* code,
+                            jsbytecode* pc,
+                            JS::LimitedColumnNumberZeroOrigin* columnp) {
   unsigned lineno = startLine;
-  unsigned column = startCol;
+  JS::LimitedColumnNumberZeroOrigin column = startCol;
 
   /*
    * Walk through source notes accumulating their deltas, keeping track of
@@ -2701,7 +2638,7 @@ unsigned js::PCToLineNumber(unsigned startLine, unsigned startCol,
    */
   ptrdiff_t offset = 0;
   ptrdiff_t target = pc - code;
-  for (SrcNoteIterator iter(notes); !iter.atEnd(); ++iter) {
+  for (SrcNoteIterator iter(notes, notesEnd); !iter.atEnd(); ++iter) {
     const auto* sn = *iter;
     offset += sn->delta();
     if (offset > target) {
@@ -2711,14 +2648,18 @@ unsigned js::PCToLineNumber(unsigned startLine, unsigned startCol,
     SrcNoteType type = sn->type();
     if (type == SrcNoteType::SetLine) {
       lineno = SrcNote::SetLine::getLine(sn, startLine);
-      column = 0;
+      column = JS::LimitedColumnNumberZeroOrigin::zero();
+    } else if (type == SrcNoteType::SetLineColumn) {
+      lineno = SrcNote::SetLineColumn::getLine(sn, startLine);
+      column = SrcNote::SetLineColumn::getColumn(sn);
     } else if (type == SrcNoteType::NewLine) {
       lineno++;
-      column = 0;
+      column = JS::LimitedColumnNumberZeroOrigin::zero();
+    } else if (type == SrcNoteType::NewLineColumn) {
+      lineno++;
+      column = SrcNote::NewLineColumn::getColumn(sn);
     } else if (type == SrcNoteType::ColSpan) {
-      ptrdiff_t colspan = SrcNote::ColSpan::getSpan(sn);
-      MOZ_ASSERT(ptrdiff_t(column) + colspan >= 0);
-      column += colspan;
+      column += SrcNote::ColSpan::getSpan(sn);
     }
   }
 
@@ -2730,14 +2671,14 @@ unsigned js::PCToLineNumber(unsigned startLine, unsigned startCol,
 }
 
 unsigned js::PCToLineNumber(JSScript* script, jsbytecode* pc,
-                            unsigned* columnp) {
+                            JS::LimitedColumnNumberZeroOrigin* columnp) {
   /* Cope with InterpreterFrame.pc value prior to entering Interpret. */
   if (!pc) {
     return 0;
   }
 
   return PCToLineNumber(script->lineno(), script->column(), script->notes(),
-                        script->code(), pc, columnp);
+                        script->notesEnd(), script->code(), pc, columnp);
 }
 
 jsbytecode* js::LineNumberToPC(JSScript* script, unsigned target) {
@@ -2745,7 +2686,8 @@ jsbytecode* js::LineNumberToPC(JSScript* script, unsigned target) {
   ptrdiff_t best = -1;
   unsigned lineno = script->lineno();
   unsigned bestdiff = SrcNote::MaxOperand;
-  for (SrcNoteIterator iter(script->notes()); !iter.atEnd(); ++iter) {
+  for (SrcNoteIterator iter(script->notes(), script->notesEnd()); !iter.atEnd();
+       ++iter) {
     const auto* sn = *iter;
     /*
      * Exact-match only if offset is not in the prologue; otherwise use
@@ -2765,7 +2707,10 @@ jsbytecode* js::LineNumberToPC(JSScript* script, unsigned target) {
     SrcNoteType type = sn->type();
     if (type == SrcNoteType::SetLine) {
       lineno = SrcNote::SetLine::getLine(sn, script->lineno());
-    } else if (type == SrcNoteType::NewLine) {
+    } else if (type == SrcNoteType::SetLineColumn) {
+      lineno = SrcNote::SetLineColumn::getLine(sn, script->lineno());
+    } else if (type == SrcNoteType::NewLine ||
+               type == SrcNoteType::NewLineColumn) {
       lineno++;
     }
   }
@@ -2779,12 +2724,16 @@ out:
 JS_PUBLIC_API unsigned js::GetScriptLineExtent(JSScript* script) {
   unsigned lineno = script->lineno();
   unsigned maxLineNo = lineno;
-  for (SrcNoteIterator iter(script->notes()); !iter.atEnd(); ++iter) {
+  for (SrcNoteIterator iter(script->notes(), script->notesEnd()); !iter.atEnd();
+       ++iter) {
     const auto* sn = *iter;
     SrcNoteType type = sn->type();
     if (type == SrcNoteType::SetLine) {
       lineno = SrcNote::SetLine::getLine(sn, script->lineno());
-    } else if (type == SrcNoteType::NewLine) {
+    } else if (type == SrcNoteType::SetLineColumn) {
+      lineno = SrcNote::SetLineColumn::getLine(sn, script->lineno());
+    } else if (type == SrcNoteType::NewLine ||
+               type == SrcNoteType::NewLineColumn) {
       lineno++;
     }
 
@@ -2843,7 +2792,7 @@ void js::maybeSpewScriptFinalWarmUpCount(JSScript* script) {
 
 void js::DescribeScriptedCallerForDirectEval(JSContext* cx, HandleScript script,
                                              jsbytecode* pc, const char** file,
-                                             unsigned* linenop,
+                                             uint32_t* linenop,
                                              uint32_t* pcOffset,
                                              bool* mutedErrors) {
   MOZ_ASSERT(script->containsPC(pc));
@@ -2871,7 +2820,7 @@ void js::DescribeScriptedCallerForDirectEval(JSContext* cx, HandleScript script,
 
 void js::DescribeScriptedCallerForCompilation(
     JSContext* cx, MutableHandleScript maybeScript, const char** file,
-    unsigned* linenop, uint32_t* pcOffset, bool* mutedErrors) {
+    uint32_t* linenop, uint32_t* pcOffset, bool* mutedErrors) {
   NonBuiltinFrameIter iter(cx, cx->realm()->principals());
 
   if (iter.done()) {
@@ -2922,11 +2871,11 @@ js::UniquePtr<ImmutableScriptData> ImmutableScriptData::new_(
   size_t noteLength = notes.Length();
   MOZ_RELEASE_ASSERT(noteLength <= frontend::MaxSrcNotesLength);
 
-  size_t nullLength = ComputeNotePadding(code.Length(), noteLength);
+  size_t notePaddingLength = ComputeNotePadding(code.Length(), noteLength);
 
   // Allocate ImmutableScriptData
   js::UniquePtr<ImmutableScriptData> data(ImmutableScriptData::new_(
-      fc, code.Length(), noteLength + nullLength, resumeOffsets.Length(),
+      fc, code.Length(), noteLength + notePaddingLength, resumeOffsets.Length(),
       scopeNotes.Length(), tryNotes.Length()));
   if (!data) {
     return data;
@@ -2947,7 +2896,8 @@ js::UniquePtr<ImmutableScriptData> ImmutableScriptData::new_(
   // Initialize trailing arrays
   CopySpan(code, data->codeSpan());
   CopySpan(notes, data->notesSpan().To(noteLength));
-  std::fill_n(data->notes() + noteLength, nullLength, SrcNote::terminator());
+  std::fill_n(data->notes() + noteLength, notePaddingLength,
+              SrcNote::padding());
   CopySpan(resumeOffsets, data->resumeOffsets());
   CopySpan(scopeNotes, data->scopeNotes());
   CopySpan(tryNotes, data->tryNotes());
@@ -3297,7 +3247,11 @@ void JSScript::dump(JSContext* cx) {
     return;
   }
 
-  fprintf(stderr, "%s\n", sp.string());
+  JS::UniqueChars str = sp.release();
+  if (!str) {
+    return;
+  }
+  fprintf(stderr, "%s\n", str.get());
 }
 
 void JSScript::dumpRecursive(JSContext* cx) {
@@ -3315,7 +3269,11 @@ void JSScript::dumpRecursive(JSContext* cx) {
     return;
   }
 
-  fprintf(stderr, "%s\n", sp.string());
+  JS::UniqueChars str = sp.release();
+  if (!str) {
+    return;
+  }
+  fprintf(stderr, "%s\n", str.get());
 }
 
 static void DumpMutableScriptFlags(js::JSONPrinter& json,
@@ -3390,7 +3348,7 @@ static void DumpMutableScriptFlags(js::JSONPrinter& json,
 
 /* static */
 bool JSScript::dump(JSContext* cx, JS::Handle<JSScript*> script,
-                    DumpOptions& options, js::Sprinter* sp) {
+                    DumpOptions& options, js::StringPrinter* sp) {
   {
     JSONPrinter json(*sp);
 
@@ -3403,7 +3361,7 @@ bool JSScript::dump(JSContext* cx, JS::Handle<JSScript*> script,
     }
 
     json.property("lineno", script->lineno());
-    json.property("column", script->column());
+    json.property("column", script->column().zeroOriginValue());
 
     json.beginListProperty("immutableFlags");
     DumpImmutableScriptFlags(json, script->immutableFlags());
@@ -3438,12 +3396,11 @@ bool JSScript::dump(JSContext* cx, JS::Handle<JSScript*> script,
   }
 
   if (sp->hadOutOfMemory()) {
+    sp->forwardOutOfMemory();
     return false;
   }
 
-  if (!sp->put("\n")) {
-    return false;
-  }
+  sp->put("\n");
 
   if (!Disassemble(cx, script, /* lines = */ true, sp)) {
     return false;
@@ -3469,9 +3426,7 @@ bool JSScript::dump(JSContext* cx, JS::Handle<JSScript*> script,
 
       JSObject* obj = &gcThing.as<JSObject>();
       if (obj->is<JSFunction>()) {
-        if (!sp->put("\n")) {
-          return false;
-        }
+        sp->put("\n");
 
         JS::Rooted<JSFunction*> fun(cx, &obj->as<JSFunction>());
         if (fun->isInterpreted()) {
@@ -3484,9 +3439,7 @@ bool JSScript::dump(JSContext* cx, JS::Handle<JSScript*> script,
             return false;
           }
         } else {
-          if (!sp->put("[native code]\n")) {
-            return false;
-          }
+          sp->put("[native code]\n");
         }
       }
     }
@@ -3497,66 +3450,66 @@ bool JSScript::dump(JSContext* cx, JS::Handle<JSScript*> script,
 
 /* static */
 bool JSScript::dumpSrcNotes(JSContext* cx, JS::Handle<JSScript*> script,
-                            js::Sprinter* sp) {
-  if (!sp->put("\nSource notes:\n") ||
-      !sp->jsprintf("%4s %4s %6s %5s %6s %-10s %s\n", "ofs", "line", "column",
-                    "pc", "delta", "desc", "args") ||
-      !sp->put("---- ---- ------ ----- ------ ---------- ------\n")) {
-    return false;
-  }
-
+                            js::GenericPrinter* sp) {
+  sp->put("\nSource notes:\n");
+  sp->printf("%4s %4s %6s %5s %6s %-16s %s\n", "ofs", "line", "column", "pc",
+             "delta", "desc", "args");
+  sp->put("---- ---- ------ ----- ------ ---------------- ------\n");
   unsigned offset = 0;
   unsigned lineno = script->lineno();
-  unsigned column = script->column();
+  JS::LimitedColumnNumberZeroOrigin column = script->column();
   SrcNote* notes = script->notes();
-  for (SrcNoteIterator iter(notes); !iter.atEnd(); ++iter) {
+  SrcNote* notesEnd = script->notesEnd();
+  for (SrcNoteIterator iter(notes, notesEnd); !iter.atEnd(); ++iter) {
     const auto* sn = *iter;
 
     unsigned delta = sn->delta();
     offset += delta;
     SrcNoteType type = sn->type();
     const char* name = sn->name();
-    if (!sp->jsprintf("%3u: %4u %6u %5u [%4u] %-10s", unsigned(sn - notes),
-                      lineno, column, offset, delta, name)) {
-      return false;
-    }
+    sp->printf("%3u: %4u %6u %5u [%4u] %-16s", unsigned(sn - notes), lineno,
+               column.zeroOriginValue(), offset, delta, name);
 
     switch (type) {
-      case SrcNoteType::Null:
-      case SrcNoteType::AssignOp:
       case SrcNoteType::Breakpoint:
-      case SrcNoteType::StepSep:
+      case SrcNoteType::BreakpointStepSep:
       case SrcNoteType::XDelta:
         break;
 
       case SrcNoteType::ColSpan: {
-        uint32_t colspan = SrcNote::ColSpan::getSpan(sn);
-        if (!sp->jsprintf(" colspan %u", colspan)) {
-          return false;
-        }
+        JS::ColumnNumberOffset colspan = SrcNote::ColSpan::getSpan(sn);
+        sp->printf(" colspan %u", colspan.value());
         column += colspan;
         break;
       }
 
       case SrcNoteType::SetLine:
         lineno = SrcNote::SetLine::getLine(sn, script->lineno());
-        if (!sp->jsprintf(" lineno %u", lineno)) {
-          return false;
-        }
-        column = 0;
+        sp->printf(" lineno %u", lineno);
+        column = JS::LimitedColumnNumberZeroOrigin::zero();
+        break;
+
+      case SrcNoteType::SetLineColumn:
+        lineno = SrcNote::SetLineColumn::getLine(sn, script->lineno());
+        column = SrcNote::SetLineColumn::getColumn(sn);
+        sp->printf(" lineno %u column %u", lineno, column.zeroOriginValue());
         break;
 
       case SrcNoteType::NewLine:
         ++lineno;
-        column = 0;
+        column = JS::LimitedColumnNumberZeroOrigin::zero();
+        break;
+
+      case SrcNoteType::NewLineColumn:
+        column = SrcNote::NewLineColumn::getColumn(sn);
+        sp->printf(" column %u", column.zeroOriginValue());
+        ++lineno;
         break;
 
       default:
         MOZ_ASSERT_UNREACHABLE("unrecognized srcnote");
     }
-    if (!sp->put("\n")) {
-      return false;
-    }
+    sp->put("\n");
   }
 
   return true;
@@ -3585,92 +3538,61 @@ static const char* TryNoteName(TryNoteKind kind) {
 
 /* static */
 bool JSScript::dumpTryNotes(JSContext* cx, JS::Handle<JSScript*> script,
-                            js::Sprinter* sp) {
-  if (!sp->put(
-          "\nException table:\nkind               stack    start      end\n")) {
-    return false;
-  }
+                            js::GenericPrinter* sp) {
+  sp->put("\nException table:\nkind               stack    start      end\n");
 
   for (const js::TryNote& tn : script->trynotes()) {
-    if (!sp->jsprintf(" %-16s %6u %8u %8u\n", TryNoteName(tn.kind()),
-                      tn.stackDepth, tn.start, tn.start + tn.length)) {
-      return false;
-    }
+    sp->printf(" %-16s %6u %8u %8u\n", TryNoteName(tn.kind()), tn.stackDepth,
+               tn.start, tn.start + tn.length);
   }
   return true;
 }
 
 /* static */
 bool JSScript::dumpScopeNotes(JSContext* cx, JS::Handle<JSScript*> script,
-                              js::Sprinter* sp) {
-  if (!sp->put("\nScope notes:\n   index   parent    start      end\n")) {
-    return false;
-  }
+                              js::GenericPrinter* sp) {
+  sp->put("\nScope notes:\n   index   parent    start      end\n");
 
   for (const ScopeNote& note : script->scopeNotes()) {
     if (note.index == ScopeNote::NoScopeIndex) {
-      if (!sp->jsprintf("%8s ", "(none)")) {
-        return false;
-      }
+      sp->printf("%8s ", "(none)");
     } else {
-      if (!sp->jsprintf("%8u ", note.index.index)) {
-        return false;
-      }
+      sp->printf("%8u ", note.index.index);
     }
     if (note.parent == ScopeNote::NoScopeIndex) {
-      if (!sp->jsprintf("%8s ", "(none)")) {
-        return false;
-      }
+      sp->printf("%8s ", "(none)");
     } else {
-      if (!sp->jsprintf("%8u ", note.parent)) {
-        return false;
-      }
+      sp->printf("%8u ", note.parent);
     }
-    if (!sp->jsprintf("%8u %8u\n", note.start, note.start + note.length)) {
-      return false;
-    }
+    sp->printf("%8u %8u\n", note.start, note.start + note.length);
   }
   return true;
 }
 
 /* static */
 bool JSScript::dumpGCThings(JSContext* cx, JS::Handle<JSScript*> script,
-                            js::Sprinter* sp) {
-  if (!sp->put("\nGC things:\n   index   type       value\n")) {
-    return false;
-  }
+                            js::GenericPrinter* sp) {
+  sp->put("\nGC things:\n   index   type       value\n");
 
   size_t i = 0;
   for (JS::GCCellPtr gcThing : script->gcthings()) {
-    if (!sp->jsprintf("%8zu   ", i)) {
-      return false;
-    }
+    sp->printf("%8zu   ", i);
     if (gcThing.is<JS::BigInt>()) {
-      if (!sp->put("BigInt     ")) {
-        return false;
-      }
+      sp->put("BigInt     ");
       gcThing.as<JS::BigInt>().dump(*sp);
-      if (!sp->put("\n")) {
-        return false;
-      }
+      sp->put("\n");
     } else if (gcThing.is<Scope>()) {
-      if (!sp->put("Scope      ")) {
-        return false;
-      }
+      sp->put("Scope      ");
       JS::Rooted<Scope*> scope(cx, &gcThing.as<Scope>());
       if (!Scope::dumpForDisassemble(cx, scope, *sp,
                                      "                      ")) {
         return false;
       }
-      if (!sp->put("\n")) {
-        return false;
-      }
+      sp->put("\n");
     } else if (gcThing.is<JSObject>()) {
       JSObject* obj = &gcThing.as<JSObject>();
       if (obj->is<JSFunction>()) {
-        if (!sp->put("Function   ")) {
-          return false;
-        }
+        sp->put("Function   ");
         JS::Rooted<JSFunction*> fun(cx, &obj->as<JSFunction>());
         if (fun->displayAtom()) {
           JS::Rooted<JSAtom*> name(cx, fun->displayAtom());
@@ -3678,34 +3600,23 @@ bool JSScript::dumpGCThings(JSContext* cx, JS::Handle<JSScript*> script,
           if (!utf8chars) {
             return false;
           }
-          if (!sp->put(utf8chars.get())) {
-            return false;
-          }
+          sp->put(utf8chars.get());
         } else {
-          if (!sp->put("(anonymous)")) {
-            return false;
-          }
+          sp->put("(anonymous)");
         }
 
         if (fun->hasBaseScript()) {
           BaseScript* script = fun->baseScript();
-          if (!sp->jsprintf(" @ %u:%u\n", script->lineno(), script->column())) {
-            return false;
-          }
+          sp->printf(" @ %u:%u\n", script->lineno(),
+                     script->column().zeroOriginValue());
         } else {
-          if (!sp->put(" (no script)\n")) {
-            return false;
-          }
+          sp->put(" (no script)\n");
         }
       } else {
         if (obj->is<RegExpObject>()) {
-          if (!sp->put("RegExp     ")) {
-            return false;
-          }
+          sp->put("RegExp     ");
         } else {
-          if (!sp->put("Object     ")) {
-            return false;
-          }
+          sp->put("Object     ");
         }
 
         JS::Rooted<JS::Value> objValue(cx, ObjectValue(*obj));
@@ -3717,39 +3628,24 @@ bool JSScript::dumpGCThings(JSContext* cx, JS::Handle<JSScript*> script,
         if (!utf8chars) {
           return false;
         }
-        if (!sp->put(utf8chars.get())) {
-          return false;
-        }
-
-        if (!sp->put("\n")) {
-          return false;
-        }
+        sp->put(utf8chars.get());
+        sp->put("\n");
       }
     } else if (gcThing.is<JSString>()) {
       JS::Rooted<JSString*> str(cx, &gcThing.as<JSString>());
       if (str->isAtom()) {
-        if (!sp->put("Atom       ")) {
-          return false;
-        }
+        sp->put("Atom       ");
       } else {
-        if (!sp->put("String     ")) {
-          return false;
-        }
+        sp->put("String     ");
       }
       JS::UniqueChars chars = QuoteString(cx, str, '"');
       if (!chars) {
         return false;
       }
-      if (!sp->put(chars.get())) {
-        return false;
-      }
-      if (!sp->put("\n")) {
-        return false;
-      }
+      sp->put(chars.get());
+      sp->put("\n");
     } else {
-      if (!sp->put("Unknown\n")) {
-        return false;
-      }
+      sp->put("Unknown\n");
     }
     i++;
   }

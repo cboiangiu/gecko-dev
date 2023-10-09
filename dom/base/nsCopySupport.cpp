@@ -40,6 +40,7 @@
 #include "nsContentCID.h"
 
 #ifdef XP_WIN
+#  include "mozilla/StaticPrefs_clipboard.h"
 #  include "nsCExternalHandlerService.h"
 #  include "nsEscape.h"
 #  include "nsIMIMEInfo.h"
@@ -502,8 +503,10 @@ nsresult nsCopySupport::ImageCopy(nsIImageLoadingContent* aImageElement,
     }
 
 #ifdef XP_WIN
-    rv = AppendImagePromise(trans, imgRequest, aImageElement);
-    NS_ENSURE_SUCCESS(rv, rv);
+    if (StaticPrefs::clipboard_imageAsFile_enabled()) {
+      rv = AppendImagePromise(trans, imgRequest, aImageElement);
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
 #endif
 
     // copy the image data onto the transferable
@@ -898,7 +901,7 @@ bool nsCopySupport::FireClipboardEvent(EventMessage aEventMessage,
   // Now that we have copied, update the clipboard commands. This should have
   // the effect of updating the enabled state of the paste menu item.
   if (doDefault || count) {
-    piWindow->UpdateCommands(u"clipboard"_ns, nullptr, 0);
+    piWindow->UpdateCommands(u"clipboard"_ns);
   }
 
   if (aActionTaken) {

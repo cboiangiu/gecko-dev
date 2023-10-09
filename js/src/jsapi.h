@@ -46,7 +46,6 @@
 #include "js/MapAndSet.h"
 #include "js/MemoryCallbacks.h"
 #include "js/MemoryFunctions.h"
-#include "js/OffThreadScriptCompilation.h"
 #include "js/Principals.h"
 #include "js/PropertyAndElement.h"  // JS_Enumerate
 #include "js/PropertyDescriptor.h"
@@ -933,8 +932,8 @@ class MOZ_RAII JS_PUBLIC_API AutoFilename {
  * record, this will also return false.
  */
 extern JS_PUBLIC_API bool DescribeScriptedCaller(
-    JSContext* cx, AutoFilename* filename = nullptr, unsigned* lineno = nullptr,
-    unsigned* column = nullptr);
+    JSContext* cx, AutoFilename* filename = nullptr, uint32_t* lineno = nullptr,
+    JS::ColumnNumberZeroOrigin* column = nullptr);
 
 extern JS_PUBLIC_API JSObject* GetScriptedCallerGlobal(JSContext* cx);
 

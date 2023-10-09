@@ -64,8 +64,12 @@ var PointerlockFsWarning = {
       this._element.addEventListener("transitionend", this);
       this._element.addEventListener("transitioncancel", this);
       window.addEventListener("mousemove", this, true);
-      window.addEventListener("activate", this);
-      window.addEventListener("deactivate", this);
+      // If the user explicitly disables the prompt, there's no need to detect
+      // activation.
+      if (timeout > 0) {
+        window.addEventListener("activate", this);
+        window.addEventListener("deactivate", this);
+      }
       // The timeout to hide the warning box after a while.
       this._timeoutHide = new this.Timeout(() => {
         window.removeEventListener("activate", this);
@@ -407,13 +411,23 @@ var FullScreen = {
     // shiftSize is sent from Cocoa widget code as a very precise double. We
     // don't need that kind of precision in our CSS.
     shiftSize = shiftSize.toFixed(2);
-    let toolbox = document.getElementById("navigator-toolbox");
+    let toolbox = gNavToolbox;
     if (shiftSize > 0) {
       toolbox.style.setProperty("transform", `translateY(${shiftSize}px)`);
       toolbox.style.setProperty("z-index", "2");
+
+      // If the mouse tracking missed our fullScreenToggler, then the toolbox
+      // might not have been shown before the menubar is animated down. Make
+      // sure it is shown now.
+      if (!this.fullScreenToggler.hidden) {
+        this.showNavToolbox();
+      }
     } else {
       toolbox.style.removeProperty("transform");
       toolbox.style.removeProperty("z-index");
+
+      // If menubar is animating away, we might need to hide the toolbox also.
+      this.hideNavToolbox(false);
     }
   },
 

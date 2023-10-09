@@ -11,8 +11,9 @@
 
 [package]
 edition = "2021"
+rust-version = "1.65"
 name = "wgpu-core"
-version = "0.16.0"
+version = "0.17.0"
 authors = ["wgpu developers"]
 description = "WebGPU core logic on wgpu-hal"
 homepage = "https://wgpu.rs/"
@@ -47,15 +48,15 @@ smallvec = "1"
 thiserror = "1"
 
 [dependencies.hal]
-version = "0.16"
+version = "0.17"
 path = "../wgpu-hal"
 default_features = false
 package = "wgpu-hal"
 
 [dependencies.naga]
-version = "0.12.0"
+version = "0.13.0"
 git = "https://github.com/gfx-rs/naga"
-rev = "409239c0e2313bfd0dc4fd64f8c3021185ccef1b"
+rev = "6668d0694cc51ee66c71c2ca3a1ab1081956299b"
 features = [
     "clone",
     "span",
@@ -80,12 +81,11 @@ features = ["serde_derive"]
 optional = true
 
 [dependencies.wgt]
-version = "0.16"
+version = "0.17"
 path = "../wgpu-types"
 package = "wgpu-types"
 
 [features]
-angle = ["hal/gles"]
 default = ["link"]
 dx11 = ["hal/dx11"]
 dx12 = ["hal/dx12"]
@@ -121,7 +121,7 @@ vulkan = ["hal/vulkan"]
 wgsl = ["naga/wgsl-in"]
 
 [target."cfg(all(target_arch = \"wasm32\", not(target_os = \"emscripten\")))".dependencies.web-sys]
-version = "0.3.60"
+version = "0.3.64"
 features = [
     "HtmlCanvasElement",
     "OffscreenCanvas",

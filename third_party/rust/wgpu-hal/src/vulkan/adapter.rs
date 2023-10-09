@@ -13,6 +13,7 @@ fn depth_stencil_required_flags() -> vk::FormatFeatureFlags {
 fn indexing_features() -> wgt::Features {
     wgt::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
         | wgt::Features::UNIFORM_BUFFER_AND_STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
+        | wgt::Features::PARTIALLY_BOUND_BINDING_ARRAY
 }
 
 /// Aggregate of the `vk::PhysicalDevice*Features` structs used by `gfx`.
@@ -176,6 +177,7 @@ impl PhysicalDeviceFeatures {
                 //.shader_resource_residency(requested_features.contains(wgt::Features::SHADER_RESOURCE_RESIDENCY))
                 .geometry_shader(requested_features.contains(wgt::Features::SHADER_PRIMITIVE_INDEX))
                 .depth_clamp(requested_features.contains(wgt::Features::DEPTH_CLIP_CONTROL))
+                .dual_src_blend(requested_features.contains(wgt::Features::DUAL_SOURCE_BLENDING))
                 .build(),
             descriptor_indexing: if requested_features.intersects(indexing_features()) {
                 Some(
@@ -234,11 +236,11 @@ impl PhysicalDeviceFeatures {
             robustness2: if enabled_extensions.contains(&vk::ExtRobustness2Fn::name()) {
                 // Note: enabling `robust_buffer_access2` isn't requires, strictly speaking
                 // since we can enable `robust_buffer_access` all the time. But it improves
-                // program portability, so we opt into it anyway.
+                // program portability, so we opt into it if they are supported.
                 Some(
                     vk::PhysicalDeviceRobustness2FeaturesEXT::builder()
-                        .robust_buffer_access2(private_caps.robust_buffer_access)
-                        .robust_image_access2(private_caps.robust_image_access)
+                        .robust_buffer_access2(private_caps.robust_buffer_access2)
+                        .robust_image_access2(private_caps.robust_image_access2)
                         .build(),
                 )
             } else {
@@ -459,6 +461,7 @@ impl PhysicalDeviceFeatures {
         }
 
         features.set(F::DEPTH_CLIP_CONTROL, self.core.depth_clamp != 0);
+        features.set(F::DUAL_SOURCE_BLENDING, self.core.dual_src_blend != 0);
 
         if let Some(ref multiview) = self.multiview {
             features.set(F::MULTIVIEW, multiview.multiview != 0);
@@ -519,6 +522,7 @@ impl PhysicalDeviceFeatures {
                 | vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND,
         );
         features.set(F::RG11B10UFLOAT_RENDERABLE, rg11b10ufloat_renderable);
+        features.set(F::SHADER_UNUSED_VERTEX_OUTPUT, true);
 
         (features, dl_flags)
     }
@@ -720,7 +724,7 @@ impl PhysicalDeviceCapabilities {
             max_bind_groups: limits
                 .max_bound_descriptor_sets
                 .min(crate::MAX_BIND_GROUPS as u32),
-            max_bindings_per_bind_group: 640,
+            max_bindings_per_bind_group: wgt::Limits::default().max_bindings_per_bind_group,
             max_dynamic_uniform_buffers_per_pipeline_layout: limits
                 .max_descriptor_set_uniform_buffers_dynamic,
             max_dynamic_storage_buffers_per_pipeline_layout: limits
@@ -754,6 +758,7 @@ impl PhysicalDeviceCapabilities {
             max_compute_workgroup_size_z: max_compute_workgroup_sizes[2],
             max_compute_workgroups_per_dimension,
             max_buffer_size,
+            max_non_sampler_bindings: std::u32::MAX,
         }
     }
 
@@ -982,6 +987,10 @@ impl super::Instance {
                 super::Workarounds::EMPTY_RESOLVE_ATTACHMENT_LISTS,
                 phd_capabilities.properties.vendor_id == db::qualcomm::VENDOR,
             );
+            workarounds.set(
+                super::Workarounds::FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16,
+                phd_capabilities.properties.vendor_id == db::nvidia::VENDOR,
+            );
         };
 
         if phd_capabilities.effective_api_version == vk::API_VERSION_1_0
@@ -1063,6 +1072,16 @@ impl super::Instance {
                     .image_robustness
                     .map_or(false, |ext| ext.robust_image_access != 0),
             },
+            robust_buffer_access2: phd_features
+                .robustness2
+                .as_ref()
+                .map(|r| r.robust_buffer_access2 == 1)
+                .unwrap_or_default(),
+            robust_image_access2: phd_features
+                .robustness2
+                .as_ref()
+                .map(|r| r.robust_image_access2 == 1)
+                .unwrap_or_default(),
             zero_initialize_workgroup_memory: phd_features
                 .zero_initialize_workgroup_memory
                 .map_or(false, |ext| {
@@ -1201,15 +1220,11 @@ impl super::Adapter {
             None
         };
 
-        let image_checks = if self.private_caps.robust_image_access {
-            naga::proc::BoundsCheckPolicy::Unchecked
-        } else {
-            naga::proc::BoundsCheckPolicy::Restrict
-        };
-
         let naga_options = {
             use naga::back::spv;
 
+            // The following capabilities are always available
+            // see https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap52.html#spirvenv-capabilities
             let mut capabilities = vec![
                 spv::Capability::Shader,
                 spv::Capability::Matrix,
@@ -1217,14 +1232,22 @@ impl super::Adapter {
                 spv::Capability::Image1D,
                 spv::Capability::ImageQuery,
                 spv::Capability::DerivativeControl,
-                spv::Capability::SampledCubeArray,
-                spv::Capability::SampleRateShading,
-                //Note: this is requested always, no matter what the actual
-                // adapter supports. It's not the responsibility of SPV-out
-                // translation to handle the storage support for formats.
                 spv::Capability::StorageImageExtendedFormats,
-                //TODO: fill out the rest
             ];
+
+            if self
+                .downlevel_flags
+                .contains(wgt::DownlevelFlags::CUBE_ARRAY_TEXTURES)
+            {
+                capabilities.push(spv::Capability::SampledCubeArray);
+            }
+
+            if self
+                .downlevel_flags
+                .contains(wgt::DownlevelFlags::MULTISAMPLED_SHADING)
+            {
+                capabilities.push(spv::Capability::SampleRateShading);
+            }
 
             if features.contains(wgt::Features::MULTIVIEW) {
                 capabilities.push(spv::Capability::MultiView);
@@ -1268,8 +1291,12 @@ impl super::Adapter {
                     } else {
                         naga::proc::BoundsCheckPolicy::Restrict
                     },
-                    image_load: image_checks,
-                    image_store: image_checks,
+                    image_load: if self.private_caps.robust_image_access {
+                        naga::proc::BoundsCheckPolicy::Unchecked
+                    } else {
+                        naga::proc::BoundsCheckPolicy::Restrict
+                    },
+                    image_store: naga::proc::BoundsCheckPolicy::Unchecked,
                     // TODO: support bounds checks on binding arrays
                     binding_array: naga::proc::BoundsCheckPolicy::Unchecked,
                 },

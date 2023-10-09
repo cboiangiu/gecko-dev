@@ -686,7 +686,8 @@ nsresult HTMLEditor::OnEndHandlingTopLevelEditSubActionInternal() {
         if (!ancestor->IsHTMLElement() ||
             !HTMLEditUtils::IsRemovableFromParentNode(*ancestor) ||
             !HTMLEditUtils::IsEmptyInlineContainer(
-                *ancestor, {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
+                *ancestor, {EmptyCheckOption::TreatSingleBRElementAsVisible},
+                BlockInlineCheck::UseComputedDisplayStyle)) {
           break;
         }
         mostDistantEmptyInlineAncestor = ancestor;
@@ -862,8 +863,9 @@ nsresult HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() {
     return NS_OK;
   }
 
-  nsIContent* previousBRElement =
-      HTMLEditUtils::GetPreviousContent(atSelectionStart, {}, editingHost);
+  nsIContent* previousBRElement = HTMLEditUtils::GetPreviousContent(
+      atSelectionStart, {}, BlockInlineCheck::UseComputedDisplayStyle,
+      editingHost);
   if (!previousBRElement || !previousBRElement->IsHTMLElement(nsGkAtoms::br) ||
       !previousBRElement->GetParent() ||
       !EditorUtils::IsEditableContent(*previousBRElement->GetParent(),
@@ -875,10 +877,12 @@ nsresult HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() {
   const RefPtr<const Element> blockElementAtSelectionStart =
       HTMLEditUtils::GetInclusiveAncestorElement(
           *atSelectionStart.ContainerAs<nsIContent>(),
-          HTMLEditUtils::ClosestBlockElement);
+          HTMLEditUtils::ClosestBlockElement,
+          BlockInlineCheck::UseComputedDisplayStyle);
   const RefPtr<const Element> parentBlockElementOfBRElement =
-      HTMLEditUtils::GetAncestorElement(*previousBRElement,
-                                        HTMLEditUtils::ClosestBlockElement);
+      HTMLEditUtils::GetAncestorElement(
+          *previousBRElement, HTMLEditUtils::ClosestBlockElement,
+          BlockInlineCheck::UseComputedDisplayStyle);
 
   if (!blockElementAtSelectionStart ||
       blockElementAtSelectionStart != parentBlockElementOfBRElement) {
@@ -903,6 +907,37 @@ nsresult HTMLEditor::MaybeCreatePaddingBRElementForEmptyEditor() {
     return NS_OK;
   }
 
+  // XXX I think that we should not insert a <br> element if we're for a web
+  // content.  Probably, this is required only by chrome editors such as
+  // the mail composer of Thunderbird and the composer of SeaMonkey.
+
+  const RefPtr<Element> bodyOrDocumentElement = GetRoot();
+  if (!bodyOrDocumentElement) {
+    return NS_OK;
+  }
+
+  // Skip adding the padding <br> element for empty editor if body
+  // is read-only.
+  if (!HTMLEditUtils::IsSimplyEditableNode(*bodyOrDocumentElement)) {
+    return NS_OK;
+  }
+
+  // Now we've got the body element. Iterate over the body element's children,
+  // looking for editable content. If no editable content is found, insert the
+  // padding <br> element.
+  EditorType editorType = GetEditorType();
+  bool isRootEditable =
+      EditorUtils::IsEditableContent(*bodyOrDocumentElement, editorType);
+  for (nsIContent* child = bodyOrDocumentElement->GetFirstChild(); child;
+       child = child->GetNextSibling()) {
+    if (EditorUtils::IsPaddingBRElementForEmptyEditor(*child) ||
+        !isRootEditable || EditorUtils::IsEditableContent(*child, editorType) ||
+        HTMLEditUtils::IsBlockElement(
+            *child, BlockInlineCheck::UseComputedDisplayStyle)) {
+      return NS_OK;
+    }
+  }
+
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eCreatePaddingBRElementForEmptyEditor,
@@ -913,34 +948,6 @@ nsresult HTMLEditor::MaybeCreatePaddingBRElementForEmptyEditor() {
   NS_WARNING_ASSERTION(
       !ignoredError.Failed(),
       "HTMLEditor::OnStartToHandleTopLevelEditSubAction() failed, but ignored");
-  ignoredError.SuppressException();
-
-  RefPtr<Element> rootElement = GetRoot();
-  if (!rootElement) {
-    return NS_OK;
-  }
-
-  // Now we've got the body element. Iterate over the body element's children,
-  // looking for editable content. If no editable content is found, insert the
-  // padding <br> element.
-  EditorType editorType = GetEditorType();
-  bool isRootEditable =
-      EditorUtils::IsEditableContent(*rootElement, editorType);
-  for (nsIContent* rootChild = rootElement->GetFirstChild(); rootChild;
-       rootChild = rootChild->GetNextSibling()) {
-    if (EditorUtils::IsPaddingBRElementForEmptyEditor(*rootChild) ||
-        !isRootEditable ||
-        EditorUtils::IsEditableContent(*rootChild, editorType) ||
-        HTMLEditUtils::IsBlockElement(*rootChild)) {
-      return NS_OK;
-    }
-  }
-
-  // Skip adding the padding <br> element for empty editor if body
-  // is read-only.
-  if (IsHTMLEditor() && !HTMLEditUtils::IsSimplyEditableNode(*rootElement)) {
-    return NS_OK;
-  }
 
   // Create a br.
   RefPtr<Element> newBRElement = CreateHTMLContent(nsGkAtoms::br);
@@ -959,8 +966,8 @@ nsresult HTMLEditor::MaybeCreatePaddingBRElementForEmptyEditor() {
 
   // Put the node in the document.
   Result<CreateElementResult, nsresult> insertBRElementResult =
-      InsertNodeWithTransaction<Element>(*newBRElement,
-                                         EditorDOMPoint(rootElement, 0u));
+      InsertNodeWithTransaction<Element>(
+          *newBRElement, EditorDOMPoint(bodyOrDocumentElement, 0u));
   if (MOZ_UNLIKELY(insertBRElementResult.isErr())) {
     NS_WARNING("EditorBase::InsertNodeWithTransaction() failed");
     return insertBRElementResult.unwrapErr();
@@ -968,7 +975,7 @@ nsresult HTMLEditor::MaybeCreatePaddingBRElementForEmptyEditor() {
 
   // Set selection.
   insertBRElementResult.inspect().IgnoreCaretPointSuggestion();
-  nsresult rv = CollapseSelectionToStartOf(*rootElement);
+  nsresult rv = CollapseSelectionToStartOf(*bodyOrDocumentElement);
   if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
     NS_WARNING(
         "EditorBase::CollapseSelectionToStartOf() caused destroying the "
@@ -1565,23 +1572,64 @@ nsresult HTMLEditor::InsertLineBreakAsSubAction() {
     CreateElementResult unwrappedInsertBRElementResult =
         insertBRElementResult.unwrap();
     MOZ_ASSERT(unwrappedInsertBRElementResult.GetNewNode());
-    // Next inserting text should be inserted into styled inline elements if
-    // they have first visible thing in the new line.
-    auto pointToPutCaret = [&]() -> EditorDOMPoint {
-      WSScanResult forwardScanResult =
-          WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
-              editingHost, EditorRawDOMPoint::After(
-                               *unwrappedInsertBRElementResult.GetNewNode()));
-      if (forwardScanResult.InVisibleOrCollapsibleCharacters()) {
-        unwrappedInsertBRElementResult.IgnoreCaretPointSuggestion();
-        return forwardScanResult.Point<EditorDOMPoint>();
+    unwrappedInsertBRElementResult.IgnoreCaretPointSuggestion();
+
+    auto pointToPutCaret =
+        EditorDOMPoint::After(*unwrappedInsertBRElementResult.GetNewNode());
+    if (MOZ_UNLIKELY(!pointToPutCaret.IsSet())) {
+      NS_WARNING("Inserted <br> was unexpectedly removed");
+      return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+    }
+    WSScanResult backwardScanFromBeforeBRElementResult =
+        WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
+            editingHost,
+            EditorDOMPoint(unwrappedInsertBRElementResult.GetNewNode()),
+            BlockInlineCheck::UseComputedDisplayStyle);
+    if (MOZ_UNLIKELY(backwardScanFromBeforeBRElementResult.Failed())) {
+      NS_WARNING(
+          "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary() failed");
+      return Err(NS_ERROR_FAILURE);
+    }
+
+    WSScanResult forwardScanFromAfterBRElementResult =
+        WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
+            editingHost, pointToPutCaret,
+            BlockInlineCheck::UseComputedDisplayStyle);
+    if (MOZ_UNLIKELY(forwardScanFromAfterBRElementResult.Failed())) {
+      NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
+      return Err(NS_ERROR_FAILURE);
+    }
+    const bool brElementIsAfterBlock =
+        backwardScanFromBeforeBRElementResult.ReachedBlockBoundary();
+    const bool brElementIsBeforeBlock =
+        forwardScanFromAfterBRElementResult.ReachedBlockBoundary();
+    const bool isEmptyEditingHost = HTMLEditUtils::IsEmptyNode(*editingHost);
+    if (brElementIsBeforeBlock &&
+        (isEmptyEditingHost || !brElementIsAfterBlock)) {
+      // Empty last line is invisible if it's immediately before either parent
+      // or another block's boundary so that we need to put invisible <br>
+      // element here for making it visible.
+      Result<CreateElementResult, nsresult> invisibleAdditionalBRElementResult =
+          WhiteSpaceVisibilityKeeper::InsertBRElement(*this, pointToPutCaret,
+                                                      *editingHost);
+      if (MOZ_UNLIKELY(invisibleAdditionalBRElementResult.isErr())) {
+        NS_WARNING("WhiteSpaceVisibilityKeeper::InsertBRElement() failed");
+        return invisibleAdditionalBRElementResult.unwrapErr();
       }
-      if (forwardScanResult.ReachedSpecialContent()) {
-        unwrappedInsertBRElementResult.IgnoreCaretPointSuggestion();
-        return forwardScanResult.PointAtContent<EditorDOMPoint>();
-      }
-      return unwrappedInsertBRElementResult.UnwrapCaretPoint();
-    }();
+      CreateElementResult unwrappedInvisibleAdditionalBRElement =
+          invisibleAdditionalBRElementResult.unwrap();
+      pointToPutCaret.Set(unwrappedInvisibleAdditionalBRElement.GetNewNode());
+      unwrappedInvisibleAdditionalBRElement.IgnoreCaretPointSuggestion();
+    } else if (forwardScanFromAfterBRElementResult
+                   .InVisibleOrCollapsibleCharacters()) {
+      pointToPutCaret =
+          forwardScanFromAfterBRElementResult.Point<EditorDOMPoint>();
+    } else if (forwardScanFromAfterBRElementResult.ReachedSpecialContent()) {
+      // Next inserting text should be inserted into styled inline elements if
+      // they have first visible thing in the new line.
+      pointToPutCaret =
+          forwardScanFromAfterBRElementResult.PointAtContent<EditorDOMPoint>();
+    }
 
     nsresult rv = CollapseSelectionTo(pointToPutCaret);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
@@ -1821,7 +1869,8 @@ HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
         // element.
         if (!HTMLEditUtils::IsSplittableNode(*aEditableBlockElement)) {
           return aDefaultParagraphSeparator == ParagraphSeparator::br ||
-                 !HTMLEditUtils::CanElementContainParagraph(aEditingHost) ||
+                 !HTMLEditUtils::CanElementContainParagraph(
+                     *aEditableBlockElement) ||
                  HTMLEditUtils::ShouldInsertLinefeedCharacter(
                      aCandidatePointToSplit, aEditingHost);
         }
@@ -1839,7 +1888,8 @@ HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
              editableBlockAncestor;
              editableBlockAncestor = HTMLEditUtils::GetAncestorElement(
                  *editableBlockAncestor,
-                 HTMLEditUtils::ClosestEditableBlockElementOrButtonElement)) {
+                 HTMLEditUtils::ClosestEditableBlockElementOrButtonElement,
+                 BlockInlineCheck::UseComputedDisplayOutsideStyle)) {
           if (HTMLEditUtils::CanElementContainParagraph(
                   *editableBlockAncestor)) {
             return false;
@@ -1854,7 +1904,8 @@ HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
   RefPtr<Element> editableBlockElement =
       HTMLEditUtils::GetInclusiveAncestorElement(
           *pointToInsert.ContainerAs<nsIContent>(),
-          HTMLEditUtils::ClosestEditableBlockElementOrButtonElement);
+          HTMLEditUtils::ClosestEditableBlockElementOrButtonElement,
+          BlockInlineCheck::UseComputedDisplayOutsideStyle);
 
   // If we cannot insert a <p>/<div> element at the selection, we should insert
   // a <br> element or a linefeed instead.
@@ -1962,7 +2013,8 @@ HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
 
     editableBlockElement = HTMLEditUtils::GetInclusiveAncestorElement(
         *pointToInsert.ContainerAs<nsIContent>(),
-        HTMLEditUtils::ClosestEditableBlockElementOrButtonElement);
+        HTMLEditUtils::ClosestEditableBlockElementOrButtonElement,
+        BlockInlineCheck::UseComputedDisplayOutsideStyle);
     if (NS_WARN_IF(!editableBlockElement)) {
       return Err(NS_ERROR_UNEXPECTED);
     }
@@ -2003,7 +2055,8 @@ HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
   RefPtr<Element> insertedPaddingBRElement;
   if (HTMLEditUtils::IsEmptyBlockElement(
           *editableBlockElement,
-          {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
+          {EmptyCheckOption::TreatSingleBRElementAsVisible},
+          BlockInlineCheck::UseComputedDisplayOutsideStyle)) {
     Result<CreateElementResult, nsresult> insertBRElementResult =
         InsertBRElement(WithTransaction::Yes,
                         EditorDOMPoint::AtEndOf(*editableBlockElement));
@@ -2165,7 +2218,24 @@ Result<CreateElementResult, nsresult> HTMLEditor::HandleInsertBRElement(
   MOZ_ASSERT(aPointToBreak.IsSet());
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  bool brElementIsAfterBlock = false, brElementIsBeforeBlock = false;
+  const bool editingHostIsEmpty = HTMLEditUtils::IsEmptyNode(aEditingHost);
+  WSRunScanner wsRunScanner(&aEditingHost, aPointToBreak,
+                            BlockInlineCheck::UseComputedDisplayStyle);
+  WSScanResult backwardScanResult =
+      wsRunScanner.ScanPreviousVisibleNodeOrBlockBoundaryFrom(aPointToBreak);
+  if (MOZ_UNLIKELY(backwardScanResult.Failed())) {
+    NS_WARNING(
+        "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundaryFrom() failed");
+    return Err(NS_ERROR_FAILURE);
+  }
+  const bool brElementIsAfterBlock = backwardScanResult.ReachedBlockBoundary();
+  WSScanResult forwardScanResult =
+      wsRunScanner.ScanNextVisibleNodeOrBlockBoundaryFrom(aPointToBreak);
+  if (MOZ_UNLIKELY(forwardScanResult.Failed())) {
+    NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom() failed");
+    return Err(NS_ERROR_FAILURE);
+  }
+  const bool brElementIsBeforeBlock = forwardScanResult.ReachedBlockBoundary();
 
   // First, insert a <br> element.
   RefPtr<Element> brElement;
@@ -2185,23 +2255,6 @@ Result<CreateElementResult, nsresult> HTMLEditor::HandleInsertBRElement(
     brElement = unwrappedInsertBRElementResult.UnwrapNewNode();
   } else {
     EditorDOMPoint pointToBreak(aPointToBreak);
-    WSRunScanner wsRunScanner(&aEditingHost, pointToBreak);
-    WSScanResult backwardScanResult =
-        wsRunScanner.ScanPreviousVisibleNodeOrBlockBoundaryFrom(pointToBreak);
-    if (MOZ_UNLIKELY(backwardScanResult.Failed())) {
-      NS_WARNING(
-          "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundaryFrom() failed");
-      return Err(NS_ERROR_FAILURE);
-    }
-    brElementIsAfterBlock = backwardScanResult.ReachedBlockBoundary();
-    WSScanResult forwardScanResult =
-        wsRunScanner.ScanNextVisibleNodeOrBlockBoundaryFrom(pointToBreak);
-    if (MOZ_UNLIKELY(forwardScanResult.Failed())) {
-      NS_WARNING(
-          "WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom() failed");
-      return Err(NS_ERROR_FAILURE);
-    }
-    brElementIsBeforeBlock = forwardScanResult.ReachedBlockBoundary();
     // If the container of the break is a link, we need to split it and
     // insert new <br> between the split links.
     RefPtr<Element> linkNode =
@@ -2251,6 +2304,27 @@ Result<CreateElementResult, nsresult> HTMLEditor::HandleInsertBRElement(
     NS_WARNING("Inserted <br> element was removed by the web app");
     return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
   }
+  auto afterBRElement = EditorDOMPoint::After(brElement);
+
+  auto InsertAdditionalInvisibleLineBreak =
+      [&]() MOZ_CAN_RUN_SCRIPT -> Result<CreateElementResult, nsresult> {
+    // Empty last line is invisible if it's immediately before either parent or
+    // another block's boundary so that we need to put invisible <br> element
+    // here for making it visible.
+    Result<CreateElementResult, nsresult> invisibleAdditionalBRElementResult =
+        WhiteSpaceVisibilityKeeper::InsertBRElement(*this, afterBRElement,
+                                                    aEditingHost);
+    if (MOZ_UNLIKELY(invisibleAdditionalBRElementResult.isErr())) {
+      NS_WARNING("WhiteSpaceVisibilityKeeper::InsertBRElement() failed");
+      return invisibleAdditionalBRElementResult;
+    }
+    // afterBRElement points after the first <br> with referring an old child.
+    // Therefore, we need to update it with new child which is the new invisible
+    // <br>.
+    afterBRElement.Set(
+        invisibleAdditionalBRElementResult.inspect().GetNewNode());
+    return invisibleAdditionalBRElementResult;
+  };
 
   if (brElementIsAfterBlock && brElementIsBeforeBlock) {
     // We just placed a <br> between block boundaries.  This is the one case
@@ -2259,16 +2333,27 @@ Result<CreateElementResult, nsresult> HTMLEditor::HandleInsertBRElement(
     // XXX brElementIsAfterBlock and brElementIsBeforeBlock were set before
     //     modifying the DOM tree.  So, now, the <br> element may not be
     //     between blocks.
-    EditorDOMPoint pointToPutCaret(brElement,
-                                   InterlinePosition::StartOfNextLine);
+    EditorDOMPoint pointToPutCaret;
+    if (editingHostIsEmpty) {
+      Result<CreateElementResult, nsresult> invisibleAdditionalBRElementResult =
+          InsertAdditionalInvisibleLineBreak();
+      if (invisibleAdditionalBRElementResult.isErr()) {
+        return invisibleAdditionalBRElementResult;
+      }
+      invisibleAdditionalBRElementResult.unwrap().IgnoreCaretPointSuggestion();
+      pointToPutCaret = std::move(afterBRElement);
+    } else {
+      pointToPutCaret =
+          EditorDOMPoint(brElement, InterlinePosition::StartOfNextLine);
+    }
     return CreateElementResult(std::move(brElement),
                                std::move(pointToPutCaret));
   }
 
-  auto afterBRElement = EditorDOMPoint::After(brElement);
   WSScanResult forwardScanFromAfterBRElementResult =
-      WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(&aEditingHost,
-                                                       afterBRElement);
+      WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
+          &aEditingHost, afterBRElement,
+          BlockInlineCheck::UseComputedDisplayStyle);
   if (MOZ_UNLIKELY(forwardScanFromAfterBRElementResult.Failed())) {
     NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
     return Err(NS_ERROR_FAILURE);
@@ -2304,6 +2389,14 @@ Result<CreateElementResult, nsresult> HTMLEditor::HandleInsertBRElement(
           rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
           "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
     }
+  } else if (forwardScanFromAfterBRElementResult.ReachedBlockBoundary() &&
+             !brElementIsAfterBlock) {
+    Result<CreateElementResult, nsresult> invisibleAdditionalBRElementResult =
+        InsertAdditionalInvisibleLineBreak();
+    if (invisibleAdditionalBRElementResult.isErr()) {
+      return invisibleAdditionalBRElementResult;
+    }
+    invisibleAdditionalBRElementResult.unwrap().IgnoreCaretPointSuggestion();
   }
 
   // We want the caret to stick to whatever is past the break.  This is because
@@ -2314,8 +2407,9 @@ Result<CreateElementResult, nsresult> HTMLEditor::HandleInsertBRElement(
   // node.  Then we stick to the left to avoid an uber caret.
   nsIContent* nextSiblingOfBRElement = brElement->GetNextSibling();
   afterBRElement.SetInterlinePosition(
-      nextSiblingOfBRElement &&
-              HTMLEditUtils::IsBlockElement(*nextSiblingOfBRElement)
+      nextSiblingOfBRElement && HTMLEditUtils::IsBlockElement(
+                                    *nextSiblingOfBRElement,
+                                    BlockInlineCheck::UseComputedDisplayStyle)
           ? InterlinePosition::EndOfLine
           : InterlinePosition::StartOfNextLine);
   return CreateElementResult(std::move(brElement), afterBRElement);
@@ -2400,7 +2494,8 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::HandleInsertLinefeed(
   //     for doing it, we need more work, e.g., updating serializer, deleting
   //     unnecessary padding <br> element at modifying the last line.
   if (pointToPutCaret.IsInContentNode() && pointToPutCaret.IsEndOfContainer()) {
-    WSRunScanner wsScannerAtCaret(&aEditingHost, pointToPutCaret);
+    WSRunScanner wsScannerAtCaret(&aEditingHost, pointToPutCaret,
+                                  BlockInlineCheck::UseComputedDisplayStyle);
     if (wsScannerAtCaret.StartsFromPreformattedLineBreak() &&
         wsScannerAtCaret.EndsByBlockBoundary() &&
         HTMLEditUtils::CanNodeContain(*wsScannerAtCaret.GetEndReasonContent(),
@@ -2483,8 +2578,8 @@ HTMLEditor::HandleInsertParagraphInMailCiteElement(
     // user if they click there and start typing, because being in the
     // mailquote may affect wrapping behavior, or font color, etc.
     WSScanResult forwardScanFromPointToSplitResult =
-        WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(&aEditingHost,
-                                                         pointToSplit);
+        WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
+            &aEditingHost, pointToSplit, BlockInlineCheck::UseHTMLDefaultStyle);
     if (forwardScanFromPointToSplitResult.Failed()) {
       return Err(NS_ERROR_FAILURE);
     }
@@ -2587,7 +2682,8 @@ HTMLEditor::HandleInsertParagraphInMailCiteElement(
   // also just after it.  If we don't have another br or block boundary
   // adjacent, then we will need a 2nd br added to achieve blank line that user
   // expects.
-  if (HTMLEditUtils::IsInlineElement(aMailCiteElement)) {
+  if (HTMLEditUtils::IsInlineContent(
+          aMailCiteElement, BlockInlineCheck::UseComputedDisplayStyle)) {
     nsresult rvOfInsertingBRElement = [&]() MOZ_CAN_RUN_SCRIPT {
       EditorDOMPoint pointToCreateNewBRElement(
           unwrappedInsertBRElementResult.GetNewNode());
@@ -2597,7 +2693,8 @@ HTMLEditor::HandleInsertParagraphInMailCiteElement(
       //     resultOfInsertingBRElement.inspect()?
       WSScanResult backwardScanFromPointToCreateNewBRElementResult =
           WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
-              &aEditingHost, pointToCreateNewBRElement);
+              &aEditingHost, pointToCreateNewBRElement,
+              BlockInlineCheck::UseComputedDisplayStyle);
       if (MOZ_UNLIKELY(
               backwardScanFromPointToCreateNewBRElementResult.Failed())) {
         NS_WARNING(
@@ -2614,7 +2711,8 @@ HTMLEditor::HandleInsertParagraphInMailCiteElement(
       WSScanResult forwardScanFromPointAfterNewBRElementResult =
           WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
               &aEditingHost,
-              EditorRawDOMPoint::After(pointToCreateNewBRElement));
+              EditorRawDOMPoint::After(pointToCreateNewBRElement),
+              BlockInlineCheck::UseComputedDisplayStyle);
       if (MOZ_UNLIKELY(forwardScanFromPointAfterNewBRElementResult.Failed())) {
         NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
         return NS_ERROR_FAILURE;
@@ -2685,7 +2783,8 @@ HTMLEditor::GetPreviousCharPointDataForNormalizingWhiteSpaces(
   }
   const auto previousCharPoint =
       WSRunScanner::GetPreviousEditableCharPoint<EditorRawDOMPointInText>(
-          ComputeEditingHost(), aPoint);
+          ComputeEditingHost(), aPoint,
+          BlockInlineCheck::UseComputedDisplayStyle);
   if (!previousCharPoint.IsSet()) {
     return CharPointData::InDifferentTextNode(CharPointType::TextEnd);
   }
@@ -2703,7 +2802,8 @@ HTMLEditor::GetInclusiveNextCharPointDataForNormalizingWhiteSpaces(
   }
   const auto nextCharPoint =
       WSRunScanner::GetInclusiveNextEditableCharPoint<EditorRawDOMPointInText>(
-          ComputeEditingHost(), aPoint);
+          ComputeEditingHost(), aPoint,
+          BlockInlineCheck::UseComputedDisplayStyle);
   if (!nextCharPoint.IsSet()) {
     return CharPointData::InDifferentTextNode(CharPointType::TextEnd);
   }
@@ -2802,10 +2902,12 @@ void HTMLEditor::ExtendRangeToDeleteWithNormalizingWhiteSpaces(
   // adjacent text node's first or last character information in some cases.
   Element* editingHost = ComputeEditingHost();
   const EditorDOMPointInText precedingCharPoint =
-      WSRunScanner::GetPreviousEditableCharPoint(editingHost, aStartToDelete);
+      WSRunScanner::GetPreviousEditableCharPoint(
+          editingHost, aStartToDelete,
+          BlockInlineCheck::UseComputedDisplayStyle);
   const EditorDOMPointInText followingCharPoint =
-      WSRunScanner::GetInclusiveNextEditableCharPoint(editingHost,
-                                                      aEndToDelete);
+      WSRunScanner::GetInclusiveNextEditableCharPoint(
+          editingHost, aEndToDelete, BlockInlineCheck::UseComputedDisplayStyle);
   // Blink-compat: Normalize white-spaces in first node only when not removing
   //               its last character or no text nodes follow the first node.
   //               If removing last character of first node and there are
@@ -3107,15 +3209,18 @@ HTMLEditor::DeleteTextAndNormalizeSurroundingWhiteSpaces(
     if (const Element* editableBlockElementOrInlineEditingHost =
             HTMLEditUtils::GetInclusiveAncestorElement(
                 *newCaretPosition.ContainerAs<nsIContent>(),
-                HTMLEditUtils::
-                    ClosestEditableBlockElementOrInlineEditingHost)) {
+                HTMLEditUtils::ClosestEditableBlockElementOrInlineEditingHost,
+                BlockInlineCheck::UseComputedDisplayStyle)) {
       Element* editingHost = ComputeEditingHost();
       // Try to put caret next to immediately after previous editable leaf.
       nsIContent* previousContent =
           HTMLEditUtils::GetPreviousLeafContentOrPreviousBlockElement(
               newCaretPosition, *editableBlockElementOrInlineEditingHost,
-              {LeafNodeType::LeafNodeOrNonEditableNode}, editingHost);
-      if (previousContent && !HTMLEditUtils::IsBlockElement(*previousContent)) {
+              {LeafNodeType::LeafNodeOrNonEditableNode},
+              BlockInlineCheck::UseComputedDisplayStyle, editingHost);
+      if (previousContent &&
+          !HTMLEditUtils::IsBlockElement(
+              *previousContent, BlockInlineCheck::UseComputedDisplayStyle)) {
         newCaretPosition =
             previousContent->IsText() ||
                     HTMLEditUtils::IsContainerNode(*previousContent)
@@ -3129,6 +3234,7 @@ HTMLEditor::DeleteTextAndNormalizeSurroundingWhiteSpaces(
                        newCaretPosition,
                        *editableBlockElementOrInlineEditingHost,
                        {LeafNodeType::LeafNodeOrNonEditableNode},
+                       BlockInlineCheck::UseComputedDisplayStyle,
                        editingHost)) {
         newCaretPosition = nextContent->IsText() ||
                                    HTMLEditUtils::IsContainerNode(*nextContent)
@@ -3182,7 +3288,8 @@ HTMLEditor::InsertBRElementIfHardLineIsEmptyAndEndsWithBlockBoundary(
   // If container of the point is not in a block, we don't need to put a
   // `<br>` element here.
   if (!HTMLEditUtils::IsBlockElement(
-          *aPointToInsert.ContainerAs<nsIContent>())) {
+          *aPointToInsert.ContainerAs<nsIContent>(),
+          BlockInlineCheck::UseComputedDisplayStyle)) {
     return CaretPoint(EditorDOMPoint());
   }
 
@@ -3191,7 +3298,8 @@ HTMLEditor::InsertBRElementIfHardLineIsEmptyAndEndsWithBlockBoundary(
     return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
   }
 
-  WSRunScanner wsRunScanner(ComputeEditingHost(), aPointToInsert);
+  WSRunScanner wsRunScanner(ComputeEditingHost(), aPointToInsert,
+                            BlockInlineCheck::UseComputedDisplayStyle);
   // If the point is not start of a hard line, we don't need to put a `<br>`
   // element here.
   if (!wsRunScanner.StartsFromHardLineBreak()) {
@@ -3489,7 +3597,7 @@ nsresult HTMLEditor::AutoListElementCreator::
       EditSubAction::eCreateOrChangeList, aEditingHost);
   Result<EditorDOMPoint, nsresult> splitResult =
       extendedRanges.SplitTextAtEndBoundariesAndInlineAncestorsAtBothBoundaries(
-          aHTMLEditor, aEditingHost);
+          aHTMLEditor, BlockInlineCheck::UseHTMLDefaultStyle, aEditingHost);
   if (MOZ_UNLIKELY(splitResult.isErr())) {
     NS_WARNING(
         "AutoRangeArray::"
@@ -3527,7 +3635,8 @@ bool HTMLEditor::AutoListElementCreator::
     // XXX Should we handle line breaks in preformatted text node?
     if (!content->IsHTMLElement(nsGkAtoms::br) &&
         !HTMLEditUtils::IsEmptyInlineContainer(
-            content, {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
+            content, {EmptyCheckOption::TreatSingleBRElementAsVisible},
+            BlockInlineCheck::UseComputedDisplayStyle)) {
       return false;
     }
   }
@@ -3617,8 +3726,9 @@ HTMLEditor::AutoListElementCreator::WrapContentNodesIntoNewListElements(
     if (Element* deepestDivBlockquoteOrListElement =
             HTMLEditUtils::GetInclusiveDeepestFirstChildWhichHasOneChild(
                 aArrayOfContents[0], {WalkTreeOption::IgnoreNonEditableNode},
-                nsGkAtoms::div, nsGkAtoms::blockquote, nsGkAtoms::ul,
-                nsGkAtoms::ol, nsGkAtoms::dl)) {
+                BlockInlineCheck::UseHTMLDefaultStyle, nsGkAtoms::div,
+                nsGkAtoms::blockquote, nsGkAtoms::ul, nsGkAtoms::ol,
+                nsGkAtoms::dl)) {
       if (deepestDivBlockquoteOrListElement->IsAnyOfHTMLElements(
               nsGkAtoms::div, nsGkAtoms::blockquote)) {
         aArrayOfContents.Clear();
@@ -3666,8 +3776,8 @@ nsresult HTMLEditor::AutoListElementCreator::HandleChildContent(
   if (EditorUtils::IsEditableContent(aHandlingContent, EditorType::HTML) &&
       (aHandlingContent.IsHTMLElement(nsGkAtoms::br) ||
        HTMLEditUtils::IsEmptyInlineContainer(
-           aHandlingContent,
-           {EmptyCheckOption::TreatSingleBRElementAsVisible}))) {
+           aHandlingContent, {EmptyCheckOption::TreatSingleBRElementAsVisible},
+           BlockInlineCheck::UseHTMLDefaultStyle))) {
     nsresult rv = aHTMLEditor.DeleteNodeWithTransaction(aHandlingContent);
     if (NS_FAILED(rv)) {
       NS_WARNING("EditorBase::DeleteNodeWithTransaction() failed");
@@ -3731,9 +3841,8 @@ nsresult HTMLEditor::AutoListElementCreator::HandleChildContent(
 
   // If we meet an inline content, we want to move it to previously used list
   // item element or new list item element.
-  // XXX Despite the name, HTMLEditUtils::IsInlineElement() returns true for
-  // non-element content nodes too.
-  if (HTMLEditUtils::IsInlineElement(aHandlingContent)) {
+  if (HTMLEditUtils::IsInlineContent(aHandlingContent,
+                                     BlockInlineCheck::UseHTMLDefaultStyle)) {
     nsresult rv =
         HandleChildInlineContent(aHTMLEditor, aHandlingContent, aState);
     NS_WARNING_ASSERTION(
@@ -4212,7 +4321,8 @@ HTMLEditor::AutoListElementCreator::AppendListItemElement(
 nsresult HTMLEditor::AutoListElementCreator::HandleChildInlineContent(
     HTMLEditor& aHTMLEditor, nsIContent& aHandlingInlineContent,
     AutoHandlingState& aState) const {
-  MOZ_ASSERT(HTMLEditUtils::IsInlineElement(aHandlingInlineContent));
+  MOZ_ASSERT(HTMLEditUtils::IsInlineContent(
+      aHandlingInlineContent, BlockInlineCheck::UseHTMLDefaultStyle));
 
   // If we're currently handling contents of a list item and current node
   // is not a block element, move current node into the list item.
@@ -4283,7 +4393,8 @@ nsresult HTMLEditor::AutoListElementCreator::WrapContentIntoNewListItemElement(
 
   // If current node is not a block element, new list item should have
   // following inline nodes too.
-  if (HTMLEditUtils::IsInlineElement(aHandlingContent)) {
+  if (HTMLEditUtils::IsInlineContent(aHandlingContent,
+                                     BlockInlineCheck::UseHTMLDefaultStyle)) {
     aState.mPreviousListItemElement =
         unwrappedWrapContentInListItemElementResult.UnwrapNewNode();
   } else {
@@ -4393,7 +4504,7 @@ nsresult HTMLEditor::RemoveListAtSelectionAsSubAction(
       Result<EditorDOMPoint, nsresult> splitResult =
           extendedSelectionRanges
               .SplitTextAtEndBoundariesAndInlineAncestorsAtBothBoundaries(
-                  *this, aEditingHost);
+                  *this, BlockInlineCheck::UseHTMLDefaultStyle, aEditingHost);
       if (MOZ_UNLIKELY(splitResult.isErr())) {
         NS_WARNING(
             "AutoRangeArray::"
@@ -4504,7 +4615,7 @@ HTMLEditor::FormatBlockContainerWithTransaction(
   Result<EditorDOMPoint, nsresult> splitResult =
       aSelectionRanges
           .SplitTextAtEndBoundariesAndInlineAncestorsAtBothBoundaries(
-              *this, aEditingHost);
+              *this, BlockInlineCheck::UseHTMLDefaultStyle, aEditingHost);
   if (MOZ_UNLIKELY(splitResult.isErr())) {
     NS_WARNING(
         "AutoRangeArray::"
@@ -4534,7 +4645,8 @@ HTMLEditor::FormatBlockContainerWithTransaction(
   // If there is no visible and editable nodes in the edit targets, make an
   // empty block.
   // XXX Isn't this odd if there are only non-editable visible nodes?
-  if (HTMLEditUtils::IsEmptyOneHardLine(arrayOfContents)) {
+  if (HTMLEditUtils::IsEmptyOneHardLine(
+          arrayOfContents, BlockInlineCheck::UseHTMLDefaultStyle)) {
     if (NS_WARN_IF(aSelectionRanges.Ranges().IsEmpty())) {
       return Err(NS_ERROR_FAILURE);
     }
@@ -4552,7 +4664,8 @@ HTMLEditor::FormatBlockContainerWithTransaction(
       const RefPtr<Element> editableBlockElement =
           HTMLEditUtils::GetInclusiveAncestorElement(
               *pointToInsertBlock.ContainerAs<nsIContent>(),
-              HTMLEditUtils::ClosestEditableBlockElement);
+              HTMLEditUtils::ClosestEditableBlockElement,
+              BlockInlineCheck::UseHTMLDefaultStyle);
       if (!editableBlockElement) {
         NS_WARNING(
             "HTMLEditor::FormatBlockContainerWithTransaction() couldn't find "
@@ -4568,7 +4681,7 @@ HTMLEditor::FormatBlockContainerWithTransaction(
       // which is visually bad.
       if (nsCOMPtr<nsIContent> brContent = HTMLEditUtils::GetNextContent(
               pointToInsertBlock, {WalkTreeOption::IgnoreNonEditableNode},
-              &aEditingHost)) {
+              BlockInlineCheck::UseHTMLDefaultStyle, &aEditingHost)) {
         if (brContent && brContent->IsHTMLElement(nsGkAtoms::br)) {
           AutoEditorDOMPointChildInvalidator lockOffset(pointToInsertBlock);
           nsresult rv = DeleteNodeWithTransaction(*brContent);
@@ -4614,7 +4727,7 @@ HTMLEditor::FormatBlockContainerWithTransaction(
             pointToInsertBlock,
             {WalkTreeOption::IgnoreNonEditableNode,
              WalkTreeOption::StopAtBlockBoundary},
-            &aEditingHost)) {
+            BlockInlineCheck::UseHTMLDefaultStyle, &aEditingHost)) {
       if (maybeBRContent->IsHTMLElement(nsGkAtoms::br)) {
         AutoEditorDOMPointChildInvalidator lockOffset(pointToInsertBlock);
         nsresult rv = DeleteNodeWithTransaction(*maybeBRContent);
@@ -4687,7 +4800,8 @@ HTMLEditor::FormatBlockContainerWithTransaction(
   }
   if (&blockType == nsGkAtoms::normal || &blockType == nsGkAtoms::_empty) {
     Result<EditorDOMPoint, nsresult> removeBlockContainerElementsResult =
-        RemoveBlockContainerElementsWithTransaction(arrayOfContents);
+        RemoveBlockContainerElementsWithTransaction(
+            arrayOfContents, BlockInlineCheck::UseHTMLDefaultStyle);
     if (MOZ_UNLIKELY(removeBlockContainerElementsResult.isErr())) {
       NS_WARNING(
           "HTMLEditor::RemoveBlockContainerElementsWithTransaction() failed");
@@ -5013,7 +5127,8 @@ nsresult HTMLEditor::HandleCSSIndentAroundRanges(AutoRangeArray& aRanges,
     Element* const editableBlockElement =
         HTMLEditUtils::GetInclusiveAncestorElement(
             *atCaret.ContainerAs<nsIContent>(),
-            HTMLEditUtils::ClosestEditableBlockElement);
+            HTMLEditUtils::ClosestEditableBlockElement,
+            BlockInlineCheck::UseHTMLDefaultStyle);
     if (editableBlockElement &&
         HTMLEditUtils::IsListItem(editableBlockElement)) {
       arrayOfContents.AppendElement(*editableBlockElement);
@@ -5029,7 +5144,7 @@ nsresult HTMLEditor::HandleCSSIndentAroundRanges(AutoRangeArray& aRanges,
       Result<EditorDOMPoint, nsresult> splitResult =
           extendedRanges
               .SplitTextAtEndBoundariesAndInlineAncestorsAtBothBoundaries(
-                  *this, aEditingHost);
+                  *this, BlockInlineCheck::UseHTMLDefaultStyle, aEditingHost);
       if (MOZ_UNLIKELY(splitResult.isErr())) {
         NS_WARNING(
             "AutoRangeArray::"
@@ -5067,7 +5182,8 @@ nsresult HTMLEditor::HandleCSSIndentAroundRanges(AutoRangeArray& aRanges,
   // If there is no visible and editable nodes in the edit targets, make an
   // empty block.
   // XXX Isn't this odd if there are only non-editable visible nodes?
-  if (HTMLEditUtils::IsEmptyOneHardLine(arrayOfContents)) {
+  if (HTMLEditUtils::IsEmptyOneHardLine(
+          arrayOfContents, BlockInlineCheck::UseHTMLDefaultStyle)) {
     const EditorDOMPoint pointToInsertDivElement =
         pointToPutCaret.IsSet()
             ? std::move(pointToPutCaret)
@@ -5192,7 +5308,8 @@ nsresult HTMLEditor::HandleCSSIndentAroundRanges(AutoRangeArray& aRanges,
 
     // Not a list item.
 
-    if (HTMLEditUtils::IsBlockElement(content)) {
+    if (HTMLEditUtils::IsBlockElement(content,
+                                      BlockInlineCheck::UseHTMLDefaultStyle)) {
       Result<EditorDOMPoint, nsresult> pointToPutCaretOrError =
           ChangeMarginStart(MOZ_KnownLive(*content->AsElement()),
                             ChangeMargin::Increase, aEditingHost);
@@ -5333,7 +5450,7 @@ nsresult HTMLEditor::HandleHTMLIndentAroundRanges(AutoRangeArray& aRanges,
     Result<EditorDOMPoint, nsresult> splitResult =
         extendedRanges
             .SplitTextAtEndBoundariesAndInlineAncestorsAtBothBoundaries(
-                *this, aEditingHost);
+                *this, BlockInlineCheck::UseHTMLDefaultStyle, aEditingHost);
     if (MOZ_UNLIKELY(splitResult.isErr())) {
       NS_WARNING(
           "AutoRangeArray::"
@@ -5372,7 +5489,8 @@ nsresult HTMLEditor::HandleHTMLIndentAroundRanges(AutoRangeArray& aRanges,
   // If there is no visible and editable nodes in the edit targets, make an
   // empty block.
   // XXX Isn't this odd if there are only non-editable visible nodes?
-  if (HTMLEditUtils::IsEmptyOneHardLine(arrayOfContents)) {
+  if (HTMLEditUtils::IsEmptyOneHardLine(
+          arrayOfContents, BlockInlineCheck::UseHTMLDefaultStyle)) {
     const EditorDOMPoint pointToInsertBlockquoteElement =
         pointToPutCaret.IsSet()
             ? std::move(pointToPutCaret)
@@ -5930,7 +6048,8 @@ HTMLEditor::HandleOutdentAtSelectionInternal(const Element& aEditingHost) {
 
     // If we're using CSS and the node is a block element, check its start
     // margin whether it's indented with CSS.
-    if (useCSS && HTMLEditUtils::IsBlockElement(content)) {
+    if (useCSS && HTMLEditUtils::IsBlockElement(
+                      content, BlockInlineCheck::UseHTMLDefaultStyle)) {
       nsStaticAtom& marginProperty =
           MarginPropertyAtomForIndent(MOZ_KnownLive(content));
       if (NS_WARN_IF(Destroyed())) {
@@ -6270,20 +6389,20 @@ HTMLEditor::HandleOutdentAtSelectionInternal(const Element& aEditingHost) {
 Result<SplitRangeOffFromNodeResult, nsresult>
 HTMLEditor::RemoveBlockContainerElementWithTransactionBetween(
     Element& aBlockContainerElement, nsIContent& aStartOfRange,
-    nsIContent& aEndOfRange) {
+    nsIContent& aEndOfRange, BlockInlineCheck aBlockInlineCheck) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
   EditorDOMPoint pointToPutCaret;
   Result<SplitRangeOffFromNodeResult, nsresult> splitResult =
-      SplitRangeOffFromBlock(aBlockContainerElement, aStartOfRange,
-                             aEndOfRange);
+      SplitRangeOffFromElement(aBlockContainerElement, aStartOfRange,
+                               aEndOfRange);
   if (MOZ_UNLIKELY(splitResult.isErr())) {
     if (splitResult.inspectErr() == NS_ERROR_EDITOR_DESTROYED) {
-      NS_WARNING("HTMLEditor::SplitRangeOffFromBlock() failed");
+      NS_WARNING("HTMLEditor::SplitRangeOffFromElement() failed");
       return splitResult;
     }
     NS_WARNING(
-        "HTMLEditor::SplitRangeOffFromBlock() failed, but might be ignored");
+        "HTMLEditor::SplitRangeOffFromElement() failed, but might be ignored");
     return SplitRangeOffFromNodeResult(nullptr, nullptr, nullptr);
   }
   SplitRangeOffFromNodeResult unwrappedSplitResult = splitResult.unwrap();
@@ -6321,20 +6440,21 @@ HTMLEditor::RemoveBlockContainerElementWithTransactionBetween(
 }
 
 Result<SplitRangeOffFromNodeResult, nsresult>
-HTMLEditor::SplitRangeOffFromBlock(Element& aBlockElement,
-                                   nsIContent& aStartOfMiddleElement,
-                                   nsIContent& aEndOfMiddleElement) {
+HTMLEditor::SplitRangeOffFromElement(Element& aElementToSplit,
+                                     nsIContent& aStartOfMiddleElement,
+                                     nsIContent& aEndOfMiddleElement) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
   // aStartOfMiddleElement and aEndOfMiddleElement must be exclusive
-  // descendants of aBlockElement.
-  MOZ_ASSERT(EditorUtils::IsDescendantOf(aStartOfMiddleElement, aBlockElement));
-  MOZ_ASSERT(EditorUtils::IsDescendantOf(aEndOfMiddleElement, aBlockElement));
+  // descendants of aElementToSplit.
+  MOZ_ASSERT(
+      EditorUtils::IsDescendantOf(aStartOfMiddleElement, aElementToSplit));
+  MOZ_ASSERT(EditorUtils::IsDescendantOf(aEndOfMiddleElement, aElementToSplit));
 
   EditorDOMPoint pointToPutCaret;
   // Split at the start.
   Result<SplitNodeResult, nsresult> splitAtStartResult =
-      SplitNodeDeepWithTransaction(aBlockElement,
+      SplitNodeDeepWithTransaction(aElementToSplit,
                                    EditorDOMPoint(&aStartOfMiddleElement),
                                    SplitAtEdges::eDoNotCreateEmptyContainer);
   if (MOZ_UNLIKELY(splitAtStartResult.isErr())) {
@@ -6355,9 +6475,9 @@ HTMLEditor::SplitRangeOffFromBlock(Element& aBlockElement,
   Element* rightElement =
       splitAtStartResult.isOk() && splitAtStartResult.inspect().DidSplit()
           ? splitAtStartResult.inspect().GetNextContentAs<Element>()
-          : &aBlockElement;
+          : &aElementToSplit;
   // MOZ_KnownLive(rightElement) because it's grabbed by splitAtStartResult or
-  // aBlockElement whose lifetime is guaranteed by the caller.
+  // aElementToSplit whose lifetime is guaranteed by the caller.
   Result<SplitNodeResult, nsresult> splitAtEndResult =
       SplitNodeDeepWithTransaction(MOZ_KnownLive(*rightElement), atAfterEnd,
                                    SplitAtEdges::eDoNotCreateEmptyContainer);
@@ -6397,7 +6517,7 @@ HTMLEditor::SplitRangeOffFromBlock(Element& aBlockElement,
         splitAtEndResult.inspect().GetNextContent(),
         std::move(pointToPutCaret));
   }
-  return SplitRangeOffFromNodeResult(nullptr, &aBlockElement, nullptr,
+  return SplitRangeOffFromNodeResult(nullptr, &aElementToSplit, nullptr,
                                      std::move(pointToPutCaret));
 }
 
@@ -6408,9 +6528,9 @@ Result<SplitRangeOffFromNodeResult, nsresult> HTMLEditor::OutdentPartOfBlock(
   MOZ_ASSERT(IsEditActionDataAvailable());
 
   Result<SplitRangeOffFromNodeResult, nsresult> splitResult =
-      SplitRangeOffFromBlock(aBlockElement, aStartOfOutdent, aEndOfOutdent);
+      SplitRangeOffFromElement(aBlockElement, aStartOfOutdent, aEndOfOutdent);
   if (MOZ_UNLIKELY(splitResult.isErr())) {
-    NS_WARNING("HTMLEditor::SplitRangeOffFromBlock() failed");
+    NS_WARNING("HTMLEditor::SplitRangeOffFromElement() failed");
     return splitResult;
   }
 
@@ -6418,7 +6538,7 @@ Result<SplitRangeOffFromNodeResult, nsresult> HTMLEditor::OutdentPartOfBlock(
   Element* middleElement = unwrappedSplitResult.GetMiddleContentAs<Element>();
   if (MOZ_UNLIKELY(!middleElement)) {
     NS_WARNING(
-        "HTMLEditor::SplitRangeOffFromBlock() didn't return middle content");
+        "HTMLEditor::SplitRangeOffFromElement() didn't return middle content");
     unwrappedSplitResult.IgnoreCaretPointSuggestion();
     return Err(NS_ERROR_FAILURE);
   }
@@ -6870,7 +6990,7 @@ nsresult HTMLEditor::AlignContentsAtRanges(AutoRangeArray& aRanges,
     Result<EditorDOMPoint, nsresult> splitResult =
         extendedRanges
             .SplitTextAtEndBoundariesAndInlineAncestorsAtBothBoundaries(
-                *this, aEditingHost);
+                *this, BlockInlineCheck::UseHTMLDefaultStyle, aEditingHost);
     if (MOZ_UNLIKELY(splitResult.isErr())) {
       NS_WARNING(
           "AutoRangeArray::"
@@ -6912,7 +7032,9 @@ nsresult HTMLEditor::AlignContentsAtRanges(AutoRangeArray& aRanges,
   if (arrayOfContents.Length() == 1) {
     OwningNonNull<nsIContent>& content = arrayOfContents[0];
 
-    if (HTMLEditUtils::SupportsAlignAttr(content)) {
+    if (HTMLEditUtils::SupportsAlignAttr(content) &&
+        HTMLEditUtils::IsBlockElement(content,
+                                      BlockInlineCheck::UseHTMLDefaultStyle)) {
       // The node is a table element, an hr, a paragraph, a div or a section
       // header; in HTML 4, it can directly carry the ALIGN attribute and we
       // don't need to make a div! If we are in CSS mode, all the work is done
@@ -7454,7 +7576,14 @@ HTMLEditor::GetRangeExtendedToHardLineEdgesForBlockEditAction(
 
   // Is there any intervening visible white-space?  If so we can't push
   // selection past that, it would visibly change meaning of users selection.
-  WSRunScanner wsScannerAtEnd(&aEditingHost, endPoint);
+  WSRunScanner wsScannerAtEnd(
+      &aEditingHost, endPoint,
+      // We should refer only the default style of HTML because we need to wrap
+      // any elements with a specific HTML element.  So we should not refer
+      // actual style.  For example, we want to reformat parent HTML block
+      // element even if selected in a blocked phrase element or
+      // non-HTMLelement.
+      BlockInlineCheck::UseHTMLDefaultStyle);
   WSScanResult scanResultAtEnd =
       wsScannerAtEnd.ScanPreviousVisibleNodeOrBlockBoundaryFrom(endPoint);
   if (scanResultAtEnd.Failed()) {
@@ -7469,7 +7598,8 @@ HTMLEditor::GetRangeExtendedToHardLineEdgesForBlockEditAction(
       // endpoint is just after the close of a block.
       if (nsIContent* child = HTMLEditUtils::GetLastLeafContent(
               *wsScannerAtEnd.StartReasonOtherBlockElementPtr(),
-              {LeafNodeType::LeafNodeOrChildBlock})) {
+              {LeafNodeType::LeafNodeOrChildBlock},
+              BlockInlineCheck::UseHTMLDefaultStyle)) {
         newRange.SetEnd(EditorRawDOMPoint::After(*child));
       }
       // else block is empty - we can leave selection alone here, i think.
@@ -7477,7 +7607,7 @@ HTMLEditor::GetRangeExtendedToHardLineEdgesForBlockEditAction(
       // endpoint is just after start of this block
       if (nsIContent* child = HTMLEditUtils::GetPreviousContent(
               endPoint, {WalkTreeOption::IgnoreNonEditableNode},
-              &aEditingHost)) {
+              BlockInlineCheck::UseHTMLDefaultStyle, &aEditingHost)) {
         newRange.SetEnd(EditorRawDOMPoint::After(*child));
       }
       // else block is empty - we can leave selection alone here, i think.
@@ -7490,7 +7620,8 @@ HTMLEditor::GetRangeExtendedToHardLineEdgesForBlockEditAction(
 
   // Is there any intervening visible white-space?  If so we can't push
   // selection past that, it would visibly change meaning of users selection.
-  WSRunScanner wsScannerAtStart(&aEditingHost, startPoint);
+  WSRunScanner wsScannerAtStart(&aEditingHost, startPoint,
+                                BlockInlineCheck::UseHTMLDefaultStyle);
   WSScanResult scanResultAtStart =
       wsScannerAtStart.ScanNextVisibleNodeOrBlockBoundaryFrom(startPoint);
   if (scanResultAtStart.Failed()) {
@@ -7504,7 +7635,8 @@ HTMLEditor::GetRangeExtendedToHardLineEdgesForBlockEditAction(
       // startpoint is just before the start of a block.
       if (nsIContent* child = HTMLEditUtils::GetFirstLeafContent(
               *wsScannerAtStart.EndReasonOtherBlockElementPtr(),
-              {LeafNodeType::LeafNodeOrChildBlock})) {
+              {LeafNodeType::LeafNodeOrChildBlock},
+              BlockInlineCheck::UseHTMLDefaultStyle)) {
         newRange.SetStart(EditorRawDOMPoint(child));
       }
       // else block is empty - we can leave selection alone here, i think.
@@ -7512,7 +7644,7 @@ HTMLEditor::GetRangeExtendedToHardLineEdgesForBlockEditAction(
       // startpoint is just before end of this block
       if (nsIContent* child = HTMLEditUtils::GetNextContent(
               startPoint, {WalkTreeOption::IgnoreNonEditableNode},
-              &aEditingHost)) {
+              BlockInlineCheck::UseHTMLDefaultStyle, &aEditingHost)) {
         newRange.SetStart(EditorRawDOMPoint(child));
       }
       // else block is empty - we can leave selection alone here, i think.
@@ -7656,9 +7788,10 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::MaybeSplitElementsAtEveryBRElement(
     case EditSubAction::eIndent:
     case EditSubAction::eOutdent: {
       EditorDOMPoint pointToPutCaret;
-      for (int32_t i = aArrayOfContents.Length() - 1; i >= 0; i--) {
-        OwningNonNull<nsIContent>& content = aArrayOfContents[i];
-        if (HTMLEditUtils::IsInlineElement(content) &&
+      for (size_t index : Reversed(IntegerRange(aArrayOfContents.Length()))) {
+        OwningNonNull<nsIContent>& content = aArrayOfContents[index];
+        if (HTMLEditUtils::IsInlineContent(
+                content, BlockInlineCheck::UseHTMLDefaultStyle) &&
             HTMLEditUtils::IsContainerNode(content) && !content->IsText()) {
           AutoTArray<OwningNonNull<nsIContent>, 24> arrayOfInlineContents;
           // MOZ_KnownLive because 'aArrayOfContents' is guaranteed to keep it
@@ -7674,8 +7807,8 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::MaybeSplitElementsAtEveryBRElement(
             pointToPutCaret = splitResult.unwrap();
           }
           // Put these nodes in aArrayOfContents, replacing the current node
-          aArrayOfContents.RemoveElementAt(i);
-          aArrayOfContents.InsertElementsAt(i, arrayOfInlineContents);
+          aArrayOfContents.RemoveElementAt(index);
+          aArrayOfContents.InsertElementsAt(index, arrayOfInlineContents);
         }
       }
       return pointToPutCaret;
@@ -7686,8 +7819,9 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::MaybeSplitElementsAtEveryBRElement(
 }
 
 Result<EditorDOMPoint, nsresult>
-HTMLEditor::SplitParentInlineElementsAtRangeBoundaries(
-    RangeItem& aRangeItem, const Element& aEditingHost,
+HTMLEditor::SplitInlineAncestorsAtRangeBoundaries(
+    RangeItem& aRangeItem, BlockInlineCheck aBlockInlineCheck,
+    const Element& aEditingHost,
     const nsIContent* aAncestorLimiter /* = nullptr */) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
@@ -7696,8 +7830,8 @@ HTMLEditor::SplitParentInlineElementsAtRangeBoundaries(
       aRangeItem.mEndContainer->IsContent()) {
     nsCOMPtr<nsIContent> mostAncestorInlineContentAtEnd =
         HTMLEditUtils::GetMostDistantAncestorInlineElement(
-            *aRangeItem.mEndContainer->AsContent(), &aEditingHost,
-            aAncestorLimiter);
+            *aRangeItem.mEndContainer->AsContent(), aBlockInlineCheck,
+            &aEditingHost, aAncestorLimiter);
 
     if (mostAncestorInlineContentAtEnd) {
       Result<SplitNodeResult, nsresult> splitEndInlineResult =
@@ -7742,8 +7876,8 @@ HTMLEditor::SplitParentInlineElementsAtRangeBoundaries(
 
   nsCOMPtr<nsIContent> mostAncestorInlineContentAtStart =
       HTMLEditUtils::GetMostDistantAncestorInlineElement(
-          *aRangeItem.mStartContainer->AsContent(), &aEditingHost,
-          aAncestorLimiter);
+          *aRangeItem.mStartContainer->AsContent(), aBlockInlineCheck,
+          &aEditingHost, aAncestorLimiter);
 
   if (mostAncestorInlineContentAtStart) {
     Result<SplitNodeResult, nsresult> splitStartInlineResult =
@@ -7937,7 +8071,9 @@ HTMLEditor::HandleInsertParagraphInHeadingElement(
   MOZ_ASSERT(rightHeadingElement,
              "SplitNodeResult::GetNextContent() should return something if "
              "DidSplit() returns true");
-  if (!HTMLEditUtils::IsEmptyBlockElement(*rightHeadingElement, {})) {
+  if (!HTMLEditUtils::IsEmptyBlockElement(
+          *rightHeadingElement, {},
+          BlockInlineCheck::UseComputedDisplayOutsideStyle)) {
     return InsertParagraphResult(rightHeadingElement,
                                  EditorDOMPoint(rightHeadingElement, 0u));
   }
@@ -8267,13 +8403,14 @@ Result<SplitNodeResult, nsresult> HTMLEditor::HandleInsertParagraphInParagraph(
     //     moving to the caret, but I think that this could be handled in fewer
     //     cases than this.
     brElement = HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetPreviousContent(
-        pointToSplit, {WalkTreeOption::IgnoreNonEditableNode}, &aEditingHost));
+        pointToSplit, {WalkTreeOption::IgnoreNonEditableNode},
+        BlockInlineCheck::Unused, &aEditingHost));
     if (!brElement || HTMLEditUtils::IsInvisibleBRElement(*brElement) ||
         EditorUtils::IsPaddingBRElementForEmptyLastLine(*brElement)) {
       // is there a BR after it?
       brElement = HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetNextContent(
           pointToSplit, {WalkTreeOption::IgnoreNonEditableNode},
-          &aEditingHost));
+          BlockInlineCheck::Unused, &aEditingHost));
       if (!brElement || HTMLEditUtils::IsInvisibleBRElement(*brElement) ||
           EditorUtils::IsPaddingBRElementForEmptyLastLine(*brElement)) {
         // If insertParagraph does not create a new paragraph, default to
@@ -8395,7 +8532,8 @@ Result<SplitNodeResult, nsresult> HTMLEditor::SplitParagraphWithTransaction(
   // also behaves so.
   auto InsertBRElementIfEmptyBlockElement =
       [&](Element& aElement) MOZ_CAN_RUN_SCRIPT {
-        if (!HTMLEditUtils::IsBlockElement(aElement)) {
+        if (!HTMLEditUtils::IsBlockElement(
+                aElement, BlockInlineCheck::UseComputedDisplayStyle)) {
           return NS_OK;
         }
 
@@ -8442,7 +8580,9 @@ Result<SplitNodeResult, nsresult> HTMLEditor::SplitParagraphWithTransaction(
           for (Element* maybeDeepestInlineContainer =
                    Element::FromNodeOrNull(aBlockElement.GetFirstChild());
                maybeDeepestInlineContainer &&
-               HTMLEditUtils::IsInlineElement(*maybeDeepestInlineContainer) &&
+               HTMLEditUtils::IsInlineContent(
+                   *maybeDeepestInlineContainer,
+                   BlockInlineCheck::UseComputedDisplayStyle) &&
                HTMLEditUtils::IsContainerNode(*maybeDeepestInlineContainer);
                maybeDeepestInlineContainer =
                    maybeDeepestInlineContainer->GetFirstElementChild()) {
@@ -8501,7 +8641,8 @@ Result<SplitNodeResult, nsresult> HTMLEditor::SplitParagraphWithTransaction(
 
   // Let's put caret at start of the first leaf container.
   nsIContent* child = HTMLEditUtils::GetFirstLeafContent(
-      *rightDivOrParagraphElement, {LeafNodeType::LeafNodeOrChildBlock});
+      *rightDivOrParagraphElement, {LeafNodeType::LeafNodeOrChildBlock},
+      BlockInlineCheck::UseComputedDisplayStyle);
   if (MOZ_UNLIKELY(!child)) {
     return SplitNodeResult(std::move(unwrappedSplitDivOrPResult),
                            EditorDOMPoint(rightDivOrParagraphElement, 0u));
@@ -8522,7 +8663,9 @@ HTMLEditor::HandleInsertParagraphInListItemElement(
 
   // If aListItemElement is empty, then we want to outdent its content.
   if (&aEditingHost != aListItemElement.GetParentElement() &&
-      HTMLEditUtils::IsEmptyBlockElement(aListItemElement, {})) {
+      HTMLEditUtils::IsEmptyBlockElement(
+          aListItemElement, {},
+          BlockInlineCheck::UseComputedDisplayOutsideStyle)) {
     RefPtr<Element> leftListElement = aListItemElement.GetParentElement();
     // If the given list item element is not the last list item element of
     // its parent nor not followed by sub list elements, split the parent
@@ -8730,7 +8873,8 @@ HTMLEditor::HandleInsertParagraphInListItemElement(
   // the element is proper position.
   WSScanResult forwardScanFromStartOfListItemResult =
       WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
-          &aEditingHost, EditorRawDOMPoint(&rightListItemElement, 0u));
+          &aEditingHost, EditorRawDOMPoint(&rightListItemElement, 0u),
+          BlockInlineCheck::UseComputedDisplayStyle);
   if (MOZ_UNLIKELY(forwardScanFromStartOfListItemResult.Failed())) {
     NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
     return Err(NS_ERROR_FAILURE);
@@ -8862,7 +9006,8 @@ HTMLEditor::WrapContentsInBlockquoteElementsWithTransaction(
 
 Result<EditorDOMPoint, nsresult>
 HTMLEditor::RemoveBlockContainerElementsWithTransaction(
-    const nsTArray<OwningNonNull<nsIContent>>& aArrayOfContents) {
+    const nsTArray<OwningNonNull<nsIContent>>& aArrayOfContents,
+    BlockInlineCheck aBlockInlineCheck) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
   // Intent of this routine is to be used for converting to/from headers,
@@ -8871,14 +9016,14 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
   RefPtr<Element> blockElement;
   nsCOMPtr<nsIContent> firstContent, lastContent;
   EditorDOMPoint pointToPutCaret;
-  for (auto& content : aArrayOfContents) {
+  for (const auto& content : aArrayOfContents) {
     // If curNode is an <address>, <p>, <hn>, or <pre>, remove it.
     if (HTMLEditUtils::IsFormatNode(content)) {
       // Process any partial progress saved
       if (blockElement) {
         Result<SplitRangeOffFromNodeResult, nsresult> unwrapBlockElementResult =
             RemoveBlockContainerElementWithTransactionBetween(
-                *blockElement, *firstContent, *lastContent);
+                *blockElement, *firstContent, *lastContent, aBlockInlineCheck);
         if (MOZ_UNLIKELY(unwrapBlockElementResult.isErr())) {
           NS_WARNING(
               "HTMLEditor::RemoveBlockContainerElementWithTransactionBetween() "
@@ -8915,7 +9060,7 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
       if (blockElement) {
         Result<SplitRangeOffFromNodeResult, nsresult> unwrapBlockElementResult =
             RemoveBlockContainerElementWithTransactionBetween(
-                *blockElement, *firstContent, *lastContent);
+                *blockElement, *firstContent, *lastContent, aBlockInlineCheck);
         if (MOZ_UNLIKELY(unwrapBlockElementResult.isErr())) {
           NS_WARNING(
               "HTMLEditor::RemoveBlockContainerElementWithTransactionBetween() "
@@ -8933,7 +9078,8 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
       AutoTArray<OwningNonNull<nsIContent>, 24> childContents;
       HTMLEditUtils::CollectAllChildren(*content, childContents);
       Result<EditorDOMPoint, nsresult> removeBlockContainerElementsResult =
-          RemoveBlockContainerElementsWithTransaction(childContents);
+          RemoveBlockContainerElementsWithTransaction(childContents,
+                                                      aBlockInlineCheck);
       if (MOZ_UNLIKELY(removeBlockContainerElementsResult.isErr())) {
         NS_WARNING(
             "HTMLEditor::RemoveBlockContainerElementsWithTransaction() failed");
@@ -8945,7 +9091,7 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
       continue;
     }
 
-    if (HTMLEditUtils::IsInlineElement(content)) {
+    if (HTMLEditUtils::IsInlineContent(content, aBlockInlineCheck)) {
       if (blockElement) {
         // If so, is this node a descendant?
         if (EditorUtils::IsDescendantOf(*content, *blockElement)) {
@@ -8958,7 +9104,7 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
         // contains [firstContent - lastContent].
         Result<SplitRangeOffFromNodeResult, nsresult> unwrapBlockElementResult =
             RemoveBlockContainerElementWithTransactionBetween(
-                *blockElement, *firstContent, *lastContent);
+                *blockElement, *firstContent, *lastContent, aBlockInlineCheck);
         if (MOZ_UNLIKELY(unwrapBlockElementResult.isErr())) {
           NS_WARNING(
               "HTMLEditor::RemoveBlockContainerElementWithTransactionBetween() "
@@ -8971,7 +9117,8 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
         // Fall out and handle content
       }
       blockElement = HTMLEditUtils::GetAncestorElement(
-          content, HTMLEditUtils::ClosestEditableBlockElement);
+          content, HTMLEditUtils::ClosestEditableBlockElement,
+          aBlockInlineCheck);
       if (!blockElement || !HTMLEditUtils::IsFormatNode(blockElement) ||
           !HTMLEditUtils::IsRemovableNode(*blockElement)) {
         // Not a block kind that we care about.
@@ -8987,7 +9134,7 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
       // any partial progress saved.
       Result<SplitRangeOffFromNodeResult, nsresult> unwrapBlockElementResult =
           RemoveBlockContainerElementWithTransactionBetween(
-              *blockElement, *firstContent, *lastContent);
+              *blockElement, *firstContent, *lastContent, aBlockInlineCheck);
       if (MOZ_UNLIKELY(unwrapBlockElementResult.isErr())) {
         NS_WARNING(
             "HTMLEditor::RemoveBlockContainerElementWithTransactionBetween() "
@@ -9004,7 +9151,7 @@ HTMLEditor::RemoveBlockContainerElementsWithTransaction(
   if (blockElement) {
     Result<SplitRangeOffFromNodeResult, nsresult> unwrapBlockElementResult =
         RemoveBlockContainerElementWithTransactionBetween(
-            *blockElement, *firstContent, *lastContent);
+            *blockElement, *firstContent, *lastContent, aBlockInlineCheck);
     if (MOZ_UNLIKELY(unwrapBlockElementResult.isErr())) {
       NS_WARNING(
           "HTMLEditor::RemoveBlockContainerElementWithTransactionBetween() "
@@ -9043,7 +9190,8 @@ HTMLEditor::CreateOrChangeBlockContainerElement(
     // Is it already the right kind of block, or an uneditable block?
     if (content->IsHTMLElement(&aBlockTag) ||
         (!EditorUtils::IsEditableContent(content, EditorType::HTML) &&
-         HTMLEditUtils::IsBlockElement(content))) {
+         HTMLEditUtils::IsBlockElement(
+             content, BlockInlineCheck::UseHTMLDefaultStyle))) {
       // Forget any previous block used for previous inline nodes
       curBlock = nullptr;
       // Do nothing to this block
@@ -9190,11 +9338,12 @@ HTMLEditor::CreateOrChangeBlockContainerElement(
       continue;
     }
 
-    if (HTMLEditUtils::IsInlineElement(content)) {
+    if (HTMLEditUtils::IsInlineContent(content,
+                                       BlockInlineCheck::UseHTMLDefaultStyle)) {
       // If content is inline, pull it into curBlock.  Note: it's assumed that
       // consecutive inline nodes in aNodeArray are actually members of the
       // same block parent.  This happens to be true now as a side effect of
-      // how aNodeArray is contructed, but some additional logic should be
+      // how aNodeArray is constructed, but some additional logic should be
       // added here if that should change
       //
       // If content is a non editable, drop it if we are going to <pre>.
@@ -9357,7 +9506,7 @@ HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction(
             splitPoint,
             {WalkTreeOption::IgnoreNonEditableNode,
              WalkTreeOption::StopAtBlockBoundary},
-            &aEditingHost)) {
+            BlockInlineCheck::UseComputedDisplayOutsideStyle, &aEditingHost)) {
       if (maybeBRContent->IsHTMLElement(nsGkAtoms::br) &&
           splitPoint.GetChild()) {
         // Making use of html structure... if next node after where we are
@@ -9366,7 +9515,9 @@ HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction(
         if (nsIContent* nextEditableSibling = HTMLEditUtils::GetNextSibling(
                 *splitPoint.GetChild(),
                 {WalkTreeOption::IgnoreNonEditableNode})) {
-          if (!HTMLEditUtils::IsBlockElement(*nextEditableSibling)) {
+          if (!HTMLEditUtils::IsBlockElement(
+                  *nextEditableSibling,
+                  BlockInlineCheck::UseComputedDisplayOutsideStyle)) {
             AutoEditorDOMPointChildInvalidator lockOffset(splitPoint);
             nsresult rv = DeleteNodeWithTransaction(*maybeBRContent);
             if (NS_FAILED(rv)) {
@@ -9552,7 +9703,9 @@ nsresult HTMLEditor::GetInlineStyles(
     };
     for (Element* const inclusiveAncestor :
          aElement.InclusiveAncestorsOfType<Element>()) {
-      if (HTMLEditUtils::IsBlockElement(*inclusiveAncestor) ||
+      if (HTMLEditUtils::IsBlockElement(
+              *inclusiveAncestor,
+              BlockInlineCheck::UseComputedDisplayOutsideStyle) ||
           (givenElementIsEditable &&
            !HTMLEditUtils::IsSimplyEditableNode(*inclusiveAncestor))) {
         break;
@@ -9835,7 +9988,7 @@ void HTMLEditor::SetSelectionInterlinePosition() {
                 atCaret,
                 {WalkTreeOption::IgnoreNonEditableNode,
                  WalkTreeOption::StopAtBlockBoundary},
-                editingHost)) {
+                BlockInlineCheck::UseComputedDisplayStyle, editingHost)) {
       if (previousEditableContentInBlock->IsHTMLElement(nsGkAtoms::br)) {
         DebugOnly<nsresult> rvIgnored = SelectionRef().SetInterlinePosition(
             InterlinePosition::StartOfNextLine);
@@ -9859,7 +10012,9 @@ void HTMLEditor::SetSelectionInterlinePosition() {
   if (nsIContent* previousEditableContentInBlockAtCaret =
           HTMLEditUtils::GetPreviousSibling(
               *atCaret.GetChild(), {WalkTreeOption::IgnoreNonEditableNode})) {
-    if (HTMLEditUtils::IsBlockElement(*previousEditableContentInBlockAtCaret)) {
+    if (HTMLEditUtils::IsBlockElement(
+            *previousEditableContentInBlockAtCaret,
+            BlockInlineCheck::UseComputedDisplayStyle)) {
       DebugOnly<nsresult> rvIgnored = SelectionRef().SetInterlinePosition(
           InterlinePosition::StartOfNextLine);
       NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
@@ -9876,7 +10031,9 @@ void HTMLEditor::SetSelectionInterlinePosition() {
   if (nsIContent* nextEditableContentInBlockAtCaret =
           HTMLEditUtils::GetNextSibling(
               *atCaret.GetChild(), {WalkTreeOption::IgnoreNonEditableNode})) {
-    if (HTMLEditUtils::IsBlockElement(*nextEditableContentInBlockAtCaret)) {
+    if (HTMLEditUtils::IsBlockElement(
+            *nextEditableContentInBlockAtCaret,
+            BlockInlineCheck::UseComputedDisplayStyle)) {
       DebugOnly<nsresult> rvIgnored =
           SelectionRef().SetInterlinePosition(InterlinePosition::EndOfLine);
       NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
@@ -9912,7 +10069,8 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
   if (Element* const editableBlockElement =
           HTMLEditUtils::GetInclusiveAncestorElement(
               *point.ContainerAs<nsIContent>(),
-              HTMLEditUtils::ClosestEditableBlockElement)) {
+              HTMLEditUtils::ClosestEditableBlockElement,
+              BlockInlineCheck::UseComputedDisplayStyle)) {
     if (editableBlockElement &&
         HTMLEditUtils::IsEmptyNode(
             *editableBlockElement,
@@ -9973,17 +10131,20 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
 
   if (nsCOMPtr<nsIContent> previousEditableContent =
           HTMLEditUtils::GetPreviousContent(
-              point, {WalkTreeOption::IgnoreNonEditableNode}, editingHost)) {
+              point, {WalkTreeOption::IgnoreNonEditableNode},
+              BlockInlineCheck::UseComputedDisplayStyle, editingHost)) {
     // If caret and previous editable content are in same block element
     // (even if it's a non-editable element), we should put a padding <br>
     // element at end of the block.
     const Element* const blockElementContainingCaret =
         HTMLEditUtils::GetInclusiveAncestorElement(
             *point.ContainerAs<nsIContent>(),
-            HTMLEditUtils::ClosestBlockElement);
+            HTMLEditUtils::ClosestBlockElement,
+            BlockInlineCheck::UseComputedDisplayStyle);
     const Element* const blockElementContainingPreviousEditableContent =
-        HTMLEditUtils::GetAncestorElement(*previousEditableContent,
-                                          HTMLEditUtils::ClosestBlockElement);
+        HTMLEditUtils::GetAncestorElement(
+            *previousEditableContent, HTMLEditUtils::ClosestBlockElement,
+            BlockInlineCheck::UseComputedDisplayStyle);
     // If previous editable content of caret is in same block and a `<br>`
     // element, we need to adjust interline position.
     if (blockElementContainingCaret &&
@@ -10023,6 +10184,7 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
                        *previousEditableContent,
                        {WalkTreeOption::IgnoreNonEditableNode,
                         WalkTreeOption::StopAtBlockBoundary},
+                       BlockInlineCheck::UseComputedDisplayStyle,
                        editingHost)) {
         if (EditorUtils::IsPaddingBRElementForEmptyLastLine(
                 *nextEditableContentInBlock)) {
@@ -10046,7 +10208,7 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
               point,
               {WalkTreeOption::IgnoreNonEditableNode,
                WalkTreeOption::StopAtBlockBoundary},
-              editingHost)) {
+              BlockInlineCheck::UseComputedDisplayStyle, editingHost)) {
     if (previousEditableContentInBlock->IsHTMLElement(nsGkAtoms::br) ||
         previousEditableContentInBlock->IsText() ||
         HTMLEditUtils::IsImage(previousEditableContentInBlock) ||
@@ -10057,11 +10219,11 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
 
   // If next editable content in same block is `<br>`, text node, `<img>` or
   // `<hr>`, current caret position is fine.
-  if (nsIContent* nextEditableContentInBlock =
-          HTMLEditUtils::GetNextContent(point,
-                                        {WalkTreeOption::IgnoreNonEditableNode,
-                                         WalkTreeOption::StopAtBlockBoundary},
-                                        editingHost)) {
+  if (nsIContent* nextEditableContentInBlock = HTMLEditUtils::GetNextContent(
+          point,
+          {WalkTreeOption::IgnoreNonEditableNode,
+           WalkTreeOption::StopAtBlockBoundary},
+          BlockInlineCheck::UseComputedDisplayStyle, editingHost)) {
     if (nextEditableContentInBlock->IsText() ||
         nextEditableContentInBlock->IsAnyOfHTMLElements(
             nsGkAtoms::br, nsGkAtoms::img, nsGkAtoms::hr)) {
@@ -10154,7 +10316,8 @@ nsresult HTMLEditor::RemoveEmptyNodesIn(const EditorDOMRange& aRange) {
       }
       EmptyCheckOptions options = {EmptyCheckOption::TreatListItemAsVisible,
                                    EmptyCheckOption::TreatTableCellAsVisible};
-      if (!HTMLEditUtils::IsBlockElement(*content)) {
+      if (!HTMLEditUtils::IsBlockElement(
+              *content, BlockInlineCheck::UseComputedDisplayStyle)) {
         options += EmptyCheckOption::TreatSingleBRElementAsVisible;
       }
       if (!HTMLEditUtils::IsEmptyNode(*content, options)) {
@@ -10345,9 +10508,9 @@ nsresult HTMLEditor::LiftUpListItemElement(
 
   // if it's first or last list item, don't need to split the list
   // otherwise we do.
-  bool isFirstListItem = HTMLEditUtils::IsFirstChild(
+  const bool isFirstListItem = HTMLEditUtils::IsFirstChild(
       aListItemElement, {WalkTreeOption::IgnoreNonEditableNode});
-  bool isLastListItem = HTMLEditUtils::IsLastChild(
+  const bool isLastListItem = HTMLEditUtils::IsLastChild(
       aListItemElement, {WalkTreeOption::IgnoreNonEditableNode});
 
   Element* leftListElement = aListItemElement.GetParentElement();
@@ -10613,7 +10776,8 @@ nsresult HTMLEditor::InsertPaddingBRElementForEmptyLastLineIfNeeded(
     Element& aElement) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  if (!HTMLEditUtils::IsBlockElement(aElement)) {
+  if (!HTMLEditUtils::IsBlockElement(
+          aElement, BlockInlineCheck::UseComputedDisplayStyle)) {
     return NS_OK;
   }
 
@@ -10741,7 +10905,8 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::RemoveAlignFromDescendants(
       continue;
     }
 
-    if (!HTMLEditUtils::IsBlockElement(*content) &&
+    if (!HTMLEditUtils::IsBlockElement(*content,
+                                       BlockInlineCheck::UseHTMLDefaultStyle) &&
         !content->IsHTMLElement(nsGkAtoms::hr)) {
       continue;
     }
@@ -10824,7 +10989,8 @@ HTMLEditor::EnsureHardLineBeginsWithFirstChildOf(
     return CreateElementResult::NotHandled();
   }
 
-  if (HTMLEditUtils::IsBlockElement(*firstEditableChild) ||
+  if (HTMLEditUtils::IsBlockElement(
+          *firstEditableChild, BlockInlineCheck::UseComputedDisplayStyle) ||
       firstEditableChild->IsHTMLElement(nsGkAtoms::br)) {
     return CreateElementResult::NotHandled();
   }
@@ -10835,7 +11001,9 @@ HTMLEditor::EnsureHardLineBeginsWithFirstChildOf(
     return CreateElementResult::NotHandled();
   }
 
-  if (HTMLEditUtils::IsBlockElement(*previousEditableContent) ||
+  if (HTMLEditUtils::IsBlockElement(
+          *previousEditableContent,
+          BlockInlineCheck::UseComputedDisplayStyle) ||
       previousEditableContent->IsHTMLElement(nsGkAtoms::br)) {
     return CreateElementResult::NotHandled();
   }
@@ -10859,7 +11027,8 @@ HTMLEditor::EnsureHardLineEndsWithLastChildOf(
     return CreateElementResult::NotHandled();
   }
 
-  if (HTMLEditUtils::IsBlockElement(*firstEditableContent) ||
+  if (HTMLEditUtils::IsBlockElement(
+          *firstEditableContent, BlockInlineCheck::UseComputedDisplayStyle) ||
       firstEditableContent->IsHTMLElement(nsGkAtoms::br)) {
     return CreateElementResult::NotHandled();
   }
@@ -10870,7 +11039,8 @@ HTMLEditor::EnsureHardLineEndsWithLastChildOf(
     return CreateElementResult::NotHandled();
   }
 
-  if (HTMLEditUtils::IsBlockElement(*nextEditableContent) ||
+  if (HTMLEditUtils::IsBlockElement(
+          *nextEditableContent, BlockInlineCheck::UseComputedDisplayStyle) ||
       nextEditableContent->IsHTMLElement(nsGkAtoms::br)) {
     return CreateElementResult::NotHandled();
   }
@@ -10887,7 +11057,8 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::SetBlockElementAlign(
     Element& aBlockOrHRElement, const nsAString& aAlignType,
     EditTarget aEditTarget) {
   MOZ_ASSERT(IsEditActionDataAvailable());
-  MOZ_ASSERT(HTMLEditUtils::IsBlockElement(aBlockOrHRElement) ||
+  MOZ_ASSERT(HTMLEditUtils::IsBlockElement(
+                 aBlockOrHRElement, BlockInlineCheck::UseHTMLDefaultStyle) ||
              aBlockOrHRElement.IsHTMLElement(nsGkAtoms::hr));
   MOZ_ASSERT(IsCSSEnabled() ||
              HTMLEditUtils::SupportsAlignAttr(aBlockOrHRElement));
@@ -11211,7 +11382,7 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
     Result<EditorDOMPoint, nsresult> splitResult =
         extendedSelectionRanges
             .SplitTextAtEndBoundariesAndInlineAncestorsAtBothBoundaries(
-                *this, aEditingHost);
+                *this, BlockInlineCheck::UseHTMLDefaultStyle, aEditingHost);
     if (MOZ_UNLIKELY(splitResult.isErr())) {
       NS_WARNING(
           "AutoRangeArray::"
@@ -11258,7 +11429,8 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
   // If there is no visible and editable nodes in the edit targets, make an
   // empty block.
   // XXX Isn't this odd if there are only non-editable visible nodes?
-  if (HTMLEditUtils::IsEmptyOneHardLine(arrayOfContents)) {
+  if (HTMLEditUtils::IsEmptyOneHardLine(
+          arrayOfContents, BlockInlineCheck::UseHTMLDefaultStyle)) {
     const auto atCaret =
         EditorBase::GetFirstSelectionStartPoint<EditorDOMPoint>();
     if (NS_WARN_IF(!atCaret.IsSet())) {

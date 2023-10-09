@@ -211,6 +211,7 @@ nsStyleFont::nsStyleFont(const nsStyleFont& aSrc)
       mFontSizeKeyword(aSrc.mFontSizeKeyword),
       mFontPalette(aSrc.mFontPalette),
       mMathDepth(aSrc.mMathDepth),
+      mLineHeight(aSrc.mLineHeight),
       mMathVariant(aSrc.mMathVariant),
       mMathStyle(aSrc.mMathStyle),
       mMinFontSizeRatio(aSrc.mMinFontSizeRatio),
@@ -239,6 +240,7 @@ nsStyleFont::nsStyleFont(const Document& aDocument)
       mFontSizeKeyword(StyleFontSizeKeyword::Medium),
       mFontPalette(StyleFontPalette::Normal()),
       mMathDepth(0),
+      mLineHeight(StyleLineHeight::Normal()),
       mMathVariant(StyleMathVariant::None),
       mMathStyle(StyleMathStyle::Normal),
       mXTextScale(InitialTextScale(aDocument)),
@@ -265,7 +267,8 @@ nsChangeHint nsStyleFont::CalcDifference(const nsStyleFont& aNewData) const {
       mExplicitLanguage != aNewData.mExplicitLanguage ||
       mMathVariant != aNewData.mMathVariant ||
       mMathStyle != aNewData.mMathStyle ||
-      mMinFontSizeRatio != aNewData.mMinFontSizeRatio) {
+      mMinFontSizeRatio != aNewData.mMinFontSizeRatio ||
+      mLineHeight != aNewData.mLineHeight) {
     return NS_STYLE_HINT_REFLOW;
   }
 
@@ -585,6 +588,18 @@ nsChangeHint nsStyleOutline::CalcDifference(
   return nsChangeHint(0);
 }
 
+nsSize nsStyleOutline::EffectiveOffsetFor(const nsRect& aRect) const {
+  const nscoord offset = mOutlineOffset.ToAppUnits();
+
+  if (offset >= 0) {
+    // Fast path for non-negative offset values
+    return nsSize(offset, offset);
+  }
+
+  return nsSize(std::max(offset, -(aRect.Width() / 2)),
+                std::max(offset, -(aRect.Height() / 2)));
+}
+
 // --------------------
 // nsStyleList
 //
@@ -752,7 +767,7 @@ using SVGPaintFallback = StyleGenericSVGPaintFallback<StyleColor>;
 // nsStyleSVG
 //
 nsStyleSVG::nsStyleSVG()
-    : mFill{StyleSVGPaintKind::Color(StyleColor::BLACK),
+    : mFill{StyleSVGPaintKind::Color(StyleColor::Black()),
             SVGPaintFallback::Unset()},
       mStroke{StyleSVGPaintKind::None(), SVGPaintFallback::Unset()},
       mMarkerEnd(StyleUrlOrNone::None()),
@@ -899,9 +914,9 @@ nsStyleSVGReset::nsStyleSVGReset()
       mR(NonNegativeLengthPercentage::Zero()),
       mMask(nsStyleImageLayers::LayerType::Mask),
       mClipPath(StyleClipPath::None()),
-      mStopColor(StyleColor::BLACK),
-      mFloodColor(StyleColor::BLACK),
-      mLightingColor(StyleColor::WHITE),
+      mStopColor(StyleColor::Black()),
+      mFloodColor(StyleColor::Black()),
+      mLightingColor(StyleColor::White()),
       mStopOpacity(1.0f),
       mFloodOpacity(1.0f),
       mVectorEffect(StyleVectorEffect::None),
@@ -1425,58 +1440,6 @@ bool StyleGradient::IsOpaque() const {
   return GradientItemsAreOpaque(AsConic().items.AsSpan());
 }
 
-static int32_t ConvertToPixelCoord(const StyleNumberOrPercentage& aCoord,
-                                   int32_t aPercentScale) {
-  double pixelValue;
-  if (aCoord.IsNumber()) {
-    pixelValue = aCoord.AsNumber();
-  } else {
-    MOZ_ASSERT(aCoord.IsPercentage());
-    pixelValue = aCoord.AsPercentage()._0 * aPercentScale;
-  }
-  MOZ_ASSERT(pixelValue >= 0, "we ensured non-negative while parsing");
-  pixelValue = std::min(pixelValue, double(INT32_MAX));  // avoid overflow
-  return NS_lround(pixelValue);
-}
-
-template <>
-Maybe<StyleImage::ActualCropRect> StyleImage::ComputeActualCropRect() const {
-  MOZ_ASSERT(IsRect(),
-             "This function is designed to be used only image-rect images");
-
-  imgRequestProxy* req = GetImageRequest();
-  if (!req) {
-    return Nothing();
-  }
-
-  nsCOMPtr<imgIContainer> imageContainer;
-  req->GetImage(getter_AddRefs(imageContainer));
-  if (!imageContainer) {
-    return Nothing();
-  }
-
-  nsIntSize imageSize;
-  imageContainer->GetWidth(&imageSize.width);
-  imageContainer->GetHeight(&imageSize.height);
-  if (imageSize.width <= 0 || imageSize.height <= 0) {
-    return Nothing();
-  }
-
-  const auto& rect = AsRect();
-
-  int32_t left = ConvertToPixelCoord(rect->left, imageSize.width);
-  int32_t top = ConvertToPixelCoord(rect->top, imageSize.height);
-  int32_t right = ConvertToPixelCoord(rect->right, imageSize.width);
-  int32_t bottom = ConvertToPixelCoord(rect->bottom, imageSize.height);
-
-  // IntersectRect() returns an empty rect if we get negative width or height
-  nsIntRect cropRect(left, top, right - left, bottom - top);
-  nsIntRect imageRect(nsIntPoint(0, 0), imageSize);
-  auto finalRect = imageRect.Intersect(cropRect);
-  bool isEntireImage = finalRect.IsEqualInterior(imageRect);
-  return Some(ActualCropRect{finalRect, isEntireImage});
-}
-
 template <>
 bool StyleImage::IsOpaque() const {
   if (IsImageSet()) {
@@ -1502,19 +1465,7 @@ bool StyleImage::IsOpaque() const {
   GetImageRequest()->GetImage(getter_AddRefs(imageContainer));
   MOZ_ASSERT(imageContainer, "IsComplete() said image container is ready");
 
-  // Check if the crop region of the image is opaque.
-  if (imageContainer->WillDrawOpaqueNow()) {
-    if (!IsRect()) {
-      return true;
-    }
-
-    // Must make sure if the crop rect contains at least a pixel.
-    // XXX Is this optimization worth it? Maybe I should just return false.
-    auto croprect = ComputeActualCropRect();
-    return croprect && !croprect->mRect.IsEmpty();
-  }
-
-  return false;
+  return imageContainer->WillDrawOpaqueNow();
 }
 
 template <>
@@ -1525,8 +1476,7 @@ bool StyleImage::IsComplete() const {
     case Tag::Gradient:
     case Tag::Element:
       return true;
-    case Tag::Url:
-    case Tag::Rect: {
+    case Tag::Url: {
       if (!IsResolved()) {
         return false;
       }
@@ -1557,8 +1507,7 @@ bool StyleImage::IsSizeAvailable() const {
     case Tag::Gradient:
     case Tag::Element:
       return true;
-    case Tag::Url:
-    case Tag::Rect: {
+    case Tag::Url: {
       imgRequestProxy* req = GetImageRequest();
       if (!req) {
         return false;
@@ -2037,7 +1986,7 @@ nsChangeHint nsStyleImageLayers::Layer::CalcDifference(
 
 nsStyleBackground::nsStyleBackground()
     : mImage(nsStyleImageLayers::LayerType::Background),
-      mBackgroundColor(StyleColor::TRANSPARENT) {
+      mBackgroundColor(StyleColor::Transparent()) {
   MOZ_COUNT_CTOR(nsStyleBackground);
 }
 
@@ -2175,7 +2124,7 @@ nsStyleDisplay::nsStyleDisplay()
                       StyleScrollSnapStrictness::None},
       mBackfaceVisibility(StyleBackfaceVisibility::Visible),
       mTransformStyle(StyleTransformStyle::Flat),
-      mTransformBox(StyleGeometryBox::BorderBox),
+      mTransformBox(StyleTransformBox::ViewBox),
       mRotate(StyleRotate::None()),
       mTranslate(StyleTranslate::None()),
       mScale(StyleScale::None()),
@@ -2899,7 +2848,6 @@ nsStyleText::nsStyleText(const Document& aDocument)
       mTabSize(StyleNonNegativeLengthOrNumber::Number(8.f)),
       mWordSpacing(LengthPercentage::Zero()),
       mLetterSpacing({0.}),
-      mLineHeight(StyleLineHeight::Normal()),
       mTextIndent(LengthPercentage::Zero()),
       mTextUnderlineOffset(LengthPercentageOrAuto::Auto()),
       mTextDecorationSkipInk(StyleTextDecorationSkipInk::Auto),
@@ -2939,7 +2887,6 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
       mTabSize(aSource.mTabSize),
       mWordSpacing(aSource.mWordSpacing),
       mLetterSpacing(aSource.mLetterSpacing),
-      mLineHeight(aSource.mLineHeight),
       mTextIndent(aSource.mTextIndent),
       mTextUnderlineOffset(aSource.mTextUnderlineOffset),
       mTextDecorationSkipInk(aSource.mTextDecorationSkipInk),
@@ -2948,7 +2895,8 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
       mTextShadow(aSource.mTextShadow),
       mTextEmphasisStyle(aSource.mTextEmphasisStyle),
       mHyphenateCharacter(aSource.mHyphenateCharacter),
-      mWebkitTextSecurity(aSource.mWebkitTextSecurity) {
+      mWebkitTextSecurity(aSource.mWebkitTextSecurity),
+      mTextWrap(aSource.mTextWrap) {
   MOZ_COUNT_CTOR(nsStyleText);
 }
 
@@ -2976,13 +2924,13 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aNewData) const {
       (mRubyPosition != aNewData.mRubyPosition) ||
       (mTextSizeAdjust != aNewData.mTextSizeAdjust) ||
       (mLetterSpacing != aNewData.mLetterSpacing) ||
-      (mLineHeight != aNewData.mLineHeight) ||
       (mTextIndent != aNewData.mTextIndent) ||
       (mTextJustify != aNewData.mTextJustify) ||
       (mWordSpacing != aNewData.mWordSpacing) ||
       (mTabSize != aNewData.mTabSize) ||
       (mHyphenateCharacter != aNewData.mHyphenateCharacter) ||
-      (mWebkitTextSecurity != aNewData.mWebkitTextSecurity)) {
+      (mWebkitTextSecurity != aNewData.mWebkitTextSecurity) ||
+      (mTextWrap != aNewData.mTextWrap)) {
     return NS_STYLE_HINT_REFLOW;
   }
 

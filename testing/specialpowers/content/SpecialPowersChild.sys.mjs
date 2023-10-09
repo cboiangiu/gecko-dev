@@ -636,16 +636,6 @@ export class SpecialPowersChild extends JSWindowActorChild {
     return chromeScript;
   }
 
-  async importInMainProcess(importString) {
-    var message = await this.sendQuery("SPImportInMainProcess", importString);
-    if (message.hadError) {
-      throw new Error(
-        "SpecialPowers.importInMainProcess failed with error " +
-          message.errorMessage
-      );
-    }
-  }
-
   get Services() {
     return Services;
   }
@@ -1445,6 +1435,20 @@ export class SpecialPowersChild extends JSWindowActorChild {
 
   get useRemoteSubframes() {
     return this.docShell.nsILoadContext.useRemoteSubframes;
+  }
+
+  ISOLATION_STRATEGY = {
+    IsolateNothing: 0,
+    IsolateEverything: 1,
+    IsolateHighValue: 2,
+  };
+
+  effectiveIsolationStrategy() {
+    // If remote subframes are disabled, we always use the IsolateNothing strategy.
+    if (!this.useRemoteSubframes) {
+      return this.ISOLATION_STRATEGY.IsolateNothing;
+    }
+    return this.getIntPref("fission.webContentIsolationStrategy");
   }
 
   addSystemEventListener(target, type, listener, useCapture) {

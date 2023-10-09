@@ -3,6 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { GeckoViewModule } from "resource://gre/modules/GeckoViewModule.sys.mjs";
+import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
 const lazy = {};
 
@@ -11,6 +12,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   E10SUtils: "resource://gre/modules/E10SUtils.sys.mjs",
   LoadURIDelegate: "resource://gre/modules/LoadURIDelegate.sys.mjs",
   isProductURL: "chrome://global/content/shopping/ShoppingProduct.mjs",
+  TranslationsParent: "resource://gre/actors/TranslationsParent.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "ReferrerInfo", () =>
@@ -575,6 +577,16 @@ export class GeckoViewNavigation extends GeckoViewModule {
     };
   }
 
+  async isProductURL(aLocationURI) {
+    if (AppConstants.NIGHTLY_BUILD) {
+      if (lazy.isProductURL(aLocationURI)) {
+        this.eventDispatcher.sendRequest({
+          type: "GeckoView:OnProductUrl",
+        });
+      }
+    }
+  }
+
   // WebProgress event handler.
   onLocationChange(aWebProgress, aRequest, aLocationURI, aFlags) {
     debug`onLocationChange`;
@@ -632,12 +644,6 @@ export class GeckoViewNavigation extends GeckoViewModule {
       }
     }
 
-    if (lazy.isProductURL(aLocationURI)) {
-      this.eventDispatcher.sendRequest({
-        type: "GeckoView:OnProductUrl",
-      });
-    }
-
     const message = {
       type: "GeckoView:LocationChange",
       uri: fixedURI.displaySpec,
@@ -646,8 +652,10 @@ export class GeckoViewNavigation extends GeckoViewModule {
       isTopLevel: aWebProgress.isTopLevel,
       permissions,
     };
-
+    lazy.TranslationsParent.onLocationChange(this.browser);
     this.eventDispatcher.sendRequest(message);
+
+    this.isProductURL(aLocationURI);
   }
 }
 

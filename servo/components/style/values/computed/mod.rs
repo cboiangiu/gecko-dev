@@ -22,6 +22,7 @@ use crate::media_queries::Device;
 use crate::properties;
 use crate::properties::{ComputedValues, StyleBuilder};
 use crate::rule_cache::RuleCacheConditions;
+use crate::stylist::Stylist;
 use crate::stylesheets::container_rule::{
     ContainerInfo, ContainerSizeQuery, ContainerSizeQueryResult,
 };
@@ -55,7 +56,7 @@ pub use self::box_::{
     ContainerName, ContainerType, ContentVisibility, Display, Float, LineClamp, Overflow,
     OverflowAnchor, OverflowClipBox, OverscrollBehavior, Perspective, Resize, ScrollSnapAlign,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
-    TouchAction, VerticalAlign, WillChange,
+    TouchAction, VerticalAlign, WillChange, Zoom,
 };
 pub use self::color::{
     Color, ColorOrAuto, ColorPropertyValue, ColorScheme, ForcedColorAdjust, PrintColorAdjust,
@@ -67,11 +68,11 @@ pub use self::effects::{BoxShadow, Filter, SimpleShadow};
 pub use self::flex::FlexBasis;
 pub use self::font::{FontFamily, FontLanguageOverride, FontPalette, FontStyle};
 pub use self::font::{FontFeatureSettings, FontVariantLigatures, FontVariantNumeric};
-pub use self::font::{FontSize, FontSizeAdjust, FontSizeAdjustFactor, FontStretch, FontSynthesis};
+pub use self::font::{FontSize, FontSizeAdjust, FontStretch, FontSynthesis, LineHeight};
 pub use self::font::{FontVariantAlternates, FontWeight};
 pub use self::font::{FontVariantEastAsian, FontVariationSettings};
 pub use self::font::{MathDepth, MozScriptMinSize, MozScriptSizeMultiplier, XLang, XTextScale};
-pub use self::image::{Gradient, Image, ImageRendering, LineDirection, MozImageRect};
+pub use self::image::{Gradient, Image, ImageRendering, LineDirection};
 pub use self::length::{CSSPixelLength, NonNegativeLength};
 pub use self::length::{Length, LengthOrNumber, LengthPercentage, NonNegativeLengthOrNumber};
 pub use self::length::{LengthOrAuto, LengthPercentageOrAuto, MaxSize, Size};
@@ -95,12 +96,12 @@ pub use self::svg::{SVGLength, SVGOpacity, SVGPaint, SVGPaintKind};
 pub use self::svg::{SVGPaintOrder, SVGStrokeDashArray, SVGWidth};
 pub use self::text::HyphenateCharacter;
 pub use self::text::TextUnderlinePosition;
-pub use self::text::{InitialLetter, LetterSpacing, LineBreak, LineHeight};
+pub use self::text::{InitialLetter, LetterSpacing, LineBreak};
 pub use self::text::{OverflowWrap, RubyPosition, TextOverflow, WordBreak, WordSpacing};
 pub use self::text::{TextAlign, TextAlignLast, TextEmphasisPosition, TextEmphasisStyle};
 pub use self::text::{TextDecorationLength, TextDecorationSkipInk, TextJustify};
 pub use self::time::Time;
-pub use self::transform::{Rotate, Scale, Transform, TransformOperation};
+pub use self::transform::{Rotate, Scale, Transform, TransformBox, TransformOperation};
 pub use self::transform::{TransformOrigin, TransformStyle, Translate};
 #[cfg(feature = "gecko")]
 pub use self::ui::CursorImage;
@@ -215,7 +216,7 @@ impl<'a> Context<'a> {
     {
         let mut conditions = RuleCacheConditions::default();
         let context = Context {
-            builder: StyleBuilder::for_inheritance(device, None, None),
+            builder: StyleBuilder::for_inheritance(device, None, None, None),
             cached_system_font: None,
             in_media_query: true,
             in_container_query: false,
@@ -233,6 +234,7 @@ impl<'a> Context<'a> {
     /// specified.
     pub fn for_container_query_evaluation<F, R>(
         device: &Device,
+        stylist: Option<&Stylist>,
         container_info_and_style: Option<(ContainerInfo, Arc<ComputedValues>)>,
         container_size_query: ContainerSizeQuery,
         f: F,
@@ -250,7 +252,7 @@ impl<'a> Context<'a> {
         let style = style.as_ref().map(|s| &**s);
         let quirks_mode = device.quirks_mode();
         let context = Context {
-            builder: StyleBuilder::for_inheritance(device, style, None),
+            builder: StyleBuilder::for_inheritance(device, stylist, style, None),
             cached_system_font: None,
             in_media_query: false,
             in_container_query: true,
@@ -342,9 +344,7 @@ impl<'a> Context<'a> {
             FontMetricsOrientation::MatchContextPreferHorizontal => {
                 wm.is_vertical() && wm.is_upright()
             },
-            FontMetricsOrientation::MatchContextPreferVertical => {
-                wm.is_vertical() && !wm.is_sideways()
-            },
+            FontMetricsOrientation::MatchContextPreferVertical => wm.is_text_vertical(),
             FontMetricsOrientation::Horizontal => false,
         };
         self.device().query_font_metrics(

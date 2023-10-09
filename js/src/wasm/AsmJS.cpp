@@ -69,7 +69,9 @@
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmIonCompile.h"
 #include "wasm/WasmJS.h"
+#include "wasm/WasmModuleTypes.h"
 #include "wasm/WasmSerialize.h"
+#include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmValidate.h"
 
 #include "frontend/SharedContext-inl.h"
@@ -655,7 +657,7 @@ static inline bool IsUseOfName(ParseNode* pn, TaggedParserAtomIndex name) {
 }
 
 static inline bool IsIgnoredDirectiveName(TaggedParserAtomIndex atom) {
-  return atom != TaggedParserAtomIndex::WellKnown::useStrict();
+  return atom != TaggedParserAtomIndex::WellKnown::use_strict_();
 }
 
 static inline bool IsIgnoredDirective(ParseNode* pn) {
@@ -1769,14 +1771,12 @@ class MOZ_STACK_CLASS ModuleValidatorShared {
       index += funcImportMap_.count();
     }
 
-    MutableElemSegment seg = js_new<ElemSegment>();
-    if (!seg) {
-      return false;
-    }
-    seg->elemType = RefType::func();
-    seg->tableIndex = tableIndex;
-    seg->offsetIfActive = Some(InitExpr(LitVal(uint32_t(0))));
-    seg->elemFuncIndices = std::move(elems);
+    ModuleElemSegment seg = ModuleElemSegment();
+    seg.elemType = RefType::func();
+    seg.tableIndex = tableIndex;
+    seg.offsetIfActive = Some(InitExpr(LitVal(uint32_t(0))));
+    seg.encoding = ModuleElemSegment::Encoding::Indices;
+    seg.elemIndices = std::move(elems);
     return moduleEnv_.elemSegments.append(std::move(seg));
   }
 
@@ -2148,6 +2148,9 @@ class MOZ_STACK_CLASS ModuleValidator : public ModuleValidatorShared {
     }
 
     moduleEnv_.numFuncImports = funcImportMap_.count();
+
+    // All globals (inits and imports) are imports from Wasm point of view.
+    moduleEnv_.numGlobalImports = moduleEnv_.globals.length();
 
     MOZ_ASSERT(asmJSMetadata_->asmJSFuncNames.empty());
     if (!asmJSMetadata_->asmJSFuncNames.resize(funcImportMap_.count())) {
@@ -6946,10 +6949,10 @@ static bool TryInstantiate(JSContext* cx, CallArgs args, const Module& module,
   HandleValue importVal = args.get(1);
   HandleValue bufferVal = args.get(2);
 
-  // Re-check HasPlatformSupport(cx) since this varies per-thread and
-  // 'module' may have been produced on a parser thread.
-  if (!HasPlatformSupport(cx)) {
-    return LinkFail(cx, "no platform support");
+  MOZ_RELEASE_ASSERT(HasPlatformSupport());
+
+  if (!wasm::EnsureFullSignalHandlers(cx)) {
+    return LinkFail(cx, "failed to install signal handlers");
   }
 
   Rooted<ImportValues> imports(cx);
@@ -7110,7 +7113,7 @@ static bool TypeFailureWarning(frontend::ParserBase& parser, const char* str) {
 // asm.js requires Ion to be available on the current hardware/OS and to be
 // enabled for wasm, since asm.js compilation goes via wasm.
 static bool IsAsmJSCompilerAvailable(JSContext* cx) {
-  return HasPlatformSupport(cx) && WasmCompilerForAsmJSAvailable(cx);
+  return HasPlatformSupport() && WasmCompilerForAsmJSAvailable(cx);
 }
 
 static bool EstablishPreconditions(frontend::ParserBase& parser) {

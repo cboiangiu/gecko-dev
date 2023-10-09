@@ -18,7 +18,7 @@ use cssparser::{BasicParseError, BasicParseErrorKind, ParseError, ParseErrorKind
 use cssparser::{CowRcStr, Delimiter, SourceLocation};
 use cssparser::{Parser as CssParser, ToCss, Token};
 use precomputed_hash::PrecomputedHash;
-use servo_arc::{ThinArc, UniqueArc};
+use servo_arc::{Arc, ThinArc, UniqueArc};
 use smallvec::SmallVec;
 use std::borrow::{Borrow, Cow};
 use std::fmt::{self, Debug};
@@ -107,7 +107,7 @@ bitflags! {
         const AFTER_NON_STATEFUL_PSEUDO_ELEMENT = 1 << 4;
 
         /// Whether we are after any of the pseudo-like things.
-        const AFTER_PSEUDO = Self::AFTER_PART.bits | Self::AFTER_SLOTTED.bits | Self::AFTER_PSEUDO_ELEMENT.bits;
+        const AFTER_PSEUDO = Self::AFTER_PART.bits() | Self::AFTER_SLOTTED.bits() | Self::AFTER_PSEUDO_ELEMENT.bits();
 
         /// Whether we explicitly disallow combinators.
         const DISALLOW_COMBINATORS = 1 << 5;
@@ -371,6 +371,7 @@ impl SelectorKey {
 }
 
 /// Whether or not we're using forgiving parsing mode
+#[derive(PartialEq)]
 enum ForgivingParsing {
     /// Discard the entire selector list upon encountering any invalid selector.
     /// This is the default behavior for almost all of CSS.
@@ -443,34 +444,28 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
         P: Parser<'i, Impl = Impl>,
     {
         let mut values = SmallVec::new();
+        let forgiving = recovery == ForgivingParsing::Yes && parser.allow_forgiving_selectors();
         loop {
-            let selector = input.parse_until_before(Delimiter::Comma, |i| {
-                parse_selector(parser, i, state, parse_relative)
+            let selector = input.parse_until_before(Delimiter::Comma, |input| {
+                let start = input.position();
+                let mut selector = parse_selector(parser, input, state, parse_relative);
+                if forgiving && (selector.is_err() || input.expect_exhausted().is_err()) {
+                    input.expect_no_error_token()?;
+                    selector = Ok(Selector::new_invalid(input.slice_from(start)));
+                }
+                selector
             });
 
-            let was_ok = selector.is_ok();
-            match selector {
-                Ok(selector) => values.push(selector),
-                Err(err) => match recovery {
-                    ForgivingParsing::No => return Err(err),
-                    ForgivingParsing::Yes => {
-                        if !parser.allow_forgiving_selectors() {
-                            return Err(err);
-                        }
-                    },
-                },
-            }
+            debug_assert!(!forgiving || selector.is_ok());
+            values.push(selector?);
 
-            loop {
-                match input.next() {
-                    Err(_) => return Ok(SelectorList(values)),
-                    Ok(&Token::Comma) => break,
-                    Ok(_) => {
-                        debug_assert!(!was_ok, "Shouldn't have got a selector if getting here");
-                    },
-                }
+            match input.next() {
+                Ok(&Token::Comma) => {},
+                Ok(_) => unreachable!(),
+                Err(_) => break,
             }
         }
+        Ok(SelectorList(values))
     }
 
     /// Replaces the parent selector in all the items of the selector list.
@@ -1045,6 +1040,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                     Combinator(..) |
                     Host(None) |
                     Part(..) |
+                    Invalid(..) |
                     RelativeSelectorAnchor => component.clone(),
                     ParentSelector => {
                         specificity += parent_specificity;
@@ -1167,6 +1163,65 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         }
 
         true
+    }
+
+    /// Parse a selector, without any pseudo-element.
+    #[inline]
+    pub fn parse<'i, 't, P>(
+        parser: &P,
+        input: &mut CssParser<'i, 't>,
+    ) -> Result<Self, ParseError<'i, P::Error>>
+    where
+        P: Parser<'i, Impl = Impl>,
+    {
+        parse_selector(
+            parser,
+            input,
+            SelectorParsingState::empty(),
+            ParseRelative::No,
+        )
+    }
+
+    pub fn new_invalid(s: &str) -> Self {
+        fn check_for_parent(input: &mut CssParser, has_parent: &mut bool) {
+            while let Ok(t) = input.next() {
+                match *t {
+                    Token::Function(_) |
+                    Token::ParenthesisBlock |
+                    Token::CurlyBracketBlock |
+                    Token::SquareBracketBlock => {
+                        let _ = input.parse_nested_block(|i| -> Result<(), ParseError<'_, BasicParseError>> {
+                            check_for_parent(i, has_parent);
+                            Ok(())
+                        });
+                    },
+                    Token::Delim('&') => {
+                        *has_parent = true;
+                    }
+                    _ => {},
+                }
+                if *has_parent {
+                    break;
+                }
+            }
+        }
+        let mut has_parent = false;
+        {
+            let mut parser = cssparser::ParserInput::new(s);
+            let mut parser = CssParser::new(&mut parser);
+            check_for_parent(&mut parser, &mut has_parent);
+        }
+        Self(ThinArc::from_header_and_iter(
+            SpecificityAndFlags {
+                specificity: 0,
+                flags: if has_parent {
+                    SelectorFlags::HAS_PARENT
+                } else {
+                    SelectorFlags::empty()
+                },
+            },
+            std::iter::once(Component::Invalid(Arc::new(String::from(s.trim()))))
+        ))
     }
 }
 
@@ -1544,6 +1599,51 @@ pub enum RelativeSelectorMatchHint {
 }
 
 impl RelativeSelectorMatchHint {
+    /// Create a new relative selector match hint based on its composition.
+    pub fn new(
+        relative_combinator: Combinator,
+        has_child_or_descendants: bool,
+        has_adjacent_or_next_siblings: bool,
+    ) -> Self {
+        match relative_combinator {
+            Combinator::Descendant => RelativeSelectorMatchHint::InSubtree,
+            Combinator::Child => {
+                if !has_child_or_descendants {
+                    RelativeSelectorMatchHint::InChild
+                } else {
+                    // Technically, for any composition that consists of child combinators only,
+                    // the search space is depth-constrained, but it's probably not worth optimizing for.
+                    RelativeSelectorMatchHint::InSubtree
+                }
+            },
+            Combinator::NextSibling => {
+                if !has_child_or_descendants && !has_adjacent_or_next_siblings {
+                    RelativeSelectorMatchHint::InNextSibling
+                } else if !has_child_or_descendants && has_adjacent_or_next_siblings {
+                    RelativeSelectorMatchHint::InSibling
+                } else if has_child_or_descendants && !has_adjacent_or_next_siblings {
+                    // Match won't cross multiple siblings.
+                    RelativeSelectorMatchHint::InNextSiblingSubtree
+                } else {
+                    RelativeSelectorMatchHint::InSiblingSubtree
+                }
+            },
+            Combinator::LaterSibling => {
+                if !has_child_or_descendants {
+                    RelativeSelectorMatchHint::InSibling
+                } else {
+                    // Even if the match may not cross multiple siblings, we have to look until
+                    // we find a match anyway.
+                    RelativeSelectorMatchHint::InSiblingSubtree
+                }
+            },
+            Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
+                debug_assert!(false, "Unexpected relative combinator");
+                RelativeSelectorMatchHint::InSubtree
+            },
+        }
+    }
+
     /// Is the match traversal direction towards the descendant of this element (As opposed to siblings)?
     pub fn is_descendant_direction(&self) -> bool {
         matches!(*self, Self::InChild | Self::InSubtree)
@@ -1559,6 +1659,53 @@ impl RelativeSelectorMatchHint {
         matches!(
             *self,
             Self::InSubtree | Self::InSiblingSubtree | Self::InNextSiblingSubtree
+        )
+    }
+}
+
+/// Count of combinators in a given relative selector, not traversing selectors of pseudoclasses.
+#[derive(Clone, Copy)]
+pub struct RelativeSelectorCombinatorCount {
+    relative_combinator: Combinator,
+    pub child_or_descendants: usize,
+    pub adjacent_or_next_siblings: usize,
+}
+
+impl RelativeSelectorCombinatorCount {
+    /// Create a new relative selector combinator count from a given relative selector.
+    pub fn new<Impl: SelectorImpl>(relative_selector: &RelativeSelector<Impl>) -> Self {
+        let mut result = RelativeSelectorCombinatorCount {
+            relative_combinator: relative_selector.selector.combinator_at_parse_order(1),
+            child_or_descendants: 0,
+            adjacent_or_next_siblings: 0,
+        };
+
+        for combinator in CombinatorIter::new(
+            relative_selector
+                .selector
+                .iter_skip_relative_selector_anchor(),
+        ) {
+            match combinator {
+                Combinator::Descendant | Combinator::Child => {
+                    result.child_or_descendants += 1;
+                },
+                Combinator::NextSibling | Combinator::LaterSibling => {
+                    result.adjacent_or_next_siblings += 1;
+                },
+                Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
+                    continue
+                },
+            };
+        }
+        result
+    }
+
+    /// Get the match hint based on the current combinator count.
+    pub fn get_match_hint(&self) -> RelativeSelectorMatchHint {
+        RelativeSelectorMatchHint::new(
+            self.relative_combinator,
+            self.child_or_descendants != 0,
+            self.adjacent_or_next_siblings != 0,
         )
     }
 }
@@ -1629,48 +1776,12 @@ impl<Impl: SelectorImpl> RelativeSelector<Impl> {
                     );
                 }
                 // Leave a hint for narrowing down the search space when we're matching.
-                let match_hint = match selector.combinator_at_parse_order(1) {
-                    Combinator::Descendant => RelativeSelectorMatchHint::InSubtree,
-                    Combinator::Child => {
-                        let composition = CombinatorComposition::for_relative_selector(&selector);
-                        if composition.is_empty() || composition == CombinatorComposition::SIBLINGS
-                        {
-                            RelativeSelectorMatchHint::InChild
-                        } else {
-                            // Technically, for any composition that consists of child combinators only,
-                            // the search space is depth-constrained, but it's probably not worth optimizing for.
-                            RelativeSelectorMatchHint::InSubtree
-                        }
-                    },
-                    Combinator::NextSibling => {
-                        let composition = CombinatorComposition::for_relative_selector(&selector);
-                        if composition.is_empty() {
-                            RelativeSelectorMatchHint::InNextSibling
-                        } else if composition == CombinatorComposition::SIBLINGS {
-                            RelativeSelectorMatchHint::InSibling
-                        } else if composition == CombinatorComposition::DESCENDANTS {
-                            // Match won't cross multiple siblings.
-                            RelativeSelectorMatchHint::InNextSiblingSubtree
-                        } else {
-                            RelativeSelectorMatchHint::InSiblingSubtree
-                        }
-                    },
-                    Combinator::LaterSibling => {
-                        let composition = CombinatorComposition::for_relative_selector(&selector);
-                        if composition.is_empty() || composition == CombinatorComposition::SIBLINGS
-                        {
-                            RelativeSelectorMatchHint::InSibling
-                        } else {
-                            // Even if the match may not cross multiple siblings, we have to look until
-                            // we find a match anyway.
-                            RelativeSelectorMatchHint::InSiblingSubtree
-                        }
-                    },
-                    Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
-                        debug_assert!(false, "Unexpected relative combinator");
-                        RelativeSelectorMatchHint::InSubtree
-                    },
-                };
+                let composition = CombinatorComposition::for_relative_selector(&selector);
+                let match_hint = RelativeSelectorMatchHint::new(
+                    selector.combinator_at_parse_order(1),
+                    composition.intersects(CombinatorComposition::DESCENDANTS),
+                    composition.intersects(CombinatorComposition::SIBLINGS),
+                );
                 RelativeSelector {
                     match_hint,
                     selector,
@@ -1775,6 +1886,8 @@ pub enum Component<Impl: SelectorImpl> {
     ///
     /// Same comment as above re. the argument.
     Has(Box<[RelativeSelector<Impl>]>),
+    /// An invalid selector inside :is() / :where().
+    Invalid(Arc<String>),
     /// An implementation-dependent pseudo-element selector.
     PseudoElement(#[shmem(field_bound)] Impl::PseudoElement),
 
@@ -1926,6 +2039,11 @@ impl<Impl: SelectorImpl> Component<Impl> {
             },
             NthOf(ref nth_of_data) => {
                 if !visitor.visit_selector_list(SelectorListKind::NTH_OF, nth_of_data.selectors()) {
+                    return false;
+                }
+            },
+            Has(ref list) => {
+                if !visitor.visit_relative_selector_list(list) {
                     return false;
                 }
             },
@@ -2232,9 +2350,7 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
                 dest.write_char('[')?;
                 local_name.to_css(dest)?;
                 operator.to_css(dest)?;
-                dest.write_char('"')?;
                 value.to_css(dest)?;
-                dest.write_char('"')?;
                 match case_sensitivity {
                     ParsedCaseSensitivity::CaseSensitive |
                     ParsedCaseSensitivity::AsciiCaseInsensitiveIfInHtmlElementInHtmlDocument => {},
@@ -2310,6 +2426,7 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
                 dest.write_str(")")
             },
             NonTSPseudoClass(ref pseudo) => pseudo.to_css(dest),
+            Invalid(ref css) => dest.write_str(css),
             RelativeSelectorAnchor => Ok(()),
         }
     }
@@ -2338,9 +2455,7 @@ impl<Impl: SelectorImpl> ToCss for AttrSelectorWithOptionalNamespace<Impl> {
                 ref value,
             } => {
                 operator.to_css(dest)?;
-                dest.write_char('"')?;
                 value.to_css(dest)?;
-                dest.write_char('"')?;
                 match case_sensitivity {
                     ParsedCaseSensitivity::CaseSensitive |
                     ParsedCaseSensitivity::AsciiCaseInsensitiveIfInHtmlElementInHtmlDocument => {},
@@ -2459,25 +2574,6 @@ fn try_parse_combinator<'i, 't, P, Impl>(input: &mut CssParser<'i, 't>) -> Resul
                 }
             },
         }
-    }
-}
-
-impl<Impl: SelectorImpl> Selector<Impl> {
-    /// Parse a selector, without any pseudo-element.
-    #[inline]
-    pub fn parse<'i, 't, P>(
-        parser: &P,
-        input: &mut CssParser<'i, 't>,
-    ) -> Result<Self, ParseError<'i, P::Error>>
-    where
-        P: Parser<'i, Impl = Impl>,
-    {
-        parse_selector(
-            parser,
-            input,
-            SelectorParsingState::empty(),
-            ParseRelative::No,
-        )
     }
 }
 
@@ -3431,7 +3527,9 @@ pub mod tests {
         {
             use std::fmt::Write;
 
-            write!(cssparser::CssStringWriter::new(dest), "{}", &self.0)
+            dest.write_char('"')?;
+            write!(cssparser::CssStringWriter::new(dest), "{}", &self.0)?;
+            dest.write_char('"')
         }
     }
 
@@ -4143,7 +4241,7 @@ pub mod tests {
 
         assert!(parse("foo:where()").is_ok());
         assert!(parse("foo:where(div, foo, .bar baz)").is_ok());
-        assert!(parse_expected("foo:where(::before)", Some("foo:where()")).is_ok());
+        assert!(parse("foo:where(::before)").is_ok());
     }
 
     #[test]

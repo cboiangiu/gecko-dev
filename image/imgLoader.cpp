@@ -1898,20 +1898,14 @@ bool imgLoader::ValidateEntry(
   uint32_t expiryTime = aEntry->GetExpiryTime();
   bool hasExpired = expiryTime && expiryTime <= SecondsFromPRTime(PR_Now());
 
-  nsresult rv;
-
   // Special treatment for file URLs - aEntry has expired if file has changed
-  nsCOMPtr<nsIFileURL> fileUrl(do_QueryInterface(aURI));
-  if (fileUrl) {
+  if (nsCOMPtr<nsIFileURL> fileUrl = do_QueryInterface(aURI)) {
     uint32_t lastModTime = aEntry->GetLoadTime();
-
     nsCOMPtr<nsIFile> theFile;
-    rv = fileUrl->GetFile(getter_AddRefs(theFile));
-    if (NS_SUCCEEDED(rv)) {
+    if (NS_SUCCEEDED(fileUrl->GetFile(getter_AddRefs(theFile)))) {
       PRTime fileLastMod;
-      rv = theFile->GetLastModifiedTime(&fileLastMod);
-      if (NS_SUCCEEDED(rv)) {
-        // nsIFile uses millisec, NSPR usec
+      if (NS_SUCCEEDED(theFile->GetLastModifiedTime(&fileLastMod))) {
+        // nsIFile uses millisec, NSPR usec.
         fileLastMod *= 1000;
         hasExpired = SecondsFromPRTime((PRTime)fileLastMod) > lastModTime;
       }
@@ -1998,19 +1992,18 @@ bool imgLoader::ValidateEntry(
   // validate the request) we make sure to validate. This avoids the bug because
   // when the load complete notification arrives the proxy is marked as
   // validating so it lies about its status and returns nothing.
-  bool requestComplete = false;
-  RefPtr<ProgressTracker> tracker;
-  RefPtr<mozilla::image::Image> image = request->GetImage();
-  if (image) {
-    tracker = image->GetProgressTracker();
-  } else {
-    tracker = request->GetProgressTracker();
-  }
-  if (tracker) {
-    if (tracker->GetProgress() & (FLAG_LOAD_COMPLETE | FLAG_HAS_ERROR)) {
-      requestComplete = true;
+  const bool requestComplete = [&] {
+    RefPtr<ProgressTracker> tracker;
+    RefPtr<mozilla::image::Image> image = request->GetImage();
+    if (image) {
+      tracker = image->GetProgressTracker();
+    } else {
+      tracker = request->GetProgressTracker();
     }
-  }
+    return tracker &&
+           tracker->GetProgress() & (FLAG_LOAD_COMPLETE | FLAG_HAS_ERROR);
+  }();
+
   if (!requestComplete) {
     return true;
   }
@@ -2313,9 +2306,6 @@ nsresult imgLoader::LoadImage(
     // Propagate background loading...
     requestFlags |= nsIRequest::LOAD_BACKGROUND;
   }
-  if (aLoadFlags & nsIRequest::LOAD_RECORD_START_REQUEST_DELAY) {
-    requestFlags |= nsIRequest::LOAD_RECORD_START_REQUEST_DELAY;
-  }
 
   if (aLinkPreload) {
     // Set background loading if it is <link rel=preload>
@@ -2330,7 +2320,7 @@ nsresult imgLoader::LoadImage(
   }
 
   // Look in the preloaded images of loading document first.
-  if (StaticPrefs::network_preload() && !aLinkPreload && aLoadingDocument) {
+  if (!aLinkPreload && aLoadingDocument) {
     // All Early Hints preloads are Link preloads, therefore we don't have a
     // Early Hints preload here
     MOZ_ASSERT(!aEarlyHintPreloaderId);

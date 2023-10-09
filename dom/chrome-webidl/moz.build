@@ -28,9 +28,6 @@ with Files("MatchPattern.webidl"):
 with Files("WebExtension*.webidl"):
     BUG_COMPONENT = ("WebExtensions", "General")
 
-with Files("Glean*.webidl"):
-    BUG_COMPONENT = ("Toolkit", "Telemetry")
-
 with Files("IOUtils.webidl"):
     BUG_COMPONENT = ("Toolkit", "IOUtils and PathUtils")
 
@@ -81,6 +78,8 @@ WEBIDL_FILES = [
     "SessionStoreUtils.webidl",
     "StripOnShareRule.webidl",
     "StructuredCloneHolder.webidl",
+    "StyleSheetApplicableStateChangeEvent.webidl",
+    "StyleSheetRemovedEvent.webidl",
     "TelemetryStopwatch.webidl",
     "UserInteraction.webidl",
     "WebExtensionContentScript.webidl",
@@ -90,6 +89,11 @@ WEBIDL_FILES = [
     "XULMenuElement.webidl",
     "XULTextElement.webidl",
     "XULTreeElement.webidl",
+]
+
+GENERATED_EVENTS_WEBIDL_FILES = [
+    "StyleSheetApplicableStateChangeEvent.webidl",
+    "StyleSheetRemovedEvent.webidl",
 ]
 
 if CONFIG["MOZ_BUILD_APP"] != "mobile/android":
@@ -102,8 +106,3 @@ if CONFIG["MOZ_PLACES"]:
         "PlacesEvent.webidl",
         "PlacesObservers.webidl",
     ]
-
-WEBIDL_FILES += [
-    "Glean.webidl",
-    "GleanPings.webidl",
-]

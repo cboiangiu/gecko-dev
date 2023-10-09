@@ -76,6 +76,7 @@ class MuxerUnifiedComplete extends UrlbarMuxer {
       urlToTabResultType: new Map(),
       addedRemoteTabUrls: new Set(),
       addedSwitchTabUrls: new Set(),
+      addedResultUrls: new Set(),
       canShowPrivateSearch: unsortedResults.length > 1,
       canShowTailSuggestions: true,
       // Form history and remote suggestions added so far.  Used for deduping
@@ -132,11 +133,16 @@ class MuxerUnifiedComplete extends UrlbarMuxer {
       }
     }
 
+    // Show Top Sites above trending results.
+    let showSearchSuggestionsFirst = !(
+      lazy.UrlbarPrefs.get("suggest.trending") && !context.searchString
+    );
     // Determine the result groups to use for this sort.  In search mode with
     // an engine, show search suggestions first.
-    let rootGroup = context.searchMode?.engineName
-      ? lazy.UrlbarPrefs.makeResultGroups({ showSearchSuggestionsFirst: true })
-      : lazy.UrlbarPrefs.resultGroups;
+    let rootGroup =
+      context.searchMode?.engineName || !showSearchSuggestionsFirst
+        ? lazy.UrlbarPrefs.makeResultGroups({ showSearchSuggestionsFirst })
+        : lazy.UrlbarPrefs.resultGroups;
     lazy.logger.debug(`Groups: ${JSON.stringify(rootGroup)}`);
 
     // Fill the root group.
@@ -190,6 +196,7 @@ class MuxerUnifiedComplete extends UrlbarMuxer {
       addedRemoteTabUrls: new Set(state.addedRemoteTabUrls),
       addedSwitchTabUrls: new Set(state.addedSwitchTabUrls),
       suggestions: new Set(state.suggestions),
+      addedResultUrls: new Set(state.addedResultUrls),
     });
 
     // Deep copy the `resultsByGroup` maps.
@@ -967,6 +974,17 @@ class MuxerUnifiedComplete extends UrlbarMuxer {
       return false;
     }
 
+    // Discard results that have an embedded "url" param with the same value
+    // as another result's url
+    if (result.payload.url) {
+      let urlParams = result.payload.url.split("?").pop();
+      let embeddedUrl = new URLSearchParams(urlParams).get("url");
+
+      if (state.addedResultUrls.has(embeddedUrl)) {
+        return false;
+      }
+    }
+
     // Include the result.
     return true;
   }
@@ -1092,6 +1110,12 @@ class MuxerUnifiedComplete extends UrlbarMuxer {
 
     state.hasUnitConversionResult =
       state.hasUnitConversionResult || result.providerName == "UnitConversion";
+
+    // Keep track of result urls to dedupe results with the same url embedded
+    // in its query string
+    if (result.payload.url) {
+      state.addedResultUrls.add(result.payload.url);
+    }
   }
 
   /**

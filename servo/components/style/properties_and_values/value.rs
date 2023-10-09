@@ -4,8 +4,13 @@
 
 //! Parsing for registered custom properties.
 
-use super::syntax::{
-    data_type::DataType, Component as SyntaxComponent, ComponentName, Descriptor, Multiplier,
+use std::fmt::{self, Write};
+
+use super::{
+    registry::PropertyRegistration,
+    syntax::{
+        data_type::DataType, Component as SyntaxComponent, ComponentName, Descriptor, Multiplier,
+    },
 };
 use crate::custom_properties::ComputedValue as ComputedPropertyValue;
 use crate::parser::{Parse, ParserContext};
@@ -13,15 +18,15 @@ use crate::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use crate::values::{specified, CustomIdent};
 use cssparser::{BasicParseErrorKind, ParseErrorKind, Parser as CSSParser};
 use selectors::matching::QuirksMode;
-use servo_arc::Arc;
+use servo_arc::{Arc, ThinArc};
 use smallvec::SmallVec;
 use style_traits::{
-    arc_slice::ArcSlice, owned_str::OwnedStr, ParseError as StyleParseError, ParsingMode,
-    PropertySyntaxParseError, StyleParseErrorKind,
+    owned_str::OwnedStr, CssWriter, ParseError as StyleParseError, ParsingMode,
+    PropertySyntaxParseError, StyleParseErrorKind, ToCss,
 };
 
-#[derive(Clone)]
 /// A single component of the computed value.
+#[derive(Clone, ToCss)]
 pub enum ValueComponent {
     /// A <length> value
     Length(specified::Length),
@@ -49,48 +54,119 @@ pub enum ValueComponent {
     TransformFunction(specified::Transform),
     /// A <custom-ident> value
     CustomIdent(CustomIdent),
-    /// A <transform-list> value
-    TransformList(ArcSlice<specified::Transform>),
+    /// A <transform-list> value, equivalent to <transform-function>+
+    TransformList(ValueComponentList),
     /// A <string> value
     String(OwnedStr),
 }
 
+/// A list of component values, including the list's multiplier.
+#[derive(Clone)]
+pub struct ValueComponentList(ThinArc<Multiplier, ValueComponent>);
+
+impl ToCss for ValueComponentList {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
+        let mut iter = self.0.slice().iter();
+        let Some(first) = iter.next() else {
+            return Ok(());
+        };
+        first.to_css(dest)?;
+
+        // The separator implied by the multiplier for this list.
+        let separator = match self.0.header {
+            // <https://drafts.csswg.org/cssom-1/#serialize-a-whitespace-separated-list>
+            Multiplier::Space => " ",
+            // <https://drafts.csswg.org/cssom-1/#serialize-a-comma-separated-list>
+            Multiplier::Comma => ", ",
+        };
+        for component in iter {
+            dest.write_str(separator)?;
+            component.to_css(dest)?;
+        }
+        Ok(())
+    }
+}
+
+impl ValueComponentList {
+    fn new<I>(multiplier: Multiplier, values: I) -> Self
+    where
+        I: Iterator<Item = ValueComponent> + ExactSizeIterator,
+    {
+        Self(ThinArc::from_header_and_iter(multiplier, values))
+    }
+}
+
 /// A parsed property value.
+#[derive(ToCss)]
 pub enum ComputedValue {
     /// A single parsed component value whose matched syntax descriptor component did not have a
     /// multiplier.
     Component(ValueComponent),
     /// A parsed value whose syntax descriptor was the universal syntax definition.
     Universal(Arc<ComputedPropertyValue>),
-    /// A list of parsed component values, whose matched syntax descriptor component had a
+    /// A list of parsed component values whose matched syntax descriptor component had a
     /// multiplier.
-    List(ArcSlice<ValueComponent>),
+    List(ValueComponentList),
 }
 
 impl ComputedValue {
+    /// Parse and validate a registered custom property, given a string and a property registration.
+    pub fn compute<'i, 't>(
+        input: &mut CSSParser<'i, 't>,
+        registration: &PropertyRegistration,
+    ) -> Result<(), ()> {
+        let parse_result = Self::parse(
+            input,
+            &registration.syntax,
+            &registration.url_data,
+            AllowComputationallyDependent::Yes,
+        );
+        if parse_result.is_err() {
+            return Err(());
+        }
+        // TODO(zrhoffman, 1846632): Return a CSS string for the computed value.
+        Ok(())
+    }
+
     /// Parse and validate a registered custom property value according to its syntax descriptor,
     /// and check for computational independence.
     pub fn parse<'i, 't>(
         mut input: &mut CSSParser<'i, 't>,
         syntax: &Descriptor,
         url_data: &UrlExtraData,
+        allow_computationally_dependent: AllowComputationallyDependent,
     ) -> Result<Self, StyleParseError<'i>> {
         if syntax.is_universal() {
             return Ok(Self::Universal(ComputedPropertyValue::parse(&mut input)?));
         }
 
         let mut values = SmallComponentVec::new();
-        let mut has_multiplier = false;
+        let mut multiplier = None;
         {
-            let mut parser = Parser::new(syntax, &mut values, &mut has_multiplier);
-            parser.parse(&mut input, url_data)?;
+            let mut parser = Parser::new(syntax, &mut values, &mut multiplier);
+            parser.parse(&mut input, url_data, allow_computationally_dependent)?;
         }
-        Ok(if has_multiplier {
-            Self::List(ArcSlice::from_iter(values.into_iter()))
+        let computed_value = if let Some(ref multiplier) = multiplier {
+            Self::List(ValueComponentList::new(*multiplier, values.into_iter()))
         } else {
             Self::Component(values[0].clone())
-        })
+        };
+        Ok(computed_value)
     }
+}
+
+/// Whether the computed value parsing should allow computationaly dependent values like 3em or
+/// var(-foo).
+///
+/// https://drafts.css-houdini.org/css-properties-values-api-1/#computationally-independent
+pub enum AllowComputationallyDependent {
+    /// Only computationally independent values are allowed.
+    No,
+    /// Computationally independent and dependent values are allowed.
+    Yes,
 }
 
 type SmallComponentVec = SmallVec<[ValueComponent; 1]>;
@@ -98,19 +174,19 @@ type SmallComponentVec = SmallVec<[ValueComponent; 1]>;
 struct Parser<'a> {
     syntax: &'a Descriptor,
     output: &'a mut SmallComponentVec,
-    output_has_multiplier: &'a mut bool,
+    output_multiplier: &'a mut Option<Multiplier>,
 }
 
 impl<'a> Parser<'a> {
     fn new(
         syntax: &'a Descriptor,
         output: &'a mut SmallComponentVec,
-        output_has_multiplier: &'a mut bool,
+        output_multiplier: &'a mut Option<Multiplier>,
     ) -> Self {
         Self {
             syntax,
             output,
-            output_has_multiplier,
+            output_multiplier,
         }
     }
 
@@ -118,12 +194,18 @@ impl<'a> Parser<'a> {
         &mut self,
         input: &mut CSSParser<'i, 't>,
         url_data: &UrlExtraData,
+        allow_computationally_dependent: AllowComputationallyDependent,
     ) -> Result<(), StyleParseError<'i>> {
+        use self::AllowComputationallyDependent::*;
+        let parsing_mode = match allow_computationally_dependent {
+            No => ParsingMode::DISALLOW_FONT_RELATIVE,
+            Yes => ParsingMode::DEFAULT,
+        };
         let ref context = ParserContext::new(
             Origin::Author,
             url_data,
             Some(CssRuleType::Style),
-            ParsingMode::DISALLOW_FONT_RELATIVE,
+            parsing_mode,
             QuirksMode::NoQuirks,
             /* namespaces = */ Default::default(),
             None,
@@ -137,7 +219,7 @@ impl<'a> Parser<'a> {
             });
             let Ok(values) = result else { continue };
             self.output.extend(values);
-            *self.output_has_multiplier = component.multiplier().is_some();
+            *self.output_multiplier = component.multiplier();
             break;
         }
         if self.output.is_empty() {
@@ -228,14 +310,17 @@ impl<'a> Parser<'a> {
                 };
                 debug_assert_matches!(multiplier, Multiplier::Space);
                 loop {
-                    values.push(specified::Transform::parse(context, input)?);
+                    values.push(ValueComponent::TransformFunction(
+                        specified::Transform::parse(context, input)?,
+                    ));
                     let result = Self::expect_multiplier(input, &multiplier);
                     if Self::expect_multiplier_yielded_eof_error(&result) {
                         break;
                     }
                     result?;
                 }
-                ValueComponent::TransformList(ArcSlice::from_iter(values.into_iter()))
+                let list = ValueComponentList::new(multiplier, values.into_iter());
+                ValueComponent::TransformList(list)
             },
             DataType::String => {
                 let string = input.expect_string()?;

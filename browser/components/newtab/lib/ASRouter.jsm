@@ -52,7 +52,9 @@ XPCOMUtils.defineLazyServiceGetters(lazy, {
 const { actionCreators: ac } = ChromeUtils.importESModule(
   "resource://activity-stream/common/Actions.sys.mjs"
 );
-
+const { MESSAGING_EXPERIMENTS_DEFAULT_FEATURES } = ChromeUtils.importESModule(
+  "resource://activity-stream/lib/MessagingExperimentConstants.sys.mjs"
+);
 const { CFRMessageProvider } = ChromeUtils.importESModule(
   "resource://activity-stream/lib/CFRMessageProvider.sys.mjs"
 );
@@ -104,26 +106,6 @@ const TOPIC_EXPERIMENT_ENROLLMENT_CHANGED = "nimbus:enrollments-updated";
 // To observe the pref that controls if ASRouter should use the remote Fluent files for l10n.
 const USE_REMOTE_L10N_PREF =
   "browser.newtabpage.activity-stream.asrouter.useRemoteL10n";
-
-const MESSAGING_EXPERIMENTS_DEFAULT_FEATURES = [
-  "cfr",
-  "fxms-message-1",
-  "fxms-message-2",
-  "fxms-message-3",
-  "fxms-message-4",
-  "fxms-message-5",
-  "fxms-message-6",
-  "fxms-message-7",
-  "fxms-message-8",
-  "fxms-message-9",
-  "fxms-message-10",
-  "fxms-message-11",
-  "infobar",
-  "moments-page",
-  "pbNewtab",
-  "spotlight",
-  "featureCallout",
-];
 
 // Experiment groups that need to report the reach event in Messaging-Experiments.
 // If you're adding new groups to it, make sure they're also added in the
@@ -1857,6 +1839,15 @@ class _ASRouter {
     return Promise.resolve();
   }
 
+  /** Simple wrapper to make test mocking easier
+   *
+   * @returns {Promise} resolves when the attribution string has been set
+   * succesfully.
+   */
+  setAttributionString(attrStr) {
+    return lazy.MacAttribution.setAttributionString(attrStr);
+  }
+
   /**
    * forceAttribution - this function should only be called from within about:newtab#asrouter.
    * It forces the browser attribution to be set to something specified in asrouter admin
@@ -1875,16 +1866,9 @@ class _ASRouter {
         encodeURIComponent(attributionData)
       );
     } else if (AppConstants.platform === "macosx") {
-      let appPath = lazy.MacAttribution.applicationPath;
-      let attributionSvc = Cc["@mozilla.org/mac-attribution;1"].getService(
-        Ci.nsIMacAttributionService
+      await this.setAttributionString(
+        `__MOZCUSTOM__${encodeURIComponent(attributionData)}`
       );
-
-      // The attribution data is treated as a url query for mac
-      let referrer = `https://www.mozilla.org/anything/?${attributionData}`;
-
-      // This sets the Attribution to be the referrer
-      attributionSvc.setReferrerUrl(appPath, referrer, true);
 
       // Delete attribution data file
       await AttributionCode.deleteFileAsync();

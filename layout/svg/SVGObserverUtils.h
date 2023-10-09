@@ -286,6 +286,9 @@ class SVGObserverUtils {
   static ReferenceState GetAndObserveFilters(
       nsIFrame* aFilteredFrame, nsTArray<SVGFilterFrame*>* aFilterFrames);
 
+  static ReferenceState GetAndObserveFilters(
+      nsISupports* aObserverList, nsTArray<SVGFilterFrame*>* aFilterFrames);
+
   /**
    * If the given frame is already observing SVG filters, this function gets
    * those filters.  If the frame is not already observing filters this
@@ -343,6 +346,16 @@ class SVGObserverUtils {
    */
   static ReferenceState GetAndObserveClipPath(
       nsIFrame* aClippedFrame, SVGClipPathFrame** aClipPathFrame);
+
+  /**
+   * Get the element of the SVG Shape element, if any, and set up |aFrame| as a
+   * rendering observer of the geometry frame, to post a restyle if it changes.
+   *
+   * We use this function to resolve offset-path:url() and build the equivalent
+   * path from this shape element, and generate the transformation from for CSS
+   * Motion.
+   */
+  static SVGGeometryElement* GetAndObserveGeometry(nsIFrame* aFrame);
 
   /**
    * If masking is applied to aMaskedFrame, gets an array of any SVG masks

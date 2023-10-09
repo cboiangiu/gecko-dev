@@ -936,7 +936,6 @@ def gtest(
     debugger,
     debugger_args,
 ):
-
     # We lazy build gtest because it's slow to link
     try:
         command_context.config_environment
@@ -1267,7 +1266,7 @@ def _get_android_run_parser():
         "--aab",
         action="store_true",
         default=False,
-        help="Install app ass App Bundle (AAB).",
+        help="Install app as Android App Bundle (AAB).",
     )
     group.add_argument(
         "--no-install",
@@ -2406,14 +2405,17 @@ def repackage_deb_l10n(
 @SubCommand("repackage", "dmg", description="Repackage a tar file into a .dmg for OSX")
 @CommandArgument("--input", "-i", type=str, required=True, help="Input filename")
 @CommandArgument("--output", "-o", type=str, required=True, help="Output filename")
-def repackage_dmg(command_context, input, output):
+@CommandArgument(
+    "--attribution_sentinel", type=str, required=False, help="DMGs with attribution."
+)
+def repackage_dmg(command_context, input, output, attribution_sentinel):
     if not os.path.exists(input):
         print("Input file does not exist: %s" % input)
         return 1
 
     from mozbuild.repackaging.dmg import repackage_dmg
 
-    repackage_dmg(input, output)
+    repackage_dmg(input, output, attribution_sentinel)
 
 
 @SubCommand("repackage", "pkg", description="Repackage a tar file into a .pkg for OSX")

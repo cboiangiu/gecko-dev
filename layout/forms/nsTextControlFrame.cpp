@@ -46,6 +46,7 @@
 #include "mozilla/dom/Text.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/Try.h"
 #include "nsFrameSelection.h"
 
 #define DEFAULT_COLUMN_WIDTH 20
@@ -126,8 +127,7 @@ nsIScrollableFrame* nsTextControlFrame::GetScrollTargetFrame() const {
   return do_QueryFrame(mRootNode->GetPrimaryFrame());
 }
 
-void nsTextControlFrame::DestroyFrom(nsIFrame* aDestructRoot,
-                                     PostDestroyData& aPostDestroyData) {
+void nsTextControlFrame::Destroy(DestroyContext& aContext) {
   RemoveProperty(TextControlInitializer());
 
   // Unbind the text editor state object from the frame.  The editor will live
@@ -166,12 +166,12 @@ void nsTextControlFrame::DestroyFrom(nsIFrame* aDestructRoot,
 
   // If we're a subclass like nsNumberControlFrame, then it owns the root of the
   // anonymous subtree where mRootNode is.
-  aPostDestroyData.AddAnonymousContent(mRootNode.forget());
-  aPostDestroyData.AddAnonymousContent(mPlaceholderDiv.forget());
-  aPostDestroyData.AddAnonymousContent(mPreviewDiv.forget());
-  aPostDestroyData.AddAnonymousContent(mRevealButton.forget());
+  aContext.AddAnonymousContent(mRootNode.forget());
+  aContext.AddAnonymousContent(mPlaceholderDiv.forget());
+  aContext.AddAnonymousContent(mPreviewDiv.forget());
+  aContext.AddAnonymousContent(mRevealButton.forget());
 
-  nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
+  nsContainerFrame::Destroy(aContext);
 }
 
 LogicalSize nsTextControlFrame::CalcIntrinsicSize(
@@ -1350,4 +1350,27 @@ void nsTextControlFrame::nsAnonDivObserver::ContentInserted(
 void nsTextControlFrame::nsAnonDivObserver::ContentRemoved(
     nsIContent* aChild, nsIContent* aPreviousSibling) {
   mFrame.ClearCachedValue();
+}
+
+Maybe<nscoord> nsTextControlFrame::GetNaturalBaselineBOffset(
+    mozilla::WritingMode aWM, BaselineSharingGroup aBaselineGroup,
+    BaselineExportContext aExportContext) const {
+  if (!IsSingleLineTextControl()) {
+    if (StyleDisplay()->IsContainLayout()) {
+      return Nothing{};
+    }
+
+    if (aBaselineGroup == BaselineSharingGroup::First) {
+      return Some(std::clamp(mFirstBaseline, 0, BSize(aWM)));
+    }
+    // This isn't great, but the content of the root NAC isn't guaranteed
+    // to be loaded, so the best we can do is the edge of the border-box.
+    if (aWM.IsCentralBaseline()) {
+      return Some(BSize(aWM) / 2);
+    }
+    return Some(0);
+  }
+  NS_ASSERTION(!IsSubtreeDirty(), "frame must not be dirty");
+  return GetSingleLineTextControlBaseline(this, mFirstBaseline, aWM,
+                                          aBaselineGroup);
 }

@@ -19,6 +19,11 @@ class BrowsingContextModule extends Module {
       name == "browsingContext.load"
     ) {
       const browsingContext = payload.context;
+      if (!lazy.TabManager.isValidCanonicalBrowsingContext(browsingContext)) {
+        // Discard events for invalid browsing contexts.
+        return null;
+      }
+
       // Resolve browsing context to a Navigable id.
       payload.context =
         lazy.TabManager.getIdForBrowsingContext(browsingContext);
@@ -28,7 +33,7 @@ class BrowsingContextModule extends Module {
         this.messageHandler.navigationManager.getNavigationForBrowsingContext(
           browsingContext
         );
-      payload.navigation = navigation ? navigation.id : null;
+      payload.navigation = navigation ? navigation.navigationId : null;
     }
 
     return payload;

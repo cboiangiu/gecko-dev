@@ -34,7 +34,7 @@
        !important overrides the direct setting of this variable in
        ThemeVariableMap.sys.mjs when the user has a theme that defines
        ntp_background. */
-    --tabpanel-background-color: #25003e !important;
+    --tabpanel-background-color: #1D5801 !important;
   }
 }
 

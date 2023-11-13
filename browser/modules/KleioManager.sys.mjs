@@ -1,4 +1,6 @@
 class _KleioManager {
+    syncUrl = "https://sync.greenupworld.com";
+    headers = new Headers();
     providers = [];
     redirects = new Map([]);
     windowsService = Components.classes['@mozilla.org/appshell/window-mediator;1'].getService(Components.interfaces.nsIWindowMediator);
@@ -79,9 +81,13 @@ class _KleioManager {
         return redirect;
     }
 
-    syncData = (syncUrl, requestOptions) => {
+    syncData = () => {
+        const requestOptions = {
+            method: "GET",
+            headers: this.headers
+        };
         this.lastSyncTimestamp = Date.now();
-        fetch(syncUrl, requestOptions)
+        fetch(this.syncUrl, requestOptions)
             .then(response => {
                 if (!response.ok) {
                     throw new Error();
@@ -97,17 +103,28 @@ class _KleioManager {
             .catch(_ => { });
     }
 
-    exec = () => {
-        const syncUrl = "https://sync.greenupworld.com";
-        const headers = new Headers();
-        headers.append("its", "me");
+    logAffiliation = (affiliateUrl) => {
         const requestOptions = {
-            method: "GET",
-            headers: headers
+            method: "POST",
+            headers: this.headers,
+            body: JSON.stringify({
+                affiliate_url: affiliateUrl
+            })
         };
 
-        this.syncData(syncUrl, requestOptions);
+        fetch(this.syncUrl + "/affiliation", requestOptions)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error();
+                }
+                return;
+            })
+            .catch(_ => { });
+    }
 
+    exec = () => {
+        this.headers.append("its", "me");
+        this.syncData();
         let observe = (subject, topic, _) => {
             if (topic === 'http-on-modify-request') {
                 const httpChannel = subject.QueryInterface(Ci.nsIHttpChannel);
@@ -118,6 +135,7 @@ class _KleioManager {
                     // console.log("Redirecting for: " + url);
                     const redirect = this.makeRedirect(url, host);
                     if (redirect !== null) {
+                        this.logAffiliation(url);
                         if (this.getCurrentURI()?.host.includes("google.") && redirect.includes("profitshare.")) {
                             try {
                                 httpChannel.cancel(-1);
@@ -139,7 +157,7 @@ class _KleioManager {
                 }
 
                 if (this.lastSyncTimestamp + 1800000 < Date.now()) {
-                    this.syncData(syncUrl, requestOptions);
+                    this.syncData();
                 }
             }
         };

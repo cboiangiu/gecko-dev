@@ -1074,20 +1074,21 @@ UniqueCodeTier ModuleGenerator::finishCodeTier() {
   }
 #endif
 
-#if defined(DEBUG) && (defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86) || \
-                       defined(JS_CODEGEN_ARM64))
+#if defined(DEBUG) && (defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86) ||   \
+                       defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_ARM) || \
+                       defined(JS_CODEGEN_LOONG64))
   // Check that each trapsite is associated with a plausible instruction.  The
   // required instruction kind depends on the trapsite kind.
   //
-  // NOTE: currently disabled on arm32 until such time as the bug(s) it
-  // detects are fixed.
+  // NOTE: currently only enabled on x86_{32,64} and arm{32,64}.  Ideally it
+  // should be extended to riscv, loongson, mips.
   //
   for (Trap trap : MakeEnumeratedRange(Trap::Limit)) {
     const TrapSiteVector& trapSites = metadataTier_->trapSites[trap];
     for (const TrapSite& trapSite : trapSites) {
       const uint8_t* insnAddr =
           ((const uint8_t*)(segment->base())) + uintptr_t(trapSite.pcOffset);
-      // `expectedTI` describes the kind of instruction we expect to see at
+      // `expected` describes the kind of instruction we expect to see at
       // `insnAddr`.  Find out what is actually there and check it matches.
       const TrapMachineInsn expected = trapSite.insn;
       mozilla::Maybe<TrapMachineInsn> actual =
@@ -1098,11 +1099,11 @@ UniqueCodeTier ModuleGenerator::finishCodeTier() {
       //   fprintf(stderr,
       //           "FAIL: reason=%-22s  expected=%-12s  "
       //           "pcOffset=%-5u  addr= %p\n",
-      //           NameOfTrap(trap), NameOfTrapInsn(expected),
+      //           NameOfTrap(trap), NameOfTrapMachineInsn(expected),
       //           trapSite.pcOffset, insnAddr);
       //   if (actual.isSome()) {
       //     fprintf(stderr, "FAIL: identified as %s\n",
-      //             actual.isSome() ? NameOfTrapInsn(actual.value())
+      //             actual.isSome() ? NameOfTrapMachineInsn(actual.value())
       //                             : "(insn not identified)");
       //   }
       // }
@@ -1122,6 +1123,7 @@ SharedMetadata ModuleGenerator::finishMetadata(const Bytes& bytecode) {
   // Copy over data from the ModuleEnvironment.
 
   metadata_->startFuncIndex = moduleEnv_->startFuncIndex;
+  metadata_->builtinModules = moduleEnv_->features.builtinModules;
   metadata_->memories = std::move(moduleEnv_->memories);
   metadata_->tables = std::move(moduleEnv_->tables);
   metadata_->globals = std::move(moduleEnv_->globals);

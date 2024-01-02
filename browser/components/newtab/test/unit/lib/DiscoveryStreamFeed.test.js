@@ -10,11 +10,10 @@ import { RecommendationProvider } from "lib/RecommendationProvider.jsm";
 import { reducers } from "common/Reducers.sys.mjs";
 
 import { PersistentCache } from "lib/PersistentCache.sys.mjs";
-import { PersonalityProvider } from "lib/PersonalityProvider/PersonalityProvider.jsm";
 
 const CONFIG_PREF_NAME = "discoverystream.config";
-const DUMMY_ENDPOINT = "https://getpocket.cdn.mozilla.net/dummy";
 const ENDPOINTS_PREF_NAME = "discoverystream.endpoints";
+const DUMMY_ENDPOINT = "https://getpocket.cdn.mozilla.net/dummy";
 const SPOC_IMPRESSION_TRACKING_PREF = "discoverystream.spoc.impressions";
 const REC_IMPRESSION_TRACKING_PREF = "discoverystream.rec.impressions";
 const THIRTY_MINUTES = 30 * 60 * 1000;
@@ -59,7 +58,6 @@ describe("DiscoveryStreamFeed", () => {
     globals.set({
       gUUIDGenerator: { generateUUID: () => FAKE_UUID },
       PersistentCache,
-      PersonalityProvider,
     });
 
     sandbox
@@ -80,7 +78,6 @@ describe("DiscoveryStreamFeed", () => {
         values: {
           [CONFIG_PREF_NAME]: JSON.stringify({
             enabled: false,
-            show_spocs: false,
           }),
           [ENDPOINTS_PREF_NAME]: DUMMY_ENDPOINT,
           "discoverystream.enabled": true,
@@ -88,6 +85,7 @@ describe("DiscoveryStreamFeed", () => {
           "feeds.system.topstories": true,
           "discoverystream.spocs.personalized": true,
           "discoverystream.recs.personalized": true,
+          "system.showSponsored": false,
         },
       },
     });
@@ -155,7 +153,11 @@ describe("DiscoveryStreamFeed", () => {
     });
     it("should disallow unexpected endpoints", async () => {
       feed.store.getState = () => ({
-        Prefs: { values: { [ENDPOINTS_PREF_NAME]: "https://other.site" } },
+        Prefs: {
+          values: {
+            [ENDPOINTS_PREF_NAME]: "https://other.site",
+          },
+        },
       });
 
       const response = await feed.fetchFromEndpoint(DUMMY_ENDPOINT);
@@ -329,11 +331,11 @@ describe("DiscoveryStreamFeed", () => {
           values: {
             [CONFIG_PREF_NAME]: JSON.stringify({
               enabled: true,
-              show_spocs: false,
             }),
             [ENDPOINTS_PREF_NAME]: DUMMY_ENDPOINT,
             "discoverystream.enabled": true,
             "discoverystream.region-basic-layout": true,
+            "system.showSponsored": false,
           },
         },
       });
@@ -349,11 +351,11 @@ describe("DiscoveryStreamFeed", () => {
           values: {
             [CONFIG_PREF_NAME]: JSON.stringify({
               enabled: true,
-              show_spocs: false,
             }),
             [ENDPOINTS_PREF_NAME]: DUMMY_ENDPOINT,
             "discoverystream.enabled": true,
             "discoverystream.region-basic-layout": false,
+            "system.showSponsored": false,
           },
         },
       });
@@ -379,11 +381,11 @@ describe("DiscoveryStreamFeed", () => {
           values: {
             [CONFIG_PREF_NAME]: JSON.stringify({
               enabled: false,
-              show_spocs: false,
             }),
             [ENDPOINTS_PREF_NAME]: DUMMY_ENDPOINT,
             "discoverystream.enabled": true,
             "discoverystream.hardcoded-basic-layout": true,
+            "system.showSponsored": false,
           },
         },
       });
@@ -403,12 +405,12 @@ describe("DiscoveryStreamFeed", () => {
           values: {
             [CONFIG_PREF_NAME]: JSON.stringify({
               enabled: false,
-              show_spocs: false,
             }),
             [ENDPOINTS_PREF_NAME]: DUMMY_ENDPOINT,
             "discoverystream.enabled": true,
             "discoverystream.spocs-endpoint":
               "https://spocs.getpocket.com/spocs2",
+            "system.showSponsored": false,
           },
         },
       });
@@ -525,10 +527,9 @@ describe("DiscoveryStreamFeed", () => {
     it("should dispatch DISCOVERY_STREAM_SPOCS_PLACEMENTS", () => {
       sandbox.spy(feed.store, "dispatch");
       feed.store.getState = () => ({
-        Prefs: { values: { showSponsored: true } },
-      });
-      Object.defineProperty(feed, "config", {
-        get: () => ({ show_spocs: true }),
+        Prefs: {
+          values: { showSponsored: true, "system.showSponsored": true },
+        },
       });
       const fakeComponents = {
         components: [
@@ -550,10 +551,13 @@ describe("DiscoveryStreamFeed", () => {
     it("should dispatch DISCOVERY_STREAM_SPOCS_PLACEMENTS with prefs array", () => {
       sandbox.spy(feed.store, "dispatch");
       feed.store.getState = () => ({
-        Prefs: { values: { showSponsored: true, withPref: true } },
-      });
-      Object.defineProperty(feed, "config", {
-        get: () => ({ show_spocs: true }),
+        Prefs: {
+          values: {
+            showSponsored: true,
+            withPref: true,
+            "system.showSponsored": true,
+          },
+        },
       });
       const fakeComponents = {
         components: [
@@ -709,7 +713,7 @@ describe("DiscoveryStreamFeed", () => {
       sandbox.stub(feed, "rotate").callsFake(val => val);
       sandbox
         .stub(feed, "scoreItems")
-        .callsFake(val => ({ data: val, filtered: [] }));
+        .callsFake(val => ({ data: val, filtered: [], personalized: false }));
       sandbox.stub(feed, "fetchFromEndpoint").resolves({
         recommendations: "data",
         settings: {
@@ -733,7 +737,7 @@ describe("DiscoveryStreamFeed", () => {
       sandbox.stub(feed, "rotate").callsFake(val => val);
       sandbox
         .stub(feed, "scoreItems")
-        .callsFake(val => ({ data: val, filtered: [] }));
+        .callsFake(val => ({ data: val, filtered: [], personalized: false }));
       clock.tick(THIRTY_MINUTES + 1);
 
       const feedResp = await feed.getComponentFeed("foo.com");
@@ -761,49 +765,6 @@ describe("DiscoveryStreamFeed", () => {
     });
   });
 
-  describe("#personalizationOverride", () => {
-    it("should dispatch setPref", async () => {
-      sandbox.spy(feed.store, "dispatch");
-      feed.store.getState = () => ({
-        Prefs: {
-          values: {
-            "discoverystream.personalization.enabled": true,
-          },
-        },
-      });
-
-      feed.personalizationOverride(true);
-
-      assert.calledWithMatch(feed.store.dispatch, {
-        data: {
-          name: "discoverystream.personalization.override",
-          value: true,
-        },
-        type: at.SET_PREF,
-      });
-    });
-    it("should dispatch CLEAR_PREF", async () => {
-      sandbox.spy(feed.store, "dispatch");
-      feed.store.getState = () => ({
-        Prefs: {
-          values: {
-            "discoverystream.personalization.enabled": true,
-            "discoverystream.personalization.override": true,
-          },
-        },
-      });
-
-      feed.personalizationOverride(false);
-
-      assert.calledWithMatch(feed.store.dispatch, {
-        data: {
-          name: "discoverystream.personalization.override",
-        },
-        type: at.CLEAR_PREF,
-      });
-    });
-  });
-
   describe("#loadSpocs", () => {
     beforeEach(() => {
       feed._prefCache = {
@@ -828,7 +789,7 @@ describe("DiscoveryStreamFeed", () => {
       await feed.loadSpocs(feed.store.dispatch);
 
       assert.notCalled(global.fetch);
-      assert.notCalled(feed.cache.set);
+      assert.calledWith(feed.cache.set, "spocs", { lastUpdated: 0, spocs: {} });
     });
     it("should fetch fresh spocs data if cache is empty", async () => {
       sandbox.stub(feed.cache, "get").returns(Promise.resolve());
@@ -884,9 +845,9 @@ describe("DiscoveryStreamFeed", () => {
     });
     it("should properly transform spocs using placements", async () => {
       sandbox.stub(feed.cache, "get").returns(Promise.resolve());
-      sandbox
-        .stub(feed, "fetchFromEndpoint")
-        .resolves({ spocs: { items: [{ id: "data" }] } });
+      sandbox.stub(feed, "fetchFromEndpoint").resolves({
+        spocs: { items: [{ id: "data" }] },
+      });
       sandbox.stub(feed.cache, "set").returns(Promise.resolve());
 
       await feed.loadSpocs(feed.store.dispatch);
@@ -894,6 +855,7 @@ describe("DiscoveryStreamFeed", () => {
       assert.calledWith(feed.cache.set, "spocs", {
         spocs: {
           spocs: {
+            personalized: false,
             context: "",
             title: "",
             sponsor: "",
@@ -923,9 +885,9 @@ describe("DiscoveryStreamFeed", () => {
         { id: "data", score: 1 }
       );
     });
-    it("should call personalizationVersionOverride with feature_flags", async () => {
+    it("should dispatch DISCOVERY_STREAM_PERSONALIZATION_OVERRIDE with feature_flags", async () => {
       sandbox.stub(feed.cache, "get").returns(Promise.resolve());
-      sandbox.stub(feed, "personalizationOverride").returns();
+      sandbox.spy(feed.store, "dispatch");
       sandbox
         .stub(feed, "fetchFromEndpoint")
         .resolves({ settings: { feature_flags: {} }, spocs: [{ id: "data" }] });
@@ -933,10 +895,19 @@ describe("DiscoveryStreamFeed", () => {
 
       await feed.loadSpocs(feed.store.dispatch);
 
-      assert.calledOnce(feed.personalizationOverride);
+      assert.calledWith(
+        feed.store.dispatch,
+        ac.OnlyToMain({
+          type: at.DISCOVERY_STREAM_PERSONALIZATION_OVERRIDE,
+          data: {
+            override: true,
+          },
+        })
+      );
     });
     it("should return expected data if normalizeSpocsItems returns no spoc data", async () => {
-      // We don't need this for just this test, we are setting placements manually.
+      // We don't need this for just this test, we are setting placements
+      // manually.
       feed.getPlacements.restore();
       Object.defineProperty(feed, "showSponsoredStories", {
         get: () => true,
@@ -960,6 +931,7 @@ describe("DiscoveryStreamFeed", () => {
 
       assert.deepEqual(feed.store.getState().DiscoveryStream.spocs.data, {
         placement1: {
+          personalized: false,
           title: "",
           context: "",
           sponsor: "",
@@ -974,7 +946,8 @@ describe("DiscoveryStreamFeed", () => {
       });
     });
     it("should use title and context on spoc data", async () => {
-      // We don't need this for just this test, we are setting placements manually.
+      // We don't need this for just this test, we are setting placements
+      // manually.
       feed.getPlacements.restore();
       Object.defineProperty(feed, "showSponsoredStories", {
         get: () => true,
@@ -1000,6 +973,7 @@ describe("DiscoveryStreamFeed", () => {
 
       assert.deepEqual(feed.store.getState().DiscoveryStream.spocs.data, {
         placement1: {
+          personalized: false,
           title: "title",
           context: "context",
           sponsor: "",
@@ -1018,7 +992,8 @@ describe("DiscoveryStreamFeed", () => {
         global.NimbusFeatures.pocketNewtab.getVariable
           .withArgs("topSitesContileSovEnabled")
           .returns(true);
-        // We don't need this for just this test, we are setting placements manually.
+        // We don't need this for just this test, we are setting placements
+        // manually.
         feed.getPlacements.restore();
         Object.defineProperty(feed, "showSponsoredStories", {
           get: () => true,
@@ -1258,30 +1233,27 @@ describe("DiscoveryStreamFeed", () => {
   describe("#showSponsoredStories", () => {
     it("should return false from showSponsoredStories if user pref showSponsored is false", async () => {
       feed.store.getState = () => ({
-        Prefs: { values: { showSponsored: false } },
-      });
-      Object.defineProperty(feed, "config", {
-        get: () => ({ show_spocs: true }),
+        Prefs: {
+          values: { showSponsored: false, "system.showSponsored": true },
+        },
       });
 
       assert.isFalse(feed.showSponsoredStories);
     });
-    it("should return false from showSponsoredStories if DiscoveryStream pref show_spocs is false", async () => {
+    it("should return false from showSponsoredStories if DiscoveryStream pref system.showSponsored is false", async () => {
       feed.store.getState = () => ({
-        Prefs: { values: { showSponsored: true } },
-      });
-      Object.defineProperty(feed, "config", {
-        get: () => ({ show_spocs: false }),
+        Prefs: {
+          values: { showSponsored: true, "system.showSponsored": false },
+        },
       });
 
       assert.isFalse(feed.showSponsoredStories);
     });
     it("should return true from showSponsoredStories if both prefs are true", async () => {
       feed.store.getState = () => ({
-        Prefs: { values: { showSponsored: true } },
-      });
-      Object.defineProperty(feed, "config", {
-        get: () => ({ show_spocs: true }),
+        Prefs: {
+          values: { showSponsored: true, "system.showSponsored": true },
+        },
       });
 
       assert.isTrue(feed.showSponsoredStories);
@@ -1390,9 +1362,6 @@ describe("DiscoveryStreamFeed", () => {
     let DiscoveryStream;
     let Prefs;
     beforeEach(() => {
-      Object.defineProperty(feed, "config", {
-        get: () => ({ show_spocs: true }),
-      });
       DiscoveryStream = {
         layout: [],
         spocs: {
@@ -1407,6 +1376,7 @@ describe("DiscoveryStreamFeed", () => {
           "feeds.system.topsites": true,
           showSponsoredTopSites: true,
           showSponsored: true,
+          "system.showSponsored": true,
         },
       };
       defaultState = {
@@ -1418,7 +1388,7 @@ describe("DiscoveryStreamFeed", () => {
     it("should not fail with no endpoint", async () => {
       sandbox.stub(feed.store, "getState").returns({
         Prefs: {
-          values: { "discoverystream.endpointSpocsClear": null },
+          values: { PREF_SPOCS_CLEAR_ENDPOINT: null },
         },
       });
       sandbox.stub(feed, "fetchFromEndpoint").resolves(null);
@@ -1452,7 +1422,7 @@ describe("DiscoveryStreamFeed", () => {
     });
     it("should properly call clearSpocs when sponsored content is changed", async () => {
       sandbox.stub(feed, "clearSpocs").returns(Promise.resolve());
-      //sandbox.stub(feed, "updatePlacements").returns();
+      // sandbox.stub(feed, "updatePlacements").returns();
       sandbox.stub(feed, "loadSpocs").returns();
 
       await feed.onAction({
@@ -1545,25 +1515,22 @@ describe("DiscoveryStreamFeed", () => {
       assert.calledOnce(feed.resetDataPrefs);
       assert.calledOnce(feed.resetCache);
       assert.calledOnce(feed.resetState);
-      assert.calledOnce(global.Services.obs.removeObserver);
     });
   });
 
   describe("#resetCache", () => {
-    it("should set .feeds .spocs .sov and .personalization to {}", async () => {
+    it("should set .feeds .spocs and .sov to {}", async () => {
       sandbox.stub(feed.cache, "set").returns(Promise.resolve());
 
       await feed.resetCache();
 
-      assert.callCount(feed.cache.set, 4);
+      assert.callCount(feed.cache.set, 3);
       const firstCall = feed.cache.set.getCall(0);
       const secondCall = feed.cache.set.getCall(1);
       const thirdCall = feed.cache.set.getCall(2);
-      const fourthCall = feed.cache.set.getCall(3);
       assert.deepEqual(firstCall.args, ["feeds", {}]);
       assert.deepEqual(secondCall.args, ["spocs", {}]);
       assert.deepEqual(thirdCall.args, ["sov", {}]);
-      assert.deepEqual(fourthCall.args, ["personalization", {}]);
     });
   });
 
@@ -2542,13 +2509,11 @@ describe("DiscoveryStreamFeed", () => {
     it("should update state.DiscoveryStream.config when the pref changes", async () => {
       setPref(CONFIG_PREF_NAME, {
         enabled: true,
-        show_spocs: false,
         api_key_pref: "foo",
       });
 
       assert.deepEqual(feed.store.getState().DiscoveryStream.config, {
         enabled: true,
-        show_spocs: false,
         api_key_pref: "foo",
       });
     });
@@ -2595,6 +2560,17 @@ describe("DiscoveryStreamFeed", () => {
       });
 
       assert.calledOnce(feed.refreshAll);
+    });
+    it("shoud update allowlist", async () => {
+      assert.equal(
+        feed.store.getState().Prefs.values[ENDPOINTS_PREF_NAME],
+        DUMMY_ENDPOINT
+      );
+      setPref(ENDPOINTS_PREF_NAME, "sick-kickflip.mozilla.net");
+      assert.equal(
+        feed.store.getState().Prefs.values[ENDPOINTS_PREF_NAME],
+        "sick-kickflip.mozilla.net"
+      );
     });
   });
 
@@ -2657,6 +2633,23 @@ describe("DiscoveryStreamFeed", () => {
     });
   });
 
+  describe("#enable", () => {
+    it("should pass along proper options to refreshAll from enable", async () => {
+      sandbox.stub(feed, "refreshAll");
+      await feed.enable();
+      assert.calledWith(feed.refreshAll, {});
+      await feed.enable({ updateOpenTabs: true });
+      assert.calledWith(feed.refreshAll, { updateOpenTabs: true });
+      await feed.enable({ isStartup: true });
+      assert.calledWith(feed.refreshAll, { isStartup: true });
+      await feed.enable({ updateOpenTabs: true, isStartup: true });
+      assert.calledWith(feed.refreshAll, {
+        updateOpenTabs: true,
+        isStartup: true,
+      });
+    });
+  });
+
   describe("#onPrefChange", () => {
     it("should call loadLayout when Pocket config changes", async () => {
       sandbox.stub(feed, "loadLayout");
@@ -2665,6 +2658,14 @@ describe("DiscoveryStreamFeed", () => {
       };
       await feed.onPrefChange();
       assert.calledOnce(feed.loadLayout);
+    });
+    it("should update open tabs but not startup with onPrefChange", async () => {
+      sandbox.stub(feed, "refreshAll");
+      feed._prefCache.config = {
+        enabled: true,
+      };
+      await feed.onPrefChange();
+      assert.calledWith(feed.refreshAll, { updateOpenTabs: true });
     });
   });
 
@@ -2682,20 +2683,6 @@ describe("DiscoveryStreamFeed", () => {
       const [dispatchFn] = feed.loadSpocs.firstCall.args;
       dispatchFn({});
       assert.calledWith(feed.store.dispatch, ac.BroadcastToContent({}));
-    });
-  });
-
-  describe("#onAction: DISCOVERY_STREAM_DEV_IDLE_DAILY", () => {
-    it("should trigger idle-daily observer", async () => {
-      sandbox.stub(global.Services.obs, "notifyObservers").returns();
-      await feed.onAction({
-        type: at.DISCOVERY_STREAM_DEV_IDLE_DAILY,
-      });
-      assert.calledWith(
-        global.Services.obs.notifyObservers,
-        null,
-        "idle-daily"
-      );
     });
   });
 
@@ -2940,9 +2927,9 @@ describe("DiscoveryStreamFeed", () => {
       });
       it("should not refresh layout on startup if it is under THIRTY_MINUTES", async () => {
         feed.loadLayout.restore();
-        sandbox
-          .stub(feed.cache, "get")
-          .resolves({ layout: { lastUpdated: Date.now(), layout: {} } });
+        sandbox.stub(feed.cache, "get").resolves({
+          layout: { lastUpdated: Date.now(), layout: {} },
+        });
         sandbox.stub(feed, "fetchFromEndpoint").resolves({ layout: {} });
 
         await feed.refreshAll({ isStartup: true });
@@ -2952,9 +2939,9 @@ describe("DiscoveryStreamFeed", () => {
       it("should refresh spocs on startup if it was served from cache", async () => {
         feed.loadSpocs.restore();
         sandbox.stub(feed, "getPlacements").returns([{ name: "spocs" }]);
-        sandbox
-          .stub(feed.cache, "get")
-          .resolves({ spocs: { lastUpdated: Date.now() } });
+        sandbox.stub(feed.cache, "get").resolves({
+          spocs: { lastUpdated: Date.now() },
+        });
         clock.tick(THIRTY_MINUTES + 1);
 
         await feed.refreshAll({ isStartup: true });
@@ -2968,9 +2955,9 @@ describe("DiscoveryStreamFeed", () => {
       });
       it("should not refresh spocs on startup if it is under THIRTY_MINUTES", async () => {
         feed.loadSpocs.restore();
-        sandbox
-          .stub(feed.cache, "get")
-          .resolves({ spocs: { lastUpdated: Date.now() } });
+        sandbox.stub(feed.cache, "get").resolves({
+          spocs: { lastUpdated: Date.now() },
+        });
         sandbox.stub(feed, "fetchFromEndpoint").resolves("data");
 
         await feed.refreshAll({ isStartup: true });
@@ -2997,7 +2984,7 @@ describe("DiscoveryStreamFeed", () => {
         sandbox.stub(feed, "rotate").callsFake(val => val);
         sandbox
           .stub(feed, "scoreItems")
-          .callsFake(val => ({ data: val, filtered: [] }));
+          .callsFake(val => ({ data: val, filtered: [], personalized: false }));
         sandbox.stub(feed, "cleanUpTopRecImpressionPref").callsFake(val => val);
 
         const fakeCache = {
@@ -3015,7 +3002,8 @@ describe("DiscoveryStreamFeed", () => {
         await feed.refreshAll({ isStartup: true });
 
         assert.calledOnce(feed.fetchFromEndpoint);
-        // Once from cache, once to update the feed, once to update that all feeds are done.
+        // Once from cache, once to update the feed, once to update that all
+        // feeds are done.
         assert.calledThrice(feed.store.dispatch);
         assert.equal(
           feed.store.dispatch.secondCall.args[0].type,
@@ -3026,9 +3014,32 @@ describe("DiscoveryStreamFeed", () => {
   });
 
   describe("#scoreFeeds", () => {
-    it("should score feeds and set cache, and dispatch", async () => {
+    beforeEach(() => {
       sandbox.stub(feed.cache, "set").resolves();
       sandbox.spy(feed.store, "dispatch");
+    });
+    it("should score feeds and set cache, and dispatch", async () => {
+      const fakeDiscoveryStream = {
+        Prefs: {
+          values: {
+            "discoverystream.spocs.personalized": true,
+            "discoverystream.recs.personalized": false,
+          },
+        },
+        Personalization: {
+          initialized: true,
+        },
+        DiscoveryStream: {
+          spocs: {
+            placements: [
+              { name: "placement1" },
+              { name: "placement2" },
+              { name: "placement3" },
+            ],
+          },
+        },
+      };
+      sandbox.stub(feed.store, "getState").returns(fakeDiscoveryStream);
       const recsExpireTime = 5600;
       const fakeImpressions = {
         first: Date.now() - recsExpireTime * 1000,
@@ -3079,6 +3090,7 @@ describe("DiscoveryStreamFeed", () => {
       };
       const feedsTestResult = {
         "https://foo.com": {
+          personalized: true,
           data: {
             recommendations: [
               {
@@ -3098,6 +3110,7 @@ describe("DiscoveryStreamFeed", () => {
           },
         },
         "https://bar.com": {
+          personalized: true,
           data: {
             recommendations: [
               {
@@ -3143,18 +3156,54 @@ describe("DiscoveryStreamFeed", () => {
         feed: feedsTestResult["https://bar.com"],
       });
     });
+
+    it("should skip already personalized feeds", async () => {
+      sandbox.spy(feed, "scoreItems");
+      const recsExpireTime = 5600;
+      const fakeFeeds = {
+        data: {
+          "https://foo.com": {
+            personalized: true,
+            data: {
+              recommendations: [
+                {
+                  id: "first",
+                  item_score: 0.7,
+                },
+                {
+                  id: "second",
+                  item_score: 0.6,
+                },
+              ],
+              settings: {
+                recsExpireTime,
+              },
+            },
+          },
+        },
+      };
+
+      await feed.scoreFeeds(fakeFeeds);
+
+      assert.notCalled(feed.scoreItems);
+    });
   });
 
   describe("#scoreSpocs", () => {
-    it("should score spocs and set cache, dispatch", async () => {
+    beforeEach(() => {
       sandbox.stub(feed.cache, "set").resolves();
       sandbox.spy(feed.store, "dispatch");
+    });
+    it("should score spocs and set cache, dispatch", async () => {
       const fakeDiscoveryStream = {
         Prefs: {
           values: {
             "discoverystream.spocs.personalized": true,
             "discoverystream.recs.personalized": false,
           },
+        },
+        Personalization: {
+          initialized: true,
         },
         DiscoveryStream: {
           spocs: {
@@ -3203,6 +3252,7 @@ describe("DiscoveryStreamFeed", () => {
         lastUpdated: 1234,
         spocs: {
           placement1: {
+            personalized: true,
             items: [
               {
                 score: 0.8,
@@ -3219,6 +3269,7 @@ describe("DiscoveryStreamFeed", () => {
             ],
           },
           placement2: {
+            personalized: true,
             items: [
               {
                 score: 0.8,
@@ -3243,9 +3294,53 @@ describe("DiscoveryStreamFeed", () => {
         spocsTestResult
       );
     });
+
+    it("should skip already personalized spocs", async () => {
+      sandbox.spy(feed, "scoreItems");
+      const fakeDiscoveryStream = {
+        Prefs: {
+          values: {
+            "discoverystream.spocs.personalized": true,
+            "discoverystream.recs.personalized": false,
+          },
+        },
+        Personalization: {
+          initialized: true,
+        },
+        DiscoveryStream: {
+          spocs: {
+            placements: [{ name: "placement1" }],
+          },
+        },
+      };
+      sandbox.stub(feed.store, "getState").returns(fakeDiscoveryStream);
+      const fakeSpocs = {
+        lastUpdated: 1234,
+        data: {
+          placement1: {
+            personalized: true,
+            items: [
+              {
+                item_score: 0.6,
+              },
+              {
+                item_score: 0.4,
+              },
+              {
+                item_score: 0.8,
+              },
+            ],
+          },
+        },
+      };
+
+      await feed.scoreSpocs(fakeSpocs);
+
+      assert.notCalled(feed.scoreItems);
+    });
   });
 
-  describe("#scoreContent", () => {
+  describe("#onAction: DISCOVERY_STREAM_PERSONALIZATION_UPDATED", () => {
     it("should call scoreFeeds and scoreSpocs if loaded", async () => {
       const fakeDiscoveryStream = {
         Prefs: {
@@ -3254,9 +3349,6 @@ describe("DiscoveryStreamFeed", () => {
               recsPersonalized: true,
               spocsPersonalized: true,
             },
-            "discoverystream.personalization.enabled": true,
-            "feeds.section.topstories": true,
-            "feeds.system.topstories": true,
           },
         },
         DiscoveryStream: {
@@ -3267,15 +3359,12 @@ describe("DiscoveryStreamFeed", () => {
 
       sandbox.stub(feed, "scoreFeeds").resolves();
       sandbox.stub(feed, "scoreSpocs").resolves();
-      sandbox.stub(feed, "refreshContent").resolves();
-      sandbox.stub(feed, "loadPersonalizationScoresCache").resolves();
+      Object.defineProperty(feed, "personalized", { get: () => true });
       sandbox.stub(feed.store, "getState").returns(fakeDiscoveryStream);
-      sandbox.stub(feed, "_checkExpirationPerComponent").resolves({
-        feeds: true,
-        spocs: true,
-      });
 
-      await feed.refreshAll();
+      await feed.onAction({
+        type: at.DISCOVERY_STREAM_PERSONALIZATION_UPDATED,
+      });
 
       assert.notCalled(feed.scoreFeeds);
       assert.notCalled(feed.scoreSpocs);
@@ -3283,48 +3372,16 @@ describe("DiscoveryStreamFeed", () => {
       fakeDiscoveryStream.DiscoveryStream.feeds.loaded = true;
       fakeDiscoveryStream.DiscoveryStream.spocs.loaded = true;
 
-      await feed.refreshAll();
+      await feed.onAction({
+        type: at.DISCOVERY_STREAM_PERSONALIZATION_UPDATED,
+      });
 
       assert.calledOnce(feed.scoreFeeds);
       assert.calledOnce(feed.scoreSpocs);
     });
   });
 
-  describe("#loadPersonalizationScoresCache", () => {
-    it("should create a personalization provider from cached scores", async () => {
-      feed.store.getState = () => ({
-        Prefs: {
-          values: {
-            pocketConfig: {
-              recsPersonalized: true,
-              spocsPersonalized: true,
-            },
-            "discoverystream.personalization.enabled": true,
-            "feeds.section.topstories": true,
-            "feeds.system.topstories": true,
-          },
-        },
-      });
-      const fakeCache = {
-        personalization: {
-          scores: 123,
-          _timestamp: 456,
-        },
-      };
-      sandbox.stub(feed.cache, "get").returns(Promise.resolve(fakeCache));
-
-      await feed.loadPersonalizationScoresCache();
-
-      assert.equal(feed.personalizationLastUpdated, 456);
-    });
-  });
-
   describe("#observe", () => {
-    it("should call updatePersonalizationScores on idle daily", async () => {
-      sandbox.stub(feed, "updatePersonalizationScores").returns();
-      feed.observe(null, "idle-daily");
-      assert.calledOnce(feed.updatePersonalizationScores);
-    });
     it("should call configReset on Pocket button pref change", async () => {
       sandbox.stub(feed, "configReset").returns();
       feed.observe(null, "nsPref:changed", "extensions.pocket.enabled");
@@ -3332,51 +3389,12 @@ describe("DiscoveryStreamFeed", () => {
     });
   });
 
-  describe("#updatePersonalizationScores", () => {
-    it("should update recommendationProvider on updatePersonalizationScores", async () => {
-      feed.store.getState = () => ({
-        Prefs: {
-          values: {
-            pocketConfig: {
-              recsPersonalized: true,
-              spocsPersonalized: true,
-            },
-            "discoverystream.personalization.enabled": true,
-            "feeds.section.topstories": true,
-            "feeds.system.topstories": true,
-          },
-        },
-      });
-      sandbox.stub(feed.recommendationProvider, "init").returns();
-
-      await feed.updatePersonalizationScores();
-
-      assert.deepEqual(feed.recommendationProvider.provider.getScores(), {
-        interestConfig: undefined,
-        interestVector: undefined,
-      });
-    });
-    it("should not update recommendationProvider on updatePersonalizationScores", async () => {
-      feed.store.getState = () => ({
-        Prefs: {
-          values: {
-            "discoverystream.spocs.personalized": true,
-            "discoverystream.recs.personalized": true,
-            "discoverystream.personalization.enabled": false,
-          },
-        },
-      });
-      await feed.updatePersonalizationScores();
-
-      assert.isTrue(!feed.recommendationProvider.provider);
-    });
-  });
   describe("#scoreItem", () => {
     it("should call calculateItemRelevanceScore with recommendationProvider with initial score", async () => {
       const item = {
         item_score: 0.6,
       };
-      feed.store.getState = () => ({
+      feed.recommendationProvider.store.getState = () => ({
         Prefs: {
           values: {
             pocketConfig: {
@@ -3457,10 +3475,11 @@ describe("DiscoveryStreamFeed", () => {
       sandbox.stub(feed, "rotate").callsFake(val => val);
       sandbox
         .stub(feed, "scoreItems")
-        .callsFake(val => ({ data: val, filtered: [] }));
+        .callsFake(val => ({ data: val, filtered: [], personalized: false }));
       sandbox.stub(feed, "fetchFromEndpoint").resolves({
         data: [
           {
+            recommendationId: "decaf-c0ff33",
             tileId: 1234,
             url: "url",
             title: "title",
@@ -3475,6 +3494,7 @@ describe("DiscoveryStreamFeed", () => {
       const feedData = await feed.getComponentFeed("url");
       assert.deepEqual(feedData, {
         lastUpdated: 0,
+        personalized: false,
         data: {
           settings: {},
           recommendations: [
@@ -3486,6 +3506,7 @@ describe("DiscoveryStreamFeed", () => {
               publisher: "publisher",
               time_to_read: "timeToRead",
               raw_image_src: "imageUrl",
+              recommendation_id: "decaf-c0ff33",
             },
           ],
           status: "success",

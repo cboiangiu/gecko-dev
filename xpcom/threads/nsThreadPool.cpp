@@ -170,10 +170,8 @@ void nsThreadPool::ShutdownThread(nsIThread* aThread) {
   // shutdown requires this thread have an event loop (and it may not, see bug
   // 10204784).  The simplest way to cover all cases is to asynchronously
   // shutdown aThread from the main thread.
-  SchedulerGroup::Dispatch(
-      TaskCategory::Other,
-      NewRunnableMethod("nsIThread::AsyncShutdown", aThread,
-                        &nsIThread::AsyncShutdown));
+  SchedulerGroup::Dispatch(NewRunnableMethod(
+      "nsIThread::AsyncShutdown", aThread, &nsIThread::AsyncShutdown));
 }
 
 NS_IMETHODIMP
@@ -372,6 +370,7 @@ nsThreadPool::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags) {
   LOG(("THRD-P(%p) dispatch [%p %x]\n", this, /* XXX aEvent*/ nullptr, aFlags));
 
   if (NS_WARN_IF(mShutdown)) {
+    nsCOMPtr<nsIRunnable> event(aEvent);
     return NS_ERROR_NOT_AVAILABLE;
   }
 

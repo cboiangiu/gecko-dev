@@ -250,3 +250,33 @@
         <html:span> Relay</html:span>
       </html:div>
     </template>
+
+    <popupnotification id="credit-card-save-update-notification" class="credit-card-capture-notification" hidden="true">
+      <popupnotificationcontent class="credit-card-save-update-notification-content" orient="vertical">
+        <html:div class="credit-card-capture-content">
+        </html:div>
+      </popupnotificationcontent>
+    </popupnotification>
+
+    <popupnotification id="address-save-update-notification" class="address-capture-notification" hidden="true">
+      <popupnotificationcontent class="address-save-update-notification-content" orient="vertical">
+        <html:div class="address-capture-header">
+          <html:p/>
+        </html:div>
+        <html:div class="address-capture-description">
+          <html:p/>
+        </html:div>
+        <html:div class="address-capture-content">
+        </html:div>
+      </popupnotificationcontent>
+    </popupnotification>
+
+    <popupnotification id="address-edit-notification" class="address-capture-notification" hidden="true">
+      <popupnotificationcontent class="address-edit-notification-content" orient="vertical">
+        <html:div class="address-capture-header">
+          <html:p/>
+        </html:div>
+        <html:div class="address-capture-content">
+        </html:div>
+      </popupnotificationcontent>
+    </popupnotification>

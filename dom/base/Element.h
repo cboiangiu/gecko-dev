@@ -107,6 +107,7 @@ class nsGetterAddRefs;
 namespace mozilla {
 class DeclarationBlock;
 class MappedDeclarationsBuilder;
+class EditorBase;
 class ErrorResult;
 class OOMReporter;
 class SMILAttr;
@@ -181,8 +182,13 @@ enum : uint32_t {
   // element or has a HTML datalist element ancestor.
   ELEMENT_IS_DATALIST_OR_HAS_DATALIST_ANCESTOR = ELEMENT_FLAG_BIT(4),
 
+  // If this flag is set on an element, that means this element
+  // has been considered by our LargestContentfulPaint algorithm and
+  // it's not going to be considered again.
+  ELEMENT_PROCESSED_BY_LCP_FOR_TEXT = ELEMENT_FLAG_BIT(5),
+
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 5
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 6
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -217,12 +223,17 @@ class Grid;
     }                                                \
   }
 
-#define REFLECT_DOMSTRING_ATTR(method, attr)                    \
-  void Get##method(nsAString& aValue) const {                   \
-    GetAttr(nsGkAtoms::attr, aValue);                           \
-  }                                                             \
-  void Set##method(const nsAString& aValue, ErrorResult& aRv) { \
-    SetAttr(nsGkAtoms::attr, aValue, aRv);                      \
+#define REFLECT_NULLABLE_DOMSTRING_ATTR(method, attr)            \
+  void Get##method(nsAString& aValue) const {                    \
+    const nsAttrValue* val = mAttrs.GetAttr(nsGkAtoms::attr);    \
+    if (!val) {                                                  \
+      SetDOMStringToNull(aValue);                                \
+      return;                                                    \
+    }                                                            \
+    val->ToString(aValue);                                       \
+  }                                                              \
+  void Set##method(const nsAString& aValue, ErrorResult& aRv) {  \
+    SetOrRemoveNullableStringAttr(nsGkAtoms::attr, aValue, aRv); \
   }
 
 class Element : public FragmentOrElement {
@@ -610,6 +621,8 @@ class Element : public FragmentOrElement {
    */
   void SetCustomElementData(UniquePtr<CustomElementData> aData);
 
+  nsTArray<RefPtr<nsAtom>>& EnsureCustomStates();
+
   /**
    * Gets the custom element definition used by web components custom element.
    *
@@ -631,50 +644,50 @@ class Element : public FragmentOrElement {
   void SetDefined(bool aSet) { SetStates(ElementState::DEFINED, aSet); }
 
   // AccessibilityRole
-  REFLECT_DOMSTRING_ATTR(Role, role)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(Role, role)
 
   // AriaAttributes
-  REFLECT_DOMSTRING_ATTR(AriaAtomic, aria_atomic)
-  REFLECT_DOMSTRING_ATTR(AriaAutoComplete, aria_autocomplete)
-  REFLECT_DOMSTRING_ATTR(AriaBusy, aria_busy)
-  REFLECT_DOMSTRING_ATTR(AriaChecked, aria_checked)
-  REFLECT_DOMSTRING_ATTR(AriaColCount, aria_colcount)
-  REFLECT_DOMSTRING_ATTR(AriaColIndex, aria_colindex)
-  REFLECT_DOMSTRING_ATTR(AriaColIndexText, aria_colindextext)
-  REFLECT_DOMSTRING_ATTR(AriaColSpan, aria_colspan)
-  REFLECT_DOMSTRING_ATTR(AriaCurrent, aria_current)
-  REFLECT_DOMSTRING_ATTR(AriaDescription, aria_description)
-  REFLECT_DOMSTRING_ATTR(AriaDisabled, aria_disabled)
-  REFLECT_DOMSTRING_ATTR(AriaExpanded, aria_expanded)
-  REFLECT_DOMSTRING_ATTR(AriaHasPopup, aria_haspopup)
-  REFLECT_DOMSTRING_ATTR(AriaHidden, aria_hidden)
-  REFLECT_DOMSTRING_ATTR(AriaInvalid, aria_invalid)
-  REFLECT_DOMSTRING_ATTR(AriaKeyShortcuts, aria_keyshortcuts)
-  REFLECT_DOMSTRING_ATTR(AriaLabel, aria_label)
-  REFLECT_DOMSTRING_ATTR(AriaLevel, aria_level)
-  REFLECT_DOMSTRING_ATTR(AriaLive, aria_live)
-  REFLECT_DOMSTRING_ATTR(AriaModal, aria_modal)
-  REFLECT_DOMSTRING_ATTR(AriaMultiLine, aria_multiline)
-  REFLECT_DOMSTRING_ATTR(AriaMultiSelectable, aria_multiselectable)
-  REFLECT_DOMSTRING_ATTR(AriaOrientation, aria_orientation)
-  REFLECT_DOMSTRING_ATTR(AriaPlaceholder, aria_placeholder)
-  REFLECT_DOMSTRING_ATTR(AriaPosInSet, aria_posinset)
-  REFLECT_DOMSTRING_ATTR(AriaPressed, aria_pressed)
-  REFLECT_DOMSTRING_ATTR(AriaReadOnly, aria_readonly)
-  REFLECT_DOMSTRING_ATTR(AriaRelevant, aria_relevant)
-  REFLECT_DOMSTRING_ATTR(AriaRequired, aria_required)
-  REFLECT_DOMSTRING_ATTR(AriaRoleDescription, aria_roledescription)
-  REFLECT_DOMSTRING_ATTR(AriaRowCount, aria_rowcount)
-  REFLECT_DOMSTRING_ATTR(AriaRowIndex, aria_rowindex)
-  REFLECT_DOMSTRING_ATTR(AriaRowIndexText, aria_rowindextext)
-  REFLECT_DOMSTRING_ATTR(AriaRowSpan, aria_rowspan)
-  REFLECT_DOMSTRING_ATTR(AriaSelected, aria_selected)
-  REFLECT_DOMSTRING_ATTR(AriaSetSize, aria_setsize)
-  REFLECT_DOMSTRING_ATTR(AriaSort, aria_sort)
-  REFLECT_DOMSTRING_ATTR(AriaValueMax, aria_valuemax)
-  REFLECT_DOMSTRING_ATTR(AriaValueMin, aria_valuemin)
-  REFLECT_DOMSTRING_ATTR(AriaValueNow, aria_valuenow)
-  REFLECT_DOMSTRING_ATTR(AriaValueText, aria_valuetext)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaAtomic, aria_atomic)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaAutoComplete, aria_autocomplete)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaBusy, aria_busy)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaChecked, aria_checked)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaColCount, aria_colcount)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaColIndex, aria_colindex)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaColIndexText, aria_colindextext)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaColSpan, aria_colspan)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaCurrent, aria_current)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaDescription, aria_description)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaDisabled, aria_disabled)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaExpanded, aria_expanded)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaHasPopup, aria_haspopup)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaHidden, aria_hidden)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaInvalid, aria_invalid)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaKeyShortcuts, aria_keyshortcuts)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaLabel, aria_label)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaLevel, aria_level)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaLive, aria_live)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaModal, aria_modal)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaMultiLine, aria_multiline)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaMultiSelectable, aria_multiselectable)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaOrientation, aria_orientation)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaPlaceholder, aria_placeholder)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaPosInSet, aria_posinset)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaPressed, aria_pressed)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaReadOnly, aria_readonly)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaRelevant, aria_relevant)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaRequired, aria_required)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaRoleDescription, aria_roledescription)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaRowCount, aria_rowcount)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaRowIndex, aria_rowindex)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaRowIndexText, aria_rowindextext)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaRowSpan, aria_rowspan)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaSelected, aria_selected)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaSetSize, aria_setsize)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaSort, aria_sort)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaValueMax, aria_valuemax)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaValueMin, aria_valuemin)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaValueNow, aria_valuenow)
+  REFLECT_NULLABLE_DOMSTRING_ATTR(AriaValueText, aria_valuetext)
 
  protected:
   already_AddRefed<ShadowRoot> AttachShadowInternal(ShadowRootMode,
@@ -1085,6 +1098,9 @@ class Element : public FragmentOrElement {
 
   static nsStaticAtom* const* HTMLSVGPropertiesToTraverseAndUnlink();
 
+  MOZ_CAN_RUN_SCRIPT virtual void HandleInvokeInternal(nsAtom* aAction,
+                                                       ErrorResult& aRv) {}
+
  private:
   void DescribeAttribute(uint32_t index, nsAString& aOutDescription) const;
 
@@ -1245,6 +1261,16 @@ class Element : public FragmentOrElement {
    */
   MOZ_CAN_RUN_SCRIPT bool HasVisibleScrollbars();
 
+  /**
+   * Get an editor which handles user inputs when this element has focus.
+   * If this is a text control, return a TextEditor if it's already created.
+   * Otherwise, return nullptr.
+   * If this is not a text control but this is editable, return
+   * HTMLEditor which should've already been created.
+   * Otherwise, return nullptr.
+   */
+  EditorBase* GetEditorWithoutCreation() const;
+
  private:
   /**
    * Implement the algorithm specified at
@@ -1284,16 +1310,33 @@ class Element : public FragmentOrElement {
   MOZ_CAN_RUN_SCRIPT already_AddRefed<DOMRectList> GetClientRects();
   MOZ_CAN_RUN_SCRIPT already_AddRefed<DOMRect> GetBoundingClientRect();
 
+  enum class Loading : uint8_t {
+    Eager,
+    Lazy,
+  };
+
+  Loading LoadingState() const;
+  void GetLoading(nsAString& aValue) const;
+  bool ParseLoadingAttribute(const nsAString& aValue, nsAttrValue& aResult);
+
   // Shadow DOM v1
-  already_AddRefed<ShadowRoot> AttachShadow(const ShadowRootInit& aInit,
-                                            ErrorResult& aError);
+  enum class ShadowRootDeclarative : bool { No, Yes };
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  already_AddRefed<ShadowRoot> AttachShadow(
+      const ShadowRootInit& aInit, ErrorResult& aError,
+      ShadowRootDeclarative aNewShadowIsDeclarative =
+          ShadowRootDeclarative::No);
   bool CanAttachShadowDOM() const;
 
   enum class DelegatesFocus : bool { No, Yes };
+  enum class ShadowRootClonable : bool { No, Yes };
 
   already_AddRefed<ShadowRoot> AttachShadowWithoutNameChecks(
       ShadowRootMode aMode, DelegatesFocus = DelegatesFocus::No,
-      SlotAssignmentMode aSlotAssignmentMode = SlotAssignmentMode::Named);
+      SlotAssignmentMode aSlotAssignmentMode = SlotAssignmentMode::Named,
+      ShadowRootClonable aClonable = ShadowRootClonable::No,
+      ShadowRootDeclarative aDeclarative = ShadowRootDeclarative::No);
 
   // Attach UA Shadow Root if it is not attached.
   enum class NotifyUAWidgetSetup : bool { No, Yes };
@@ -1359,7 +1402,18 @@ class Element : public FragmentOrElement {
     if (auto* slots = GetExistingExtendedDOMSlots()) {
       slots->mContentRelevancy.reset();
       slots->mVisibleForContentVisibility.reset();
+      slots->mTemporarilyVisibleForScrolledIntoViewDescendant = false;
     }
+  }
+
+  bool TemporarilyVisibleForScrolledIntoViewDescendant() const {
+    const auto* slots = GetExistingExtendedDOMSlots();
+    return slots && slots->mTemporarilyVisibleForScrolledIntoViewDescendant;
+  }
+
+  void SetTemporarilyVisibleForScrolledIntoViewDescendant(bool aVisible) {
+    ExtendedDOMSlots()->mTemporarilyVisibleForScrolledIntoViewDescendant =
+        aVisible;
   }
 
   // https://drafts.csswg.org/cssom-view-1/#dom-element-checkvisibility
@@ -2032,6 +2086,9 @@ class Element : public FragmentOrElement {
   virtual void GetLinkTarget(nsAString& aTarget);
 
   virtual bool Translate() const;
+
+  MOZ_CAN_RUN_SCRIPT
+  virtual void SetHTMLUnsafe(const nsAString& aHTML);
 
  protected:
   enum class ReparseAttributes { No, Yes };

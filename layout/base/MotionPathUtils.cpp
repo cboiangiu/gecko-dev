@@ -38,12 +38,33 @@ CSSPoint MotionPathUtils::ComputeAnchorPointAdjustment(const nsIFrame& aFrame) {
     return {};
   }
 
-  if (aFrame.IsFrameOfType(nsIFrame::eSVGContainer)) {
-    nsRect boxRect = nsLayoutUtils::ComputeGeometryBox(
+  if (aFrame.IsSVGContainerFrame()) {
+    nsRect boxRect = nsLayoutUtils::ComputeSVGReferenceRect(
         const_cast<nsIFrame*>(&aFrame), StyleGeometryBox::FillBox);
     return CSSPoint::FromAppUnits(boxRect.TopLeft());
   }
   return CSSPoint::FromAppUnits(aFrame.GetPosition());
+}
+
+// Convert the StyleCoordBox into the StyleGeometryBox in CSS layout.
+// https://drafts.csswg.org/css-box-4/#keywords
+static StyleGeometryBox CoordBoxToGeometryBoxInCSSLayout(
+    StyleCoordBox aCoordBox) {
+  switch (aCoordBox) {
+    case StyleCoordBox::ContentBox:
+      return StyleGeometryBox::ContentBox;
+    case StyleCoordBox::PaddingBox:
+      return StyleGeometryBox::PaddingBox;
+    case StyleCoordBox::BorderBox:
+      return StyleGeometryBox::BorderBox;
+    case StyleCoordBox::FillBox:
+      return StyleGeometryBox::ContentBox;
+    case StyleCoordBox::StrokeBox:
+    case StyleCoordBox::ViewBox:
+      return StyleGeometryBox::BorderBox;
+  }
+  MOZ_ASSERT_UNREACHABLE("Unknown coord-box type");
+  return StyleGeometryBox::BorderBox;
 }
 
 /* static */
@@ -58,7 +79,7 @@ const nsIFrame* MotionPathUtils::GetOffsetPathReferenceBox(
     MOZ_ASSERT(aFrame->GetContent()->IsSVGElement());
     auto* viewportElement =
         dom::SVGElement::FromNode(aFrame->GetContent())->GetCtx();
-    aOutputRect = nsLayoutUtils::ComputeSVGViewBox(viewportElement);
+    aOutputRect = nsLayoutUtils::ComputeSVGOriginBox(viewportElement);
     return viewportElement ? viewportElement->GetPrimaryFrame() : nullptr;
   }
 
@@ -67,7 +88,7 @@ const nsIFrame* MotionPathUtils::GetOffsetPathReferenceBox(
                                      ? offsetPath.AsCoordBox()
                                      : offsetPath.AsOffsetPath().coord_box;
   aOutputRect = nsLayoutUtils::ComputeHTMLReferenceRect(
-      containingBlock, nsLayoutUtils::CoordBoxToGeometryBox(coordBox));
+      containingBlock, CoordBoxToGeometryBoxInCSSLayout(coordBox));
   return containingBlock;
 }
 
@@ -78,14 +99,23 @@ CSSCoord MotionPathUtils::GetRayContainReferenceSize(nsIFrame* aFrame) {
   // https://drafts.fxtf.org/motion-1/#valdef-ray-contain
   //
   // Note: Per the spec, border-box is treated as stroke-box in the SVG context,
-  // Also, SVGUtils::GetBBox() may cache the box via the frame property, so we
-  // have to do const-casting.
   // https://drafts.csswg.org/css-box-4/#valdef-box-border-box
-  CSSSize size = CSSSize::FromAppUnits(
-      nsLayoutUtils::ComputeGeometryBox(aFrame,
-                                        // StrokeBox and BorderBox are in the
-                                        // same switch case for CSS context.
-                                        StyleGeometryBox::StrokeBox)
+
+  // To calculate stroke bounds for an element with `non-scaling-stroke` we
+  // need to resolve its transform to its outer-svg, but to resolve that
+  // transform when it has `transform-box:stroke-box` (or `border-box`)
+  // may require its stroke bounds. There's no ideal way to break this
+  // cyclical dependency, but we break it by using the FillBox.
+  // https://github.com/w3c/csswg-drafts/issues/9640
+
+  const auto size = CSSSize::FromAppUnits(
+      (aFrame->HasAnyStateBits(NS_FRAME_SVG_LAYOUT)
+           ? nsLayoutUtils::ComputeSVGReferenceRect(
+                 aFrame, aFrame->StyleSVGReset()->HasNonScalingStroke()
+                             ? StyleGeometryBox::FillBox
+                             : StyleGeometryBox::StrokeBox)
+           : nsLayoutUtils::ComputeHTMLReferenceRect(
+                 aFrame, StyleGeometryBox::BorderBox))
           .Size());
   return std::max(size.width, size.height);
 }
@@ -148,6 +178,22 @@ static CSSCoord ComputeSides(const CSSPoint& aOrigin,
   sint = std::fabs(sint);
   cost = std::fabs(cost);
 
+  // The trigonometric formula here doesn't work well if |theta| is 0deg or
+  // 90deg, so we handle these edge cases first.
+  if (sint < std::numeric_limits<double>::epsilon()) {
+    // For 0deg (or 180deg), we use |b| directly.
+    return static_cast<float>(b);
+  }
+
+  if (cost < std::numeric_limits<double>::epsilon()) {
+    // For 90deg (or 270deg), we use |bPrime| directly. This can also avoid 0/0
+    // if both |b| and |cost| are 0.0. (i.e. b / cost).
+    return static_cast<float>(bPrime);
+  }
+
+  // Note: The following formula works well only when 0 < theta < 90deg. So we
+  // handle 0deg and 90deg above first.
+  //
   // If |b * tan(theta)| is larger than |bPrime|, the intersection is
   // on the other side, and |b'| is the opposite side of angle |theta| in this
   // case.
@@ -203,7 +249,11 @@ static CSSCoord ComputeRayPathLength(const StyleRaySize aRaySizeType,
                                      const CSSRect& aContainingBlock) {
   if (aRaySizeType == StyleRaySize::Sides) {
     // If the initial position is not within the box, the distance is 0.
-    if (!aContainingBlock.Contains(aOrigin)) {
+    //
+    // Note: If the origin is at XMost() (and/or YMost()), we should consider it
+    // to be inside containing block (because we expect 100% x (or y) coordinate
+    // is still to be considered inside the containing block.
+    if (!aContainingBlock.ContainsInclusively(aOrigin)) {
       return 0.0;
     }
 

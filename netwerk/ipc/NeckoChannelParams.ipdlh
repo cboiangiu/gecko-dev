@@ -133,6 +133,7 @@ struct LoadInfoArgs
   RedirectHistoryEntryInfo[]  redirectChainIncludingInternalRedirects;
   RedirectHistoryEntryInfo[]  redirectChain;
   bool                        hasInjectedCookieForCookieBannerHandling;
+  bool                        wasSchemelessInput;
 
   /**
    * ClientInfo structure representing the window or worker that triggered
@@ -182,6 +183,7 @@ struct LoadInfoArgs
   uint32_t                    requestBlockingReason;
   CSPInfo?                    cspToInheritInfo;
   StoragePermissionState      storagePermission;
+  uint64_t?                   overriddenFingerprintingSettings;
   bool                        isMetaRefresh;
   CrossOriginEmbedderPolicy   loadingEmbedderPolicy;
   bool                        originTrialCoepCredentiallessEnabledForTopLevel;
@@ -258,6 +260,8 @@ struct ParentLoadInfoForwarderArgs
   uint32_t requestBlockingReason;
 
   StoragePermissionState storagePermission;
+
+  uint64_t? overriddenFingerprintingSettings;
 
   bool isMetaRefresh;
 
@@ -443,6 +447,7 @@ struct CookieStruct
   bool      isHttpOnly;
   bool      isSession;
   bool      isSecure;
+  bool      isPartitioned;
   int32_t   sameSite;
   int32_t   rawSameSite;
   uint8_t   schemeMap;
@@ -450,7 +455,7 @@ struct CookieStruct
 
 struct DocumentCreationArgs {
   bool uriModified;
-  bool isXFOError;
+  bool isEmbeddingBlockedError;
 };
 
 struct ObjectCreationArgs {

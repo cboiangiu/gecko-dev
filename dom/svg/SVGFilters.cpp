@@ -65,12 +65,7 @@ bool SVGFilterPrimitiveElement::OutputIsTainted(
     nsIPrincipal* aReferencePrincipal) {
   // This is the default implementation for OutputIsTainted.
   // Our output is tainted if we have at least one tainted input.
-  for (uint32_t i = 0; i < aInputsAreTainted.Length(); i++) {
-    if (aInputsAreTainted[i]) {
-      return true;
-    }
-  }
-  return false;
+  return aInputsAreTainted.Contains(true);
 }
 
 bool SVGFilterPrimitiveElement::AttributeAffectsRendering(
@@ -144,11 +139,11 @@ SVGElement::NumberListInfo
         {nsGkAtoms::tableValues}};
 
 SVGElement::NumberInfo SVGComponentTransferFunctionElement::sNumberInfo[5] = {
-    {nsGkAtoms::slope, 1, false},
-    {nsGkAtoms::intercept, 0, false},
-    {nsGkAtoms::amplitude, 1, false},
-    {nsGkAtoms::exponent, 1, false},
-    {nsGkAtoms::offset, 0, false}};
+    {nsGkAtoms::slope, 1},
+    {nsGkAtoms::intercept, 0},
+    {nsGkAtoms::amplitude, 1},
+    {nsGkAtoms::exponent, 1},
+    {nsGkAtoms::offset, 0}};
 
 SVGEnumMapping SVGComponentTransferFunctionElement::sTypeMap[] = {
     {nsGkAtoms::identity, SVG_FECOMPONENTTRANSFER_TYPE_IDENTITY},
@@ -331,10 +326,10 @@ NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGFEFuncAElement)
 //--------------------------------------------------------------------
 //
 SVGElement::NumberInfo SVGFELightingElement::sNumberInfo[4] = {
-    {nsGkAtoms::surfaceScale, 1, false},
-    {nsGkAtoms::diffuseConstant, 1, false},
-    {nsGkAtoms::specularConstant, 1, false},
-    {nsGkAtoms::specularExponent, 1, false}};
+    {nsGkAtoms::surfaceScale, 1},
+    {nsGkAtoms::diffuseConstant, 1},
+    {nsGkAtoms::specularConstant, 1},
+    {nsGkAtoms::specularExponent, 1}};
 
 SVGElement::NumberPairInfo SVGFELightingElement::sNumberPairInfo[1] = {
     {nsGkAtoms::kernelUnitLength, 0, 0}};
@@ -370,7 +365,7 @@ LightType SVGFELightingElement::ComputeLightAttributes(
 bool SVGFELightingElement::AddLightingAttributes(
     mozilla::gfx::DiffuseLightingAttributes* aAttributes,
     SVGFilterInstance* aInstance) {
-  nsIFrame* frame = GetPrimaryFrame();
+  const auto* frame = GetPrimaryFrame();
   if (!frame) {
     return false;
   }
@@ -397,6 +392,19 @@ bool SVGFELightingElement::AddLightingAttributes(
   aAttributes->mColor = color;
 
   return true;
+}
+
+bool SVGFELightingElement::OutputIsTainted(
+    const nsTArray<bool>& aInputsAreTainted,
+    nsIPrincipal* aReferencePrincipal) {
+  if (const auto* frame = GetPrimaryFrame()) {
+    if (frame->Style()->StyleSVGReset()->mLightingColor.IsCurrentColor()) {
+      return true;
+    }
+  }
+
+  return SVGFELightingElementBase::OutputIsTainted(aInputsAreTainted,
+                                                   aReferencePrincipal);
 }
 
 bool SVGFELightingElement::AttributeAffectsRendering(int32_t aNameSpaceID,

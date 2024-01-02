@@ -14,7 +14,7 @@ const TEST_PROVIDER_INFO = [
     telemetryId: "example",
     searchPageRegexp:
       /^https:\/\/example.org\/browser\/browser\/components\/search\/test\/browser\/telemetry\/searchTelemetryAd_/,
-    queryParamName: "s",
+    queryParamNames: ["s"],
     codeParamName: "abc",
     taggedCodes: ["ff"],
     adServerAttributes: ["mozAttr"],
@@ -110,10 +110,7 @@ add_setup(async function () {
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.search.log", true],
-      ["browser.search.serpEventTelemetry.enabled", true],
-    ],
+    set: [["browser.search.serpEventTelemetry.enabled", true]],
   });
 
   registerCleanupFunction(async () => {
@@ -143,7 +140,7 @@ add_task(async function test_click_second_ad_in_component() {
   );
   await pageLoadPromise;
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -151,12 +148,27 @@ add_task(async function test_click_second_ad_in_component() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_SITELINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_SITELINK,
+          ads_loaded: "1",
+          ads_visible: "1",
+          ads_hidden: "0",
+        },
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "5",
+          ads_visible: "5",
+          ads_hidden: "0",
         },
       ],
     },
@@ -184,7 +196,7 @@ add_task(async function test_click_ads_link_modified() {
   });
   await browserLoadedPromise;
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -192,12 +204,27 @@ add_task(async function test_click_ads_link_modified() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_SITELINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_SITELINK,
+          ads_loaded: "1",
+          ads_visible: "1",
+          ads_hidden: "0",
+        },
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "5",
+          ads_visible: "5",
+          ads_hidden: "0",
         },
       ],
     },
@@ -222,12 +249,9 @@ add_task(async function test_click_and_submit_incontent_searchbox() {
   );
   EventUtils.synthesizeKey("KEY_Enter");
   await pageLoadPromise;
+  await waitForPageWithAdImpressions();
 
-  await TestUtils.waitForCondition(() => {
-    return Glean.serp.impression?.testGetValue()?.length == 2;
-  }, "Should have two impressions.");
-
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -235,6 +259,7 @@ add_task(async function test_click_and_submit_incontent_searchbox() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
       engagements: [
@@ -255,6 +280,7 @@ add_task(async function test_click_and_submit_incontent_searchbox() {
         partner_code: "ff",
         source: "follow_on_from_refine_on_incontent_search",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
     },
@@ -281,12 +307,9 @@ add_task(async function test_click_autosuggest() {
     tab.linkedBrowser
   );
   await pageLoadPromise;
+  await waitForPageWithAdImpressions();
 
-  await TestUtils.waitForCondition(() => {
-    return Glean.serp.impression?.testGetValue()?.length == 2;
-  }, "Should have two impressions.");
-
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -294,6 +317,7 @@ add_task(async function test_click_autosuggest() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
       engagements: [
@@ -310,6 +334,7 @@ add_task(async function test_click_autosuggest() {
         partner_code: "ff",
         source: "follow_on_from_refine_on_incontent_search",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
     },
@@ -330,7 +355,7 @@ add_task(async function test_click_carousel_expand() {
     content.document.querySelector("button").click();
   });
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -338,12 +363,21 @@ add_task(async function test_click_carousel_expand() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.EXPANDED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_CAROUSEL,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_CAROUSEL,
+          ads_loaded: "4",
+          ads_visible: "3",
+          ads_hidden: "0",
         },
       ],
     },
@@ -381,7 +415,7 @@ add_task(async function test_click_link_with_special_characters_in_path() {
   );
   await pageLoadPromise;
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -389,12 +423,27 @@ add_task(async function test_click_link_with_special_characters_in_path() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.NON_ADS_LINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_SITELINK,
+          ads_loaded: "1",
+          ads_visible: "1",
+          ads_hidden: "0",
+        },
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "5",
+          ads_visible: "5",
+          ads_hidden: "0",
         },
       ],
     },

@@ -69,7 +69,7 @@ void WebAudioUtils::LogToDeveloperConsole(uint64_t aWindowID,
     nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
         "dom::WebAudioUtils::LogToDeveloperConsole",
         [aWindowID, aKey] { LogToDeveloperConsole(aWindowID, aKey); });
-    SchedulerGroup::Dispatch(TaskCategory::Other, task.forget());
+    SchedulerGroup::Dispatch(task.forget());
     return;
   }
 
@@ -81,7 +81,7 @@ void WebAudioUtils::LogToDeveloperConsole(uint64_t aWindowID,
   }
 
   nsAutoString spec;
-  uint32_t aLineNumber = 0, aColumnNumber = 0;
+  uint32_t aLineNumber = 0, aColumnNumber = 1;
   JSContext* cx = nsContentUtils::GetCurrentJSContext();
   if (cx) {
     nsJSUtils::GetCallingLocation(cx, spec, &aLineNumber, &aColumnNumber);

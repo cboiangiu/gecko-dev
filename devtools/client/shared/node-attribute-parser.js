@@ -159,6 +159,7 @@ const ATTRIBUTE_TYPES = new Map([
       menuitem: { namespaceURI: HTML_NS, type: TYPE_URI },
     },
   ],
+  ["invoketarget", { WILDCARD: { namespaceURI: HTML_NS, type: TYPE_IDREF } }],
   ["list", { input: { namespaceURI: HTML_NS, type: TYPE_IDREF } }],
   [
     "longdesc",
@@ -216,6 +217,7 @@ const ATTRIBUTE_TYPES = new Map([
   ["insertafter", { WILDCARD: { namespaceURI: XUL_NS, type: TYPE_IDREF } }],
   ["insertbefore", { WILDCARD: { namespaceURI: XUL_NS, type: TYPE_IDREF } }],
   ["observes", { WILDCARD: { namespaceURI: XUL_NS, type: TYPE_IDREF } }],
+  ["popovertarget", { WILDCARD: { namespaceURI: HTML_NS, type: TYPE_IDREF } }],
   ["popup", { WILDCARD: { namespaceURI: XUL_NS, type: TYPE_IDREF } }],
   ["ref", { WILDCARD: { namespaceURI: XUL_NS, type: TYPE_URI } }],
   ["removeelement", { WILDCARD: { namespaceURI: XUL_NS, type: TYPE_IDREF } }],
@@ -419,5 +421,15 @@ function splitBy(value, splitChar) {
 }
 
 exports.parseAttribute = parseAttribute;
+exports.ATTRIBUTE_TYPES = {
+  TYPE_STRING,
+  TYPE_URI,
+  TYPE_URI_LIST,
+  TYPE_IDREF,
+  TYPE_IDREF_LIST,
+  TYPE_JS_RESOURCE_URI,
+  TYPE_CSS_RESOURCE_URI,
+};
+
 // Exported for testing only.
 exports.splitBy = splitBy;

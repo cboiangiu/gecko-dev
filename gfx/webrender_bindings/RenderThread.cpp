@@ -1112,7 +1112,6 @@ void RenderThread::UnregisterExternalImageDuringShutdown(
   MOZ_ASSERT(IsInRenderThread());
   MutexAutoLock lock(mRenderTextureMapLock);
   MOZ_ASSERT(mHasShutdown);
-  MOZ_ASSERT(mRenderTextures.find(aExternalImageId) != mRenderTextures.end());
   mRenderTextures.erase(aExternalImageId);
 }
 
@@ -1282,6 +1281,7 @@ void RenderThread::NotifyWebRenderError(WebRenderError aError) {
 }
 
 void RenderThread::HandleWebRenderError(WebRenderError aError) {
+  MOZ_ASSERT(IsInRenderThread());
   if (mHandlingWebRenderError) {
     return;
   }
@@ -1356,7 +1356,12 @@ void RenderThread::ClearSingletonGL() {
     mProgramsForCompositorOGL->Clear();
     mProgramsForCompositorOGL = nullptr;
   }
-  mShaders = nullptr;
+  if (mShaders) {
+    if (mSingletonGL) {
+      mSingletonGL->MakeCurrent();
+    }
+    mShaders = nullptr;
+  }
   mSingletonGL = nullptr;
 }
 

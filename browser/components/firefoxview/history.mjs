@@ -2,7 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { html, ifDefined } from "chrome://global/content/vendor/lit.all.mjs";
+import {
+  html,
+  ifDefined,
+  repeat,
+  when,
+} from "chrome://global/content/vendor/lit.all.mjs";
+import { escapeHtmlEntities, isSearchEnabled } from "./helpers.mjs";
 import { ViewPage } from "./viewpage.mjs";
 // eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/migration/migration-wizard.mjs";
@@ -21,29 +27,52 @@ let XPCOMUtils = ChromeUtils.importESModule(
   "resource://gre/modules/XPCOMUtils.sys.mjs"
 ).XPCOMUtils;
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "maxRowsPref",
+  "browser.firefox-view.max-history-rows",
+  -1
+);
+
 const NEVER_REMEMBER_HISTORY_PREF = "browser.privatebrowsing.autostart";
 const HAS_IMPORTED_HISTORY_PREF = "browser.migrate.interactions.history";
 const IMPORT_HISTORY_DISMISSED_PREF =
   "browser.tabs.firefox-view.importHistory.dismissed";
 
+const SEARCH_RESULTS_LIMIT = 300;
+
 class HistoryInView extends ViewPage {
   constructor() {
     super();
+    this._started = false;
     this.allHistoryItems = new Map();
     this.historyMapByDate = [];
     this.historyMapBySite = [];
     // Setting maxTabsLength to -1 for no max
     this.maxTabsLength = -1;
     this.placesQuery = new lazy.FirefoxViewPlacesQuery();
+    this.searchQuery = "";
+    this.searchResults = null;
     this.sortOption = "date";
     this.profileAge = 8;
     this.fullyUpdated = false;
   }
 
+  start() {
+    if (this._started) {
+      return;
+    }
+    this._started = true;
+
+    this.#updateAllHistoryItems();
+    this.placesQuery.observeHistory(data => this.#updateAllHistoryItems(data));
+
+    this.toggleVisibilityInCardContainer();
+  }
+
   async connectedCallback() {
     super.connectedCallback();
     await this.updateHistoryData();
-    this.placesQuery.observeHistory(data => this.#updateAllHistoryItems(data));
     XPCOMUtils.defineLazyPreferenceGetter(
       this,
       "importHistoryDismissedPref",
@@ -72,9 +101,19 @@ class HistoryInView extends ViewPage {
     }
   }
 
+  stop() {
+    if (!this._started) {
+      return;
+    }
+    this._started = false;
+    this.placesQuery.close();
+
+    this.toggleVisibilityInCardContainer();
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.placesQuery.close();
+    this.stop();
     this.migrationWizardDialog?.removeEventListener(
       "MigrationWizard:Close",
       this.migrationWizardDialog
@@ -89,15 +128,30 @@ class HistoryInView extends ViewPage {
     }
     this.resetHistoryMaps();
     this.lists.forEach(list => list.requestUpdate());
+    await this.#updateSearchResults();
   }
 
-  viewTabVisibleCallback() {
-    this.#updateAllHistoryItems();
-    this.placesQuery.observeHistory(data => this.#updateAllHistoryItems(data));
+  async #updateSearchResults() {
+    if (this.searchQuery) {
+      try {
+        this.searchResults = await this.placesQuery.searchHistory(
+          this.searchQuery,
+          SEARCH_RESULTS_LIMIT
+        );
+      } catch (e) {
+        // Connection interrupted, ignore.
+      }
+    } else {
+      this.searchResults = null;
+    }
   }
 
-  viewTabHiddenCallback() {
-    this.placesQuery.close();
+  viewVisibleCallback() {
+    this.start();
+  }
+
+  viewHiddenCallback() {
+    this.stop();
   }
 
   static queries = {
@@ -106,6 +160,7 @@ class HistoryInView extends ViewPage {
     emptyState: "fxview-empty-state",
     lists: { all: "fxview-tab-list" },
     showAllHistoryBtn: ".show-all-history-button",
+    searchTextbox: "fxview-search-textbox",
     sortInputs: { all: "input[name=history-sort-option]" },
     panelList: "panel-list",
   };
@@ -117,6 +172,7 @@ class HistoryInView extends ViewPage {
     historyMapBySite: { type: Array },
     // Making profileAge a reactive property for testing
     profileAge: { type: Number },
+    searchResults: { type: Array },
     sortOption: { type: String },
   };
 
@@ -128,10 +184,7 @@ class HistoryInView extends ViewPage {
   async updateHistoryData() {
     this.allHistoryItems = await this.placesQuery.getHistory({
       daysOld: 60,
-      limit: Services.prefs.getIntPref(
-        "browser.firefox-view.max-history-rows",
-        -1
-      ),
+      limit: lazy.maxRowsPref,
       sortBy: this.sortOption,
     });
   }
@@ -237,6 +290,7 @@ class HistoryInView extends ViewPage {
       }
     );
     await this.updateHistoryData();
+    await this.#updateSearchResults();
   }
 
   showAllHistory() {
@@ -295,6 +349,9 @@ class HistoryInView extends ViewPage {
 
   updated() {
     this.fullyUpdated = true;
+    if (this.lists?.length) {
+      this.toggleVisibilityInCardContainer();
+    }
   }
 
   panelListTemplate() {
@@ -326,62 +383,76 @@ class HistoryInView extends ViewPage {
     `;
   }
 
-  historyCardsTemplate() {
-    let cardsTemplate = [];
-    if (this.sortOption === "date" && this.historyMapByDate.length) {
-      this.historyMapByDate.forEach(historyItem => {
-        if (historyItem.items.length) {
-          let dateArg = JSON.stringify({ date: historyItem.items[0].time });
-          cardsTemplate.push(html`<card-container>
-            <h3
-              slot="header"
-              data-l10n-id=${historyItem.l10nId}
-              data-l10n-args=${dateArg}
-            ></h3>
-            <fxview-tab-list
-              slot="main"
-              class="with-context-menu"
-              dateTimeFormat=${historyItem.l10nId.includes("prev-month")
-                ? "dateTime"
-                : "time"}
-              hasPopup="menu"
-              maxTabsLength=${this.maxTabsLength}
-              .tabItems=${historyItem.items}
-              @fxview-tab-list-primary-action=${this.onPrimaryAction}
-              @fxview-tab-list-secondary-action=${this.onSecondaryAction}
-            >
-              ${this.panelListTemplate()}
-            </fxview-tab-list>
-          </card-container>`);
-        }
-      });
-    } else if (this.historyMapBySite.length) {
-      this.historyMapBySite.forEach(historyItem => {
-        if (historyItem.items.length) {
-          cardsTemplate.push(html`<card-container>
-            <h3 slot="header" data-l10n-id="${ifDefined(historyItem.l10nId)}">
-              ${historyItem.domain}
-            </h3>
-            <fxview-tab-list
-              slot="main"
-              class="with-context-menu"
-              dateTimeFormat="dateTime"
-              hasPopup="menu"
-              maxTabsLength=${this.maxTabsLength}
-              .tabItems=${historyItem.items}
-              @fxview-tab-list-primary-action=${this.onPrimaryAction}
-              @fxview-tab-list-secondary-action=${this.onSecondaryAction}
-            >
-              ${this.panelListTemplate()}
-            </fxview-tab-list>
-          </card-container>`);
-        }
-      });
+  /**
+   * The template to use for cards-container.
+   */
+  get cardsTemplate() {
+    if (this.searchResults) {
+      return this.#searchResultsTemplate();
+    } else if (this.allHistoryItems.size) {
+      return html`${repeat(
+        this.sortOption === "date"
+          ? this.historyMapByDate
+          : this.historyMapBySite,
+        item => item,
+        item => this.#historyCardTemplate(item)
+      )} `;
     }
-    return cardsTemplate;
+    return this.#emptyMessageTemplate();
   }
 
-  emptyMessageTemplate() {
+  #historyCardTemplate(cardItem) {
+    let cardTemplate = [];
+    if (this.sortOption === "date" && this.historyMapByDate.length) {
+      if (cardItem.items.length) {
+        let dateArg = JSON.stringify({ date: cardItem.items[0].time });
+        cardTemplate = html`<card-container>
+          <h2
+            slot="header"
+            data-l10n-id=${cardItem.l10nId}
+            data-l10n-args=${dateArg}
+          ></h2>
+          <fxview-tab-list
+            slot="main"
+            class="with-context-menu"
+            dateTimeFormat=${cardItem.l10nId.includes("prev-month")
+              ? "dateTime"
+              : "time"}
+            hasPopup="menu"
+            maxTabsLength=${this.maxTabsLength}
+            .tabItems=${cardItem.items}
+            @fxview-tab-list-primary-action=${this.onPrimaryAction}
+            @fxview-tab-list-secondary-action=${this.onSecondaryAction}
+          >
+            ${this.panelListTemplate()}
+          </fxview-tab-list>
+        </card-container>`;
+      }
+    } else if (this.historyMapBySite.length) {
+      if (cardItem.items.length) {
+        cardTemplate = html`<card-container>
+          <h3 slot="header" data-l10n-id="${ifDefined(cardItem.l10nId)}">
+            ${cardItem.domain}
+          </h3>
+          <fxview-tab-list
+            slot="main"
+            class="with-context-menu"
+            dateTimeFormat="dateTime"
+            hasPopup="menu"
+            maxTabsLength=${this.maxTabsLength}
+            .tabItems=${cardItem.items}
+            @fxview-tab-list-primary-action=${this.onPrimaryAction}
+            @fxview-tab-list-secondary-action=${this.onSecondaryAction}
+          >
+            ${this.panelListTemplate()}
+          </fxview-tab-list>
+        </card-container>`;
+      }
+    }
+    return cardTemplate;
+  }
+
+  #emptyMessageTemplate() {
     let descriptionHeader;
     let descriptionLabels;
     let descriptionLink;
@@ -420,6 +491,42 @@ class HistoryInView extends ViewPage {
     `;
   }
 
+  #searchResultsTemplate() {
+    return html` <card-container toggleDisabled>
+      <h3
+        slot="header"
+        data-l10n-id="firefoxview-search-results-header"
+        data-l10n-args=${JSON.stringify({
+          query: escapeHtmlEntities(this.searchQuery),
+        })}
+      ></h3>
+      ${when(
+        this.searchResults.length,
+        () =>
+          html`<h3
+            slot="secondary-header"
+            data-l10n-id="firefoxview-search-results-count"
+            data-l10n-args="${JSON.stringify({
+              count: this.searchResults.length,
+            })}"
+          ></h3>`
+      )}
+      <fxview-tab-list
+        slot="main"
+        class="with-context-menu"
+        dateTimeFormat="dateTime"
+        hasPopup="menu"
+        maxTabsLength="-1"
+        .searchQuery=${this.searchQuery}
+        .tabItems=${this.searchResults}
+        @fxview-tab-list-primary-action=${this.onPrimaryAction}
+        @fxview-tab-list-secondary-action=${this.onSecondaryAction}
+      >
+        ${this.panelListTemplate()}
+      </fxview-tab-list>
+    </card-container>`;
+  }
+
   render() {
     if (!this.selectedTab) {
       return null;
@@ -440,6 +547,17 @@ class HistoryInView extends ViewPage {
           data-l10n-id="firefoxview-history-header"
         ></h2>
         <div class="history-sort-options">
+          ${when(
+            isSearchEnabled(),
+            () => html` <div class="history-sort-option">
+              <fxview-search-textbox
+                .query=${this.searchQuery}
+                data-l10n-id="firefoxview-search-text-box-history"
+                data-l10n-attrs="placeholder"
+                @fxview-search-textbox-query=${this.onSearchQuery}
+              ></fxview-search-textbox>
+            </div>`
+          )}
           <div class="history-sort-option">
             <input
               type="radio"
@@ -497,9 +615,7 @@ class HistoryInView extends ViewPage {
             </div>
           </div>
         </card-container>
-        ${!this.allHistoryItems.size
-          ? this.emptyMessageTemplate()
-          : this.historyCardsTemplate()}
+        ${this.cardsTemplate}
       </div>
       <div
         class="show-all-history-footer"
@@ -509,9 +625,15 @@ class HistoryInView extends ViewPage {
           class="show-all-history-button"
           data-l10n-id="firefoxview-show-all-history"
           @click=${this.showAllHistory}
+          ?hidden=${this.searchResults}
         ></button>
       </div>
     `;
+  }
+
+  async onSearchQuery(e) {
+    this.searchQuery = e.detail.query;
+    this.#updateSearchResults();
   }
 
   willUpdate(changedProperties) {

@@ -24,7 +24,7 @@ TESTING_JS_MODULES += [
     "content-src/asrouter/templates/OnboardingMessage/WhatsNewMessage.schema.json",
     "content-src/asrouter/templates/PBNewtab/NewtabPromoMessage.schema.json",
     "content-src/asrouter/templates/ToastNotification/ToastNotification.schema.json",
-    "test/InflightAssetsMessageProvider.jsm",
+    "test/InflightAssetsMessageProvider.sys.mjs",
     "test/NimbusRolloutMessageProvider.sys.mjs",
 ]
 
@@ -32,7 +32,7 @@ SPHINX_TREES["docs"] = "docs"
 SPHINX_TREES["content-src/asrouter/docs"] = "content-src/asrouter/docs"
 
 XPCSHELL_TESTS_MANIFESTS += [
-    "test/xpcshell/xpcshell.ini",
+    "test/xpcshell/xpcshell.toml",
 ]
 
 XPIDL_SOURCES += [
@@ -46,8 +46,6 @@ EXTRA_JS_MODULES += [
 ]
 
 FINAL_TARGET_FILES.actors += [
-    "aboutwelcome/AboutWelcomeChild.sys.mjs",
-    "aboutwelcome/AboutWelcomeParent.sys.mjs",
     "actors/ASRouterChild.sys.mjs",
     "actors/ASRouterParent.sys.mjs",
 ]

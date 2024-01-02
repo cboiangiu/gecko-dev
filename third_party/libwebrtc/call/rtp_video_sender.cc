@@ -21,6 +21,7 @@
 #include "api/array_view.h"
 #include "api/task_queue/task_queue_factory.h"
 #include "api/transport/field_trial_based_config.h"
+#include "api/units/time_delta.h"
 #include "api/video_codecs/video_codec.h"
 #include "call/rtp_transport_controller_send_interface.h"
 #include "modules/pacing/packet_router.h"
@@ -223,7 +224,6 @@ std::vector<RtpStreamSender> CreateRtpStreamSenders(
       observers.report_block_data_observer;
   configuration.paced_sender = transport->packet_sender();
   configuration.send_bitrate_observer = observers.bitrate_observer;
-  configuration.send_side_delay_observer = observers.send_delay_observer;
   configuration.send_packet_observer = observers.send_packet_observer;
   configuration.event_log = event_log;
   configuration.retransmission_rate_limiter = retransmission_rate_limiter;
@@ -279,7 +279,7 @@ std::vector<RtpStreamSender> CreateRtpStreamSenders(
         crypto_options.sframe.require_frame_encryption;
     video_config.field_trials = &trials;
     video_config.enable_retransmit_all_layers =
-        video_config.field_trials->IsEnabled(
+        !video_config.field_trials->IsDisabled(
             "WebRTC-Video-EnableRetransmitAllLayers");
 
     const bool using_flexfec =
@@ -497,7 +497,7 @@ void RtpVideoSender::SetActiveModules(const std::vector<bool>& active_modules) {
 void RtpVideoSender::SetActiveModulesLocked(
     const std::vector<bool>& active_modules) {
   RTC_DCHECK_RUN_ON(&transport_checker_);
-  RTC_DCHECK_EQ(rtp_streams_.size(), active_modules.size());
+  RTC_CHECK_EQ(rtp_streams_.size(), active_modules.size());
   active_ = false;
   for (size_t i = 0; i < active_modules.size(); ++i) {
     if (active_modules[i]) {
@@ -576,7 +576,7 @@ EncodedImageCallback::Result RtpVideoSender::OnEncodedImage(
   RTC_DCHECK_LT(simulcast_index, rtp_streams_.size());
 
   uint32_t rtp_timestamp =
-      encoded_image.Timestamp() +
+      encoded_image.RtpTimestamp() +
       rtp_streams_[simulcast_index].rtp_rtcp->StartTimestamp();
 
   // RTCPSender has it's own copy of the timestamp offset, added in
@@ -584,17 +584,17 @@ EncodedImageCallback::Result RtpVideoSender::OnEncodedImage(
   // TODO(nisse): Delete RTCPSender:timestamp_offset_, and see if we can confine
   // knowledge of the offset to a single place.
   if (!rtp_streams_[simulcast_index].rtp_rtcp->OnSendingRtpFrame(
-          encoded_image.Timestamp(), encoded_image.capture_time_ms_,
+          encoded_image.RtpTimestamp(), encoded_image.capture_time_ms_,
           rtp_config_.payload_type,
           encoded_image._frameType == VideoFrameType::kVideoFrameKey)) {
     // The payload router could be active but this module isn't sending.
     return Result(Result::ERROR_SEND_FAILED);
   }
 
-  absl::optional<int64_t> expected_retransmission_time_ms;
+  TimeDelta expected_retransmission_time = TimeDelta::PlusInfinity();
   if (encoded_image.RetransmissionAllowed()) {
-    expected_retransmission_time_ms =
-        rtp_streams_[simulcast_index].rtp_rtcp->ExpectedRetransmissionTimeMs();
+    expected_retransmission_time =
+        rtp_streams_[simulcast_index].rtp_rtcp->ExpectedRetransmissionTime();
   }
 
   if (IsFirstFrameOfACodedVideoSequence(encoded_image, codec_specific_info)) {
@@ -623,7 +623,7 @@ EncodedImageCallback::Result RtpVideoSender::OnEncodedImage(
           rtp_config_.payload_type, codec_type_, rtp_timestamp, encoded_image,
           params_[simulcast_index].GetRtpVideoHeader(
               encoded_image, codec_specific_info, shared_frame_id_),
-          expected_retransmission_time_ms);
+          expected_retransmission_time);
   if (frame_count_observer_) {
     FrameCounts& counts = frame_counts_[simulcast_index];
     if (encoded_image._frameType == VideoFrameType::kVideoFrameKey) {

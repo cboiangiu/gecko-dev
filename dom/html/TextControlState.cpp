@@ -6,6 +6,7 @@
 
 #include "TextControlState.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/CaretAssociationHint.h"
 #include "mozilla/IMEContentObserver.h"
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/TextInputListener.h"
@@ -701,7 +702,7 @@ TextInputSelectionController::CompleteMove(bool aForward, bool aExtend) {
 
   // make the caret be either at the very beginning (0) or the very end
   int32_t offset = 0;
-  CaretAssociationHint hint = CARET_ASSOCIATE_BEFORE;
+  CaretAssociationHint hint = CaretAssociationHint::Before;
   if (aForward) {
     offset = parentDIV->GetChildCount();
 
@@ -713,7 +714,7 @@ TextInputSelectionController::CompleteMove(bool aForward, bool aExtend) {
 
       if (child->IsHTMLElement(nsGkAtoms::br)) {
         --offset;
-        hint = CARET_ASSOCIATE_AFTER;  // for Bug 106855
+        hint = CaretAssociationHint::After;  // for Bug 106855
       }
     }
   }
@@ -1545,7 +1546,7 @@ TextEditor* TextControlState::GetTextEditor() {
   return mTextEditor;
 }
 
-TextEditor* TextControlState::GetTextEditorWithoutCreation() {
+TextEditor* TextControlState::GetTextEditorWithoutCreation() const {
   return mTextEditor;
 }
 
@@ -3044,7 +3045,11 @@ IMEContentObserver* TextControlState::GetIMEContentObserver() const {
       mTextCtrlElement != IMEStateManager::GetFocusedElement()) {
     return nullptr;
   }
-  return IMEStateManager::GetActiveContentObserver();
+  IMEContentObserver* observer = IMEStateManager::GetActiveContentObserver();
+  // The text control element may be an editing host.  In this case, the
+  // observer does not observe the anonymous nodes under mTextCtrlElement.
+  // So, it means that the observer is not for ours.
+  return observer && observer->EditorIsTextEditor() ? observer : nullptr;
 }
 
 }  // namespace mozilla

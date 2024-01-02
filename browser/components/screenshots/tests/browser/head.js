@@ -12,7 +12,7 @@ const { UrlbarTestUtils } = ChromeUtils.importESModule(
 
 const TEST_ROOT = getRootDirectory(gTestPath).replace(
   "chrome://mochitests/content",
-  "http://example.com"
+  "https://example.com"
 );
 
 const TEST_PAGE = TEST_ROOT + "test-page.html";
@@ -24,7 +24,7 @@ const { MAX_CAPTURE_DIMENSION, MAX_CAPTURE_AREA } = ChromeUtils.importESModule(
 );
 
 const gScreenshotUISelectors = {
-  panelButtons: "#screenshotsPagePanel",
+  panel: "#screenshotsPagePanel",
   fullPageButton: "button.full-page",
   visiblePageButton: "button.visible-page",
   copyButton: "button.#copy",
@@ -36,13 +36,14 @@ const MouseEvents = {
     {},
     {
       get: (target, name) =>
-        async function (x, y, selector = ":root") {
+        async function (x, y, options = {}) {
           if (name === "click") {
-            this.down(x, y);
-            this.up(x, y);
+            this.down(x, y, options);
+            this.up(x, y, options);
           } else {
-            await safeSynthesizeMouseEventInContentPage(selector, x, y, {
+            await safeSynthesizeMouseEventInContentPage(":root", x, y, {
               type: "mouse" + name,
+              ...options,
             });
           }
         },
@@ -59,7 +60,11 @@ class ScreenshotsHelper {
   }
 
   get toolbarButton() {
-    return document.getElementById("screenshot-button");
+    return this.browser.ownerDocument.getElementById("screenshot-button");
+  }
+
+  get panel() {
+    return this.browser.ownerDocument.querySelector(this.selector.panel);
   }
 
   /**
@@ -74,17 +79,22 @@ class ScreenshotsHelper {
     button.click();
   }
 
+  async getPanelButton(selector) {
+    let panel = await this.waitForPanel();
+    let screenshotsButtons = panel.querySelector("screenshots-buttons");
+    ok(screenshotsButtons, "Found the screenshots-buttons");
+    let button = screenshotsButtons.shadowRoot.querySelector(selector);
+    ok(button, `Found ${selector} button`);
+    return button;
+  }
+
   async waitForPanel() {
-    let panel = this.browser.ownerDocument.querySelector(
-      "#screenshotsPagePanel"
-    );
+    let panel = this.panel;
     await BrowserTestUtils.waitForCondition(async () => {
       if (!panel) {
-        panel = this.browser.ownerDocument.querySelector(
-          "#screenshotsPagePanel"
-        );
+        panel = this.panel;
       }
-      return panel?.state === "open" && BrowserTestUtils.is_visible(panel);
+      return panel && BrowserTestUtils.is_visible(panel);
     });
     return panel;
   }
@@ -100,13 +110,17 @@ class ScreenshotsHelper {
     info("Overlay is visible");
   }
 
-  async waitForOverlayClosed() {
-    let panel = this.browser.ownerDocument.querySelector(
-      "#screenshotsPagePanel"
-    );
+  async waitForPanelClosed() {
+    let panel = this.panel;
     if (!panel) {
-      panel = await this.waitForPanel();
+      info("waitForPanelClosed: Panel doesnt exist");
+      return;
     }
+    if (panel.hidden) {
+      info("waitForPanelClosed: panel is already hidden");
+      return;
+    }
+    info("waitForPanelClosed: waiting for the panel to become hidden");
     await BrowserTestUtils.waitForMutationCondition(
       panel,
       { attributes: true },
@@ -115,7 +129,11 @@ class ScreenshotsHelper {
       }
     );
     ok(BrowserTestUtils.is_hidden(panel), "Panel buttons are hidden");
+    info("waitForPanelClosed, panel is hidden: " + panel.hidden);
+  }
 
+  async waitForOverlayClosed() {
+    await this.waitForPanelClosed();
     await BrowserTestUtils.waitForCondition(async () => {
       let init = !(await this.isOverlayInitialized());
       info("Is overlay initialized: " + !init);
@@ -143,7 +161,7 @@ class ScreenshotsHelper {
   }
 
   async waitForStateChange(newState) {
-    await BrowserTestUtils.waitForCondition(async () => {
+    return BrowserTestUtils.waitForCondition(async () => {
       let state = await this.getOverlayState();
       return state === newState;
     }, `Waiting for state change to ${newState}`);
@@ -204,26 +222,36 @@ class ScreenshotsHelper {
    * @param {Number} endX The end X coordinate. The right edge of the overlay rect.
    * @param {Number} endY The end Y coordinate. The bottom edge of the overlay rect.
    */
-  async dragOverlay(startX, startY, endX, endY) {
-    await this.waitForStateChange("crosshairs");
+  async dragOverlay(
+    startX,
+    startY,
+    endX,
+    endY,
+    expectedStartingState = "crosshairs"
+  ) {
+    await this.waitForStateChange(expectedStartingState);
     let state = await this.getOverlayState();
-    Assert.equal(state, "crosshairs", "The overlay is in the crosshairs state");
+    Assert.equal(
+      state,
+      expectedStartingState,
+      `The overlay is in the ${state} state`
+    );
 
     mouse.down(startX, startY);
 
-    await this.waitForStateChange("draggingReady");
-    state = await this.getOverlayState();
-    Assert.equal(
-      state,
-      "draggingReady",
-      "The overlay is in the draggingReady state"
-    );
+    await Promise.any([
+      this.waitForStateChange("draggingReady"),
+      this.waitForStateChange("resizing"),
+    ]);
+    Assert.ok(true, "The overlay is in the draggingReady or resizing state");
 
     mouse.move(endX, endY);
 
-    await this.waitForStateChange("dragging");
-    state = await this.getOverlayState();
-    Assert.equal(state, "dragging", "The overlay is in the dragging state");
+    await Promise.any([
+      this.waitForStateChange("dragging"),
+      this.waitForStateChange("resizing"),
+    ]);
+    Assert.ok(true, "The overlay is in the dragging or resizing state");
 
     mouse.up(endX, endY);
 
@@ -249,15 +277,6 @@ class ScreenshotsHelper {
     await promise;
   }
 
-  getWindowPosition() {
-    return ContentTask.spawn(this.browser, [], () => {
-      return {
-        scrollX: content.window.scrollX,
-        scrollY: content.window.scrollY,
-      };
-    });
-  }
-
   async waitForScrollTo(x, y) {
     await ContentTask.spawn(this.browser, [x, y], async ([xPos, yPos]) => {
       await ContentTaskUtils.waitForCondition(() => {
@@ -271,31 +290,64 @@ class ScreenshotsHelper {
     });
   }
 
-  clickDownloadButton() {
-    ContentTask.spawn(this.browser, null, async () => {
-      let screenshotsChild = content.windowGlobalChild.getActor(
-        "ScreenshotsComponent"
-      );
-      screenshotsChild.overlay.downloadButton.click();
-    });
+  async clickDownloadButton() {
+    let { centerX: x, centerY: y } = await ContentTask.spawn(
+      this.browser,
+      null,
+      async () => {
+        let screenshotsChild = content.windowGlobalChild.getActor(
+          "ScreenshotsComponent"
+        );
+        let { left, top, width, height } =
+          screenshotsChild.overlay.downloadButton.getBoundingClientRect();
+        let centerX = left + width / 2;
+        let centerY = top + height / 2;
+        return { centerX, centerY };
+      }
+    );
+
+    info(`clicking download button at ${x}, ${y}`);
+    mouse.click(x, y);
   }
 
-  clickCopyButton() {
-    ContentTask.spawn(this.browser, null, async () => {
-      let screenshotsChild = content.windowGlobalChild.getActor(
-        "ScreenshotsComponent"
-      );
-      screenshotsChild.overlay.copyButton.click();
-    });
+  async clickCopyButton() {
+    let { centerX: x, centerY: y } = await ContentTask.spawn(
+      this.browser,
+      null,
+      async () => {
+        let screenshotsChild = content.windowGlobalChild.getActor(
+          "ScreenshotsComponent"
+        );
+        let { left, top, width, height } =
+          screenshotsChild.overlay.copyButton.getBoundingClientRect();
+        let centerX = left + width / 2;
+        let centerY = top + height / 2;
+        return { centerX, centerY };
+      }
+    );
+
+    info(`clicking copy button at ${x}, ${y}`);
+    mouse.click(x, y);
   }
 
-  clickCancelButton() {
-    ContentTask.spawn(this.browser, null, async () => {
-      let screenshotsChild = content.windowGlobalChild.getActor(
-        "ScreenshotsComponent"
-      );
-      screenshotsChild.overlay.cancelButton.click();
-    });
+  async clickCancelButton() {
+    let { centerX: x, centerY: y } = await ContentTask.spawn(
+      this.browser,
+      null,
+      async () => {
+        let screenshotsChild = content.windowGlobalChild.getActor(
+          "ScreenshotsComponent"
+        );
+        let { left, top, width, height } =
+          screenshotsChild.overlay.cancelButton.getBoundingClientRect();
+        let centerX = left + width / 2;
+        let centerY = top + height / 2;
+        return { centerX, centerY };
+      }
+    );
+
+    info(`clicking cancel button at ${x}, ${y}`);
+    mouse.click(x, y);
   }
 
   async clickTestPageElement() {
@@ -336,21 +388,17 @@ class ScreenshotsHelper {
   }
 
   assertPanelVisible() {
-    let panel = this.browser.ownerDocument.querySelector(
-      "#screenshotsPagePanel"
-    );
+    info("assertPanelVisible, panel.hidden:" + this.panel?.hidden);
     Assert.ok(
-      BrowserTestUtils.is_visible(panel),
+      BrowserTestUtils.is_visible(this.panel),
       "Screenshots panel is visible"
     );
   }
 
   assertPanelNotVisible() {
-    let panel = this.browser.ownerDocument.querySelector(
-      "#screenshotsPagePanel"
-    );
+    info("assertPanelNotVisible, panel.hidden:" + this.panel?.hidden);
     Assert.ok(
-      BrowserTestUtils.is_hidden(panel),
+      !this.panel || BrowserTestUtils.is_hidden(this.panel),
       "Screenshots panel is not visible"
     );
   }
@@ -360,21 +408,32 @@ class ScreenshotsHelper {
    * Returns a promise that resolves when the clipboard data has changed
    * Otherwise rejects
    */
-  waitForRawClipboardChange() {
+  waitForRawClipboardChange(epectedWidth, expectedHeight) {
     const initialClipboardData = Date.now().toString();
     SpecialPowers.clipboardCopyString(initialClipboardData);
 
-    let promiseChanged = TestUtils.waitForCondition(() => {
-      let data;
-      try {
-        data = getRawClipboardData("image/png");
-      } catch (e) {
-        console.log("Failed to get image/png clipboard data:", e);
+    return TestUtils.waitForCondition(
+      async () => {
+        let data;
+        try {
+          data = await this.getImageSizeAndColorFromClipboard();
+        } catch (e) {
+          console.log("Failed to get image/png clipboard data:", e);
+          return false;
+        }
+        if (
+          data &&
+          initialClipboardData !== data &&
+          data.height === expectedHeight &&
+          data.width === epectedWidth
+        ) {
+          return data;
+        }
         return false;
-      }
-      return data && initialClipboardData !== data;
-    });
-    return promiseChanged;
+      },
+      "Waiting for screenshot to copy to clipboard",
+      200
+    );
   }
 
   /**
@@ -384,10 +443,19 @@ class ScreenshotsHelper {
    *   clientWidth The visible width
    *   scrollHeight The scrollable height
    *   scrollWidth The scrollable width
+   *   scrollX The scroll x position
+   *   scrollY The scroll y position
    */
   getContentDimensions() {
     return SpecialPowers.spawn(this.browser, [], async function () {
-      let { innerWidth, innerHeight, scrollMaxX, scrollMaxY } = content.window;
+      let {
+        innerWidth,
+        innerHeight,
+        scrollMaxX,
+        scrollMaxY,
+        scrollX,
+        scrollY,
+      } = content.window;
       let width = innerWidth + scrollMaxX;
       let height = innerHeight + scrollMaxY;
 
@@ -408,6 +476,8 @@ class ScreenshotsHelper {
         clientWidth: innerWidth,
         scrollHeight: height,
         scrollWidth: width,
+        scrollX,
+        scrollY,
       };
     });
   }
@@ -471,7 +541,9 @@ class ScreenshotsHelper {
   async getImageSizeAndColorFromClipboard() {
     let flavor = "image/png";
     let image = getRawClipboardData(flavor);
-    ok(image, "screenshot data exists on the clipboard");
+    if (!image) {
+      return false;
+    }
 
     // Due to the differences in how images could be stored in the clipboard the
     // checks below are needed. The clipboard could already provide the image as
@@ -494,10 +566,11 @@ class ScreenshotsHelper {
     binaryStream.setInputStream(image);
     const available = binaryStream.available();
     const buffer = new ArrayBuffer(available);
-    is(
-      binaryStream.readArrayBuffer(available, buffer),
-      available,
-      "Read expected amount of data"
+    info(
+      `${binaryStream.readArrayBuffer(
+        available,
+        buffer
+      )} read, ${available} available`
     );
 
     // We are going to load the image in the content page to measure its size.
@@ -650,14 +723,18 @@ async function waitForScreenshotsEventCount(count, process = "parent") {
   );
 }
 
-async function assertScreenshotsEvents(expectedEvents, process = "parent") {
+async function assertScreenshotsEvents(
+  expectedEvents,
+  process = "parent",
+  clearEvents = true
+) {
   info(`Expected events: ${JSON.stringify(expectedEvents, null, 2)}`);
   // Make sure we have recorded the correct number of events
   await waitForScreenshotsEventCount(expectedEvents.length, process);
 
   TelemetryTestUtils.assertEvents(
     expectedEvents,
-    { category: "screenshots", clear: true },
-    { process }
+    { category: "screenshots" },
+    { clear: clearEvents, process }
   );
 }

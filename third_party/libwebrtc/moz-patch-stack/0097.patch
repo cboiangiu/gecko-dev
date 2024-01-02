@@ -1,41 +1,27 @@
-From: stransky <stransky@redhat.com>
-Date: Tue, 29 Aug 2023 12:43:00 +0000
-Subject: Bug 1821629 [DMABuf] Don't use DMABuf if it's disabled by Firefox gfx
- config r=ng,webrtc-reviewers
+From: Andreas Pehrson <apehrson@mozilla.com>
+Date: Wed, 18 Oct 2023 17:21:00 +0000
+Subject: Bug 1859786 - Fix clang-tidy warning in video_capture_impl.cc.
+ r=webrtc-reviewers,mjf
 
-Differential Revision: https://phabricator.services.mozilla.com/D172224
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/158a888cad8869a2f0026fa7cfaaa13ecbfcf2ed
+clang-tidy says:
+  'auto dataCallBack' can be declared as 'auto *dataCallBack'
+
+Differential Revision: https://phabricator.services.mozilla.com/D191302
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/26c84d214137a1b0de0902c7038756964e5786f4
 ---
- .../linux/wayland/shared_screencast_stream.cc            | 9 ++++++++-
- 1 file changed, 8 insertions(+), 1 deletion(-)
+ modules/video_capture/video_capture_impl.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-index 0c26e7a7d5..22aa355e44 100644
---- a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-+++ b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-@@ -28,6 +28,13 @@
- #include "rtc_base/synchronization/mutex.h"
- #include "rtc_base/time_utils.h"
+diff --git a/modules/video_capture/video_capture_impl.cc b/modules/video_capture/video_capture_impl.cc
+index 1bddaf824d..15dfb7fe1f 100644
+--- a/modules/video_capture/video_capture_impl.cc
++++ b/modules/video_capture/video_capture_impl.cc
+@@ -134,7 +134,7 @@ int32_t VideoCaptureImpl::DeliverCapturedFrame(VideoFrame& captureFrame) {
  
-+// Wrapper for gfxVars::UseDMABuf() as we can't include gfxVars here.
-+// We don't want to use dmabuf of known broken systems.
-+// See FEATURE_DMABUF for details.
-+namespace mozilla::gfx {
-+bool IsDMABufEnabled();
-+}
-+
- namespace webrtc {
+   UpdateFrameCount();  // frame count used for local frame rate callback.
  
- const int kBytesPerPixel = 4;
-@@ -294,7 +301,7 @@ void SharedScreenCastStreamPrivate::OnStreamParamChanged(
-   that->modifier_ =
-       has_modifier ? that->spa_video_format_.modifier : DRM_FORMAT_MOD_INVALID;
-   std::vector<const spa_pod*> params;
--  const int buffer_types = has_modifier
-+  const int buffer_types = has_modifier && mozilla::gfx::IsDMABufEnabled()
-                                ? (1 << SPA_DATA_DmaBuf) | (1 << SPA_DATA_MemFd)
-                                : (1 << SPA_DATA_MemFd);
+-  for (auto dataCallBack : _dataCallBacks) {
++  for (auto* dataCallBack : _dataCallBacks) {
+     dataCallBack->OnFrame(captureFrame);
+   }
  
--- 
-2.37.3
-

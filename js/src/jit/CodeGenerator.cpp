@@ -52,7 +52,7 @@
 #include "jit/SharedICRegisters.h"
 #include "jit/VMFunctions.h"
 #include "jit/WarpSnapshot.h"
-#include "js/ColumnNumber.h"  // JS::LimitedColumnNumberZeroOrigin
+#include "js/ColumnNumber.h"  // JS::LimitedColumnNumberOneOrigin
 #include "js/experimental/JitInfo.h"  // JSJit{Getter,Setter}CallArgs, JSJitMethodCallArgsTraits, JSJitInfo
 #include "js/friend/DOMProxy.h"  // JS::ExpandoAndGeneration
 #include "js/RegExpFlags.h"      // JS::RegExpFlag
@@ -4236,6 +4236,20 @@ void CodeGenerator::visitGuardShape(LGuardShape* guard) {
   bailoutFrom(&bail, guard->snapshot());
 }
 
+void CodeGenerator::visitGuardFuse(LGuardFuse* guard) {
+  Register temp = ToRegister(guard->temp0());
+  Label bail;
+
+  // Bake specific fuse address for Ion code, because we won't share this code
+  // across realms.
+  GuardFuse* fuse =
+      mirGen().realm->realmFuses().getFuseByIndex(guard->mir()->fuseIndex());
+  masm.loadPtr(AbsoluteAddress(fuse->fuseRef()), temp);
+  masm.branchPtr(Assembler::NotEqual, temp, ImmPtr(nullptr), &bail);
+
+  bailoutFrom(&bail, guard->snapshot());
+}
+
 void CodeGenerator::visitGuardMultipleShapes(LGuardMultipleShapes* guard) {
   Register obj = ToRegister(guard->object());
   Register shapeList = ToRegister(guard->shapeList());
@@ -7302,7 +7316,7 @@ bool CodeGenerator::generateBody() {
 #ifdef JS_JITSPEW
     const char* filename = nullptr;
     size_t lineNumber = 0;
-    JS::LimitedColumnNumberZeroOrigin columnNumber;
+    JS::LimitedColumnNumberOneOrigin columnNumber;
     if (current->mir()->info().script()) {
       filename = current->mir()->info().script()->filename();
       if (current->mir()->pc()) {
@@ -7313,7 +7327,7 @@ bool CodeGenerator::generateBody() {
     JitSpew(JitSpew_Codegen, "--------------------------------");
     JitSpew(JitSpew_Codegen, "# block%zu %s:%zu:%u%s:", i,
             filename ? filename : "?", lineNumber,
-            columnNumber.zeroOriginValue(),
+            columnNumber.oneOriginValue(),
             current->mir()->isLoopHeader() ? " (loop header)" : "");
 #endif
 
@@ -8220,7 +8234,8 @@ void CodeGenerator::visitCreateInlinedArgumentsObject(
 
     // Discard saved callObj, callee, and values array on the stack.
     masm.addToStackPtr(
-        Imm32(masm.PushRegsInMaskSizeInBytes(liveRegs) + argc * sizeof(Value)));
+        Imm32(MacroAssembler::PushRegsInMaskSizeInBytes(liveRegs) +
+              argc * sizeof(Value)));
     masm.jump(&done);
 
     masm.bind(&failure);
@@ -9011,7 +9026,8 @@ void CodeGenerator::visitWasmCall(LWasmCall* lir) {
   uint32_t framePushedAtStackMapBase =
       masm.framePushed() - callBase->stackArgAreaSizeUnaligned();
   lir->safepoint()->setFramePushedAtStackMapBase(framePushedAtStackMapBase);
-  MOZ_ASSERT(!lir->safepoint()->isWasmTrap());
+  MOZ_ASSERT(lir->safepoint()->wasmSafepointKind() ==
+             WasmSafepointKind::LirCall);
 
   // Note the assembler offset and framePushed for use by the adjunct
   // LSafePoint, see visitor for LWasmCallIndirectAdjunctSafepoint below.
@@ -10772,195 +10788,6 @@ void CodeGenerator::visitCompareS(LCompareS* lir) {
   masm.bind(ool->rejoin());
 }
 
-template <typename T, typename CharT>
-static inline T CopyCharacters(const CharT* chars) {
-  T value = 0;
-  std::memcpy(&value, chars, sizeof(T));
-  return value;
-}
-
-template <typename T>
-static inline T CopyCharacters(const JSLinearString* str, size_t index) {
-  JS::AutoCheckCannotGC nogc;
-
-  if (str->hasLatin1Chars()) {
-    MOZ_ASSERT(index + sizeof(T) / sizeof(JS::Latin1Char) <= str->length());
-    return CopyCharacters<T>(str->latin1Chars(nogc) + index);
-  }
-
-  MOZ_ASSERT(sizeof(T) >= sizeof(char16_t));
-  MOZ_ASSERT(index + sizeof(T) / sizeof(char16_t) <= str->length());
-  return CopyCharacters<T>(str->twoByteChars(nogc) + index);
-}
-
-enum class CompareDirection { Forward, Backward };
-
-// NOTE: Clobbers the input when CompareDirection is backward.
-static void CompareCharacters(MacroAssembler& masm, Register input,
-                              const JSLinearString* str, Register output,
-                              JSOp op, CompareDirection direction, Label* done,
-                              Label* oolEntry) {
-  MOZ_ASSERT(input != output);
-
-  size_t length = str->length();
-  MOZ_ASSERT(length > 0);
-
-  CharEncoding encoding =
-      str->hasLatin1Chars() ? CharEncoding::Latin1 : CharEncoding::TwoByte;
-  size_t encodingSize = encoding == CharEncoding::Latin1
-                            ? sizeof(JS::Latin1Char)
-                            : sizeof(char16_t);
-  size_t byteLength = length * encodingSize;
-
-  // Take the OOL path when the string is a rope or has a different character
-  // representation.
-  masm.branchIfRope(input, oolEntry);
-  if (encoding == CharEncoding::Latin1) {
-    masm.branchTwoByteString(input, oolEntry);
-  } else {
-    JS::AutoCheckCannotGC nogc;
-    if (mozilla::IsUtf16Latin1(str->twoByteRange(nogc))) {
-      masm.branchLatin1String(input, oolEntry);
-    } else {
-      // This case was already handled in the caller.
-#ifdef DEBUG
-      Label ok;
-      masm.branchTwoByteString(input, &ok);
-      masm.assumeUnreachable("Unexpected Latin-1 string");
-      masm.bind(&ok);
-#endif
-    }
-  }
-
-#ifdef DEBUG
-  {
-    Label ok;
-    masm.branch32(Assembler::AboveOrEqual,
-                  Address(input, JSString::offsetOfLength()), Imm32(length),
-                  &ok);
-    masm.assumeUnreachable("Input mustn't be smaller than search string");
-    masm.bind(&ok);
-  }
-#endif
-
-  // Load the input string's characters.
-  Register stringChars = output;
-  masm.loadStringChars(input, stringChars, encoding);
-
-  if (direction == CompareDirection::Backward) {
-    masm.loadStringLength(input, input);
-    masm.sub32(Imm32(length), input);
-
-    masm.addToCharPtr(stringChars, input, encoding);
-  }
-
-  // Prefer a single compare-and-set instruction if possible.
-  if (byteLength == 1 || byteLength == 2 || byteLength == 4 ||
-      byteLength == 8) {
-    auto cond = JSOpToCondition(op, /* isSigned = */ false);
-
-    Address addr(stringChars, 0);
-    switch (byteLength) {
-      case 8: {
-        auto x = CopyCharacters<uint64_t>(str, 0);
-        masm.cmp64Set(cond, addr, Imm64(x), output);
-        break;
-      }
-      case 4: {
-        auto x = CopyCharacters<uint32_t>(str, 0);
-        masm.cmp32Set(cond, addr, Imm32(x), output);
-        break;
-      }
-      case 2: {
-        auto x = CopyCharacters<uint16_t>(str, 0);
-        masm.cmp16Set(cond, addr, Imm32(x), output);
-        break;
-      }
-      case 1: {
-        auto x = CopyCharacters<uint8_t>(str, 0);
-        masm.cmp8Set(cond, addr, Imm32(x), output);
-        break;
-      }
-    }
-  } else {
-    Label setNotEqualResult;
-
-    size_t pos = 0;
-    for (size_t stride : {8, 4, 2, 1}) {
-      while (byteLength >= stride) {
-        Address addr(stringChars, pos * encodingSize);
-        switch (stride) {
-          case 8: {
-            auto x = CopyCharacters<uint64_t>(str, pos);
-            masm.branch64(Assembler::NotEqual, addr, Imm64(x),
-                          &setNotEqualResult);
-            break;
-          }
-          case 4: {
-            auto x = CopyCharacters<uint32_t>(str, pos);
-            masm.branch32(Assembler::NotEqual, addr, Imm32(x),
-                          &setNotEqualResult);
-            break;
-          }
-          case 2: {
-            auto x = CopyCharacters<uint16_t>(str, pos);
-            masm.branch16(Assembler::NotEqual, addr, Imm32(x),
-                          &setNotEqualResult);
-            break;
-          }
-          case 1: {
-            auto x = CopyCharacters<uint8_t>(str, pos);
-            masm.branch8(Assembler::NotEqual, addr, Imm32(x),
-                         &setNotEqualResult);
-            break;
-          }
-        }
-
-        byteLength -= stride;
-        pos += stride / encodingSize;
-      }
-
-      // Prefer a single comparison for trailing bytes instead of doing
-      // multiple consecutive comparisons.
-      //
-      // For example when comparing against the string "example", emit two
-      // four-byte comparisons against "exam" and "mple" instead of doing
-      // three comparisons against "exam", "pl", and finally "e".
-      if (pos > 0 && byteLength > stride / 2) {
-        MOZ_ASSERT(stride == 8 || stride == 4);
-
-        size_t prev = pos - (stride - byteLength) / encodingSize;
-        Address addr(stringChars, prev * encodingSize);
-        switch (stride) {
-          case 8: {
-            auto x = CopyCharacters<uint64_t>(str, prev);
-            masm.branch64(Assembler::NotEqual, addr, Imm64(x),
-                          &setNotEqualResult);
-            break;
-          }
-          case 4: {
-            auto x = CopyCharacters<uint32_t>(str, prev);
-            masm.branch32(Assembler::NotEqual, addr, Imm32(x),
-                          &setNotEqualResult);
-            break;
-          }
-        }
-
-        // Break from the loop, because we've finished the complete string.
-        break;
-      }
-    }
-
-    // Falls through if both strings are equal.
-
-    masm.move32(Imm32(op == JSOp::Eq || op == JSOp::StrictEq), output);
-    masm.jump(done);
-
-    masm.bind(&setNotEqualResult);
-    masm.move32(Imm32(op == JSOp::Ne || op == JSOp::StrictNe), output);
-  }
-}
-
 void CodeGenerator::visitCompareSInline(LCompareSInline* lir) {
   JSOp op = lir->mir()->jsop();
   MOZ_ASSERT(IsEqualityOp(op));
@@ -11022,10 +10849,103 @@ void CodeGenerator::visitCompareSInline(LCompareSInline* lir) {
 
   masm.bind(&compareChars);
 
-  CompareCharacters(masm, input, str, output, op, CompareDirection::Forward,
-                    ool->rejoin(), ool->entry());
+  // Load the input string's characters.
+  Register stringChars = output;
+  masm.loadStringCharsForCompare(input, str, stringChars, ool->entry());
+
+  // Start comparing character by character.
+  masm.compareStringChars(op, stringChars, str, output);
 
   masm.bind(ool->rejoin());
+}
+
+void CodeGenerator::visitCompareSSingle(LCompareSSingle* lir) {
+  JSOp op = lir->jsop();
+  MOZ_ASSERT(IsRelationalOp(op));
+
+  Register input = ToRegister(lir->input());
+  Register output = ToRegister(lir->output());
+  Register temp = ToRegister(lir->temp0());
+
+  const JSLinearString* str = lir->constant();
+  MOZ_ASSERT(str->length() == 1);
+
+  char16_t ch = str->latin1OrTwoByteChar(0);
+
+  masm.movePtr(input, temp);
+
+  // Check if the string is empty.
+  Label compareLength;
+  masm.branch32(Assembler::Equal, Address(temp, JSString::offsetOfLength()),
+                Imm32(0), &compareLength);
+
+  // The first character is in the left-most rope child.
+  Label notRope;
+  masm.branchIfNotRope(temp, &notRope);
+  {
+    // Unwind ropes at the start if possible.
+    Label unwindRope;
+    masm.bind(&unwindRope);
+    masm.loadRopeLeftChild(temp, output);
+    masm.movePtr(output, temp);
+
+#ifdef DEBUG
+    Label notEmpty;
+    masm.branch32(Assembler::NotEqual,
+                  Address(temp, JSString::offsetOfLength()), Imm32(0),
+                  &notEmpty);
+    masm.assumeUnreachable("rope children are non-empty");
+    masm.bind(&notEmpty);
+#endif
+
+    // Otherwise keep unwinding ropes.
+    masm.branchIfRope(temp, &unwindRope);
+  }
+  masm.bind(&notRope);
+
+  // Load the first character into |output|.
+  auto loadFirstChar = [&](auto encoding) {
+    masm.loadStringChars(temp, output, encoding);
+    masm.loadChar(Address(output, 0), output, encoding);
+  };
+
+  Label done;
+  if (ch <= JSString::MAX_LATIN1_CHAR) {
+    // Handle both encodings when the search character is Latin-1.
+    Label twoByte, compare;
+    masm.branchTwoByteString(temp, &twoByte);
+
+    loadFirstChar(CharEncoding::Latin1);
+    masm.jump(&compare);
+
+    masm.bind(&twoByte);
+    loadFirstChar(CharEncoding::TwoByte);
+
+    masm.bind(&compare);
+  } else {
+    // The search character is a two-byte character, so it can't be equal to any
+    // character of a Latin-1 string.
+    masm.move32(Imm32(int32_t(op == JSOp::Lt || op == JSOp::Le)), output);
+    masm.branchLatin1String(temp, &done);
+
+    loadFirstChar(CharEncoding::TwoByte);
+  }
+
+  // Compare the string length when the search character is equal to the
+  // input's first character.
+  masm.branch32(Assembler::Equal, output, Imm32(ch), &compareLength);
+
+  // Otherwise compute the result and jump to the end.
+  masm.cmp32Set(JSOpToCondition(op, /* isSigned = */ false), output, Imm32(ch),
+                output);
+  masm.jump(&done);
+
+  // Compare the string length to compute the overall result.
+  masm.bind(&compareLength);
+  masm.cmp32Set(JSOpToCondition(op, /* isSigned = */ false),
+                Address(temp, JSString::offsetOfLength()), Imm32(1), output);
+
+  masm.bind(&done);
 }
 
 void CodeGenerator::visitCompareBigInt(LCompareBigInt* lir) {
@@ -11929,9 +11849,6 @@ JitCode* JitZone::generateStringConcatStub(JSContext* cx) {
   masm.pop(FramePointer);
   masm.ret();
 
-  masm.pop(temp2);
-  masm.pop(temp1);
-
   masm.bind(&failure);
   masm.movePtr(ImmPtr(nullptr), output);
   masm.pop(FramePointer);
@@ -12346,9 +12263,12 @@ void CodeGenerator::visitStringStartsWithInline(LStringStartsWithInline* lir) {
     }
   }
 
-  // Otherwise start comparing character by character.
-  CompareCharacters(masm, temp, searchString, output, JSOp::Eq,
-                    CompareDirection::Forward, ool->rejoin(), ool->entry());
+  // Load the input string's characters.
+  Register stringChars = output;
+  masm.loadStringCharsForCompare(temp, searchString, stringChars, ool->entry());
+
+  // Start comparing character by character.
+  masm.compareStringChars(JSOp::Eq, stringChars, searchString, output);
 
   masm.bind(ool->rejoin());
 }
@@ -12409,7 +12329,10 @@ void CodeGenerator::visitStringEndsWithInline(LStringEndsWithInline* lir) {
   masm.jump(ool->rejoin());
   masm.bind(&notPointerEqual);
 
-  if (searchString->hasTwoByteChars()) {
+  CharEncoding encoding = searchString->hasLatin1Chars()
+                              ? CharEncoding::Latin1
+                              : CharEncoding::TwoByte;
+  if (encoding == CharEncoding::TwoByte) {
     // Pure two-byte strings can't be a suffix of Latin-1 strings.
     JS::AutoCheckCannotGC nogc;
     if (!mozilla::IsUtf16Latin1(searchString->twoByteRange(nogc))) {
@@ -12421,9 +12344,17 @@ void CodeGenerator::visitStringEndsWithInline(LStringEndsWithInline* lir) {
     }
   }
 
-  // Otherwise start comparing character by character.
-  CompareCharacters(masm, temp, searchString, output, JSOp::Eq,
-                    CompareDirection::Backward, ool->rejoin(), ool->entry());
+  // Load the input string's characters.
+  Register stringChars = output;
+  masm.loadStringCharsForCompare(temp, searchString, stringChars, ool->entry());
+
+  // Move string-char pointer to the suffix string.
+  masm.loadStringLength(temp, temp);
+  masm.sub32(Imm32(length), temp);
+  masm.addToCharPtr(stringChars, temp, encoding);
+
+  // Start comparing character by character.
+  masm.compareStringChars(JSOp::Eq, stringChars, searchString, output);
 
   masm.bind(ool->rejoin());
 }
@@ -13731,6 +13662,24 @@ void CodeGenerator::visitArrayJoin(LArrayJoin* lir) {
   masm.bind(&skipCall);
 }
 
+void CodeGenerator::visitObjectKeys(LObjectKeys* lir) {
+  Register object = ToRegister(lir->object());
+
+  pushArg(object);
+
+  using Fn = JSObject* (*)(JSContext*, HandleObject);
+  callVM<Fn, jit::ObjectKeys>(lir);
+}
+
+void CodeGenerator::visitObjectKeysLength(LObjectKeysLength* lir) {
+  Register object = ToRegister(lir->object());
+
+  pushArg(object);
+
+  using Fn = bool (*)(JSContext*, HandleObject, int32_t*);
+  callVM<Fn, jit::ObjectKeysLength>(lir);
+}
+
 void CodeGenerator::visitGetIteratorCache(LGetIteratorCache* lir) {
   LiveRegisterSet liveRegs = lir->safepoint()->liveRegs();
   TypedOrValueRegister val =
@@ -13951,18 +13900,30 @@ void CodeGenerator::visitRest(LRest* lir) {
 
 // Create a stackmap from the given safepoint, with the structure:
 //
-//   <reg dump area, if trap>
+//   <reg dump, if any>
 //   |       ++ <body (general spill)>
-//   |               ++ <space for Frame>
-//   |                       ++ <inbound args>
-//   |                                       |
+//   |       |       ++ <space for Frame>
+//   |       |               ++ <inbound args>
+//   |       |                               |
 //   Lowest Addr                             Highest Addr
+//           |
+//           framePushedAtStackMapBase
 //
 // The caller owns the resulting stackmap.  This assumes a grow-down stack.
 //
 // For non-debug builds, if the stackmap would contain no pointers, no
 // stackmap is created, and nullptr is returned.  For a debug build, a
 // stackmap is always created and returned.
+//
+// Depending on the type of safepoint, the stackmap may need to account for
+// spilled registers. WasmSafepointKind::LirCall corresponds to LIR nodes where
+// isCall() == true, for which the register allocator will spill/restore all
+// live registers at the LIR level - in this case, the LSafepoint sees only live
+// values on the stack, never in registers. WasmSafepointKind::CodegenCall, on
+// the other hand, is for LIR nodes which may manually spill/restore live
+// registers in codegen, in which case the stackmap must account for this. Traps
+// also require tracking of live registers, but spilling is handled by the trap
+// mechanism.
 static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
                                          const RegisterOffsets& trapExitLayout,
                                          size_t trapExitLayoutNumWords,
@@ -13974,18 +13935,36 @@ static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
   // The size of the wasm::Frame itself.
   const size_t nFrameBytes = sizeof(wasm::Frame);
 
+  // This is the number of bytes spilled for live registers, outside of a trap.
+  // For traps, trapExitLayout and trapExitLayoutNumWords will be used.
+  const size_t nRegisterDumpBytes =
+      MacroAssembler::PushRegsInMaskSizeInBytes(safepoint.liveRegs());
+
+  // As mentioned above, for WasmSafepointKind::LirCall, register spills and
+  // restores are handled at the LIR level and there should therefore be no live
+  // registers to handle here.
+  MOZ_ASSERT_IF(safepoint.wasmSafepointKind() == WasmSafepointKind::LirCall,
+                nRegisterDumpBytes == 0);
+  MOZ_ASSERT(nRegisterDumpBytes % sizeof(void*) == 0);
+
   // This is the number of bytes in the general spill area, below the Frame.
   const size_t nBodyBytes = safepoint.framePushedAtStackMapBase();
 
   // This is the number of bytes in the general spill area, the Frame, and the
-  // incoming args, but not including any trap (register dump) area.
-  const size_t nNonTrapBytes = nBodyBytes + nFrameBytes + nInboundStackArgBytes;
-  MOZ_ASSERT(nNonTrapBytes % sizeof(void*) == 0);
+  // incoming args, but not including any register dump area.
+  const size_t nNonRegisterBytes =
+      nBodyBytes + nFrameBytes + nInboundStackArgBytes;
+  MOZ_ASSERT(nNonRegisterBytes % sizeof(void*) == 0);
+
+  // This is the number of bytes in the register dump area, if any, below the
+  // general spill area.
+  const size_t nRegisterBytes =
+      (safepoint.wasmSafepointKind() == WasmSafepointKind::Trap)
+          ? (trapExitLayoutNumWords * sizeof(void*))
+          : nRegisterDumpBytes;
 
   // This is the total number of bytes covered by the map.
-  const DebugOnly<size_t> nTotalBytes =
-      nNonTrapBytes +
-      (safepoint.isWasmTrap() ? (trapExitLayoutNumWords * sizeof(void*)) : 0);
+  const DebugOnly<size_t> nTotalBytes = nNonRegisterBytes + nRegisterBytes;
 
   // Create the stackmap initially in this vector.  Since most frames will
   // contain 128 or fewer words, heap allocation is avoided in the majority of
@@ -13999,41 +13978,62 @@ static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
   // REG DUMP AREA, if any.
   const LiveGeneralRegisterSet wasmAnyRefRegs = safepoint.wasmAnyRefRegs();
   GeneralRegisterForwardIterator wasmAnyRefRegsIter(wasmAnyRefRegs);
-  if (safepoint.isWasmTrap()) {
-    // Deal with roots in registers.  This can only happen for safepoints
-    // associated with a trap.  For safepoints associated with a call, we
-    // don't expect to have any live values in registers, hence no roots in
-    // registers.
-    if (!vec.appendN(false, trapExitLayoutNumWords)) {
-      return false;
-    }
-    for (; wasmAnyRefRegsIter.more(); ++wasmAnyRefRegsIter) {
-      Register reg = *wasmAnyRefRegsIter;
-      size_t offsetFromTop = trapExitLayout.getOffset(reg);
+  switch (safepoint.wasmSafepointKind()) {
+    case WasmSafepointKind::LirCall:
+    case WasmSafepointKind::CodegenCall: {
+      size_t spilledNumWords = nRegisterDumpBytes / sizeof(void*);
+      if (!vec.appendN(false, spilledNumWords)) {
+        return false;
+      }
 
-      // If this doesn't hold, the associated register wasn't saved by
-      // the trap exit stub.  Better to crash now than much later, in
-      // some obscure place, and possibly with security consequences.
-      MOZ_RELEASE_ASSERT(offsetFromTop < trapExitLayoutNumWords);
+      for (; wasmAnyRefRegsIter.more(); ++wasmAnyRefRegsIter) {
+        Register reg = *wasmAnyRefRegsIter;
+        size_t offsetFromSpillBase =
+            safepoint.liveRegs().gprs().offsetOfPushedRegister(reg) /
+            sizeof(void*);
+        MOZ_ASSERT(0 < offsetFromSpillBase &&
+                   offsetFromSpillBase <= spilledNumWords);
+        size_t offsetInVector = spilledNumWords - offsetFromSpillBase;
 
-      // offsetFromTop is an offset in words down from the highest
-      // address in the exit stub save area.  Switch it around to be an
-      // offset up from the bottom of the (integer register) save area.
-      size_t offsetFromBottom = trapExitLayoutNumWords - 1 - offsetFromTop;
+        vec[offsetInVector] = true;
+        hasRefs = true;
+      }
 
-      vec[offsetFromBottom] = true;
-      hasRefs = true;
-    }
-  } else {
-    // This map is associated with a call instruction.  We expect there to be
-    // no live ref-carrying registers, and if there are we're in deep trouble.
-    MOZ_RELEASE_ASSERT(!wasmAnyRefRegsIter.more());
+      // Float and vector registers do not have to be handled; they cannot
+      // contain wasm anyrefs, and they are spilled after general-purpose
+      // registers. Gprs are therefore closest to the spill base and thus their
+      // offset calculation does not need to account for other spills.
+    } break;
+    case WasmSafepointKind::Trap: {
+      if (!vec.appendN(false, trapExitLayoutNumWords)) {
+        return false;
+      }
+      for (; wasmAnyRefRegsIter.more(); ++wasmAnyRefRegsIter) {
+        Register reg = *wasmAnyRefRegsIter;
+        size_t offsetFromTop = trapExitLayout.getOffset(reg);
+
+        // If this doesn't hold, the associated register wasn't saved by
+        // the trap exit stub.  Better to crash now than much later, in
+        // some obscure place, and possibly with security consequences.
+        MOZ_RELEASE_ASSERT(offsetFromTop < trapExitLayoutNumWords);
+
+        // offsetFromTop is an offset in words down from the highest
+        // address in the exit stub save area.  Switch it around to be an
+        // offset up from the bottom of the (integer register) save area.
+        size_t offsetFromBottom = trapExitLayoutNumWords - 1 - offsetFromTop;
+
+        vec[offsetFromBottom] = true;
+        hasRefs = true;
+      }
+    } break;
+    default:
+      MOZ_CRASH("unreachable");
   }
 
   // BODY (GENERAL SPILL) AREA and FRAME and INCOMING ARGS
   // Deal with roots on the stack.
   size_t wordsSoFar = vec.length();
-  if (!vec.appendN(false, nNonTrapBytes / sizeof(void*))) {
+  if (!vec.appendN(false, nNonRegisterBytes / sizeof(void*))) {
     return false;
   }
   const LSafepoint::SlotList& wasmAnyRefSlots = safepoint.wasmAnyRefSlots();
@@ -14072,7 +14072,7 @@ static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
   if (!stackMap) {
     return false;
   }
-  if (safepoint.isWasmTrap()) {
+  if (safepoint.wasmSafepointKind() == WasmSafepointKind::Trap) {
     stackMap->setExitStubWords(trapExitLayoutNumWords);
   }
 
@@ -14203,7 +14203,7 @@ bool CodeGenerator::generate() {
   JitSpew(JitSpew_Codegen, "# Emitting code for script %s:%u:%u",
           gen->outerInfo().script()->filename(),
           gen->outerInfo().script()->lineno(),
-          gen->outerInfo().script()->column().zeroOriginValue());
+          gen->outerInfo().script()->column().oneOriginValue());
 
   // Initialize native code table with an entry to the start of
   // top-level script.
@@ -17501,7 +17501,7 @@ void CodeGenerator::visitOutOfLineResumableWasmTrap(
   // That will be taken into account when the StackMap is created from the
   // LSafepoint.
   lir->safepoint()->setFramePushedAtStackMapBase(ool->framePushed());
-  lir->safepoint()->setIsWasmTrap();
+  lir->safepoint()->setWasmSafepointKind(WasmSafepointKind::Trap);
 
   masm.jump(ool->rejoin());
 }
@@ -17637,6 +17637,96 @@ void CodeGenerator::visitWasmRefIsSubtypeOfConcreteAndBranch(
   BranchWasmRefIsSubtype(masm, ref, ins->sourceType(), ins->destType(),
                          onSuccess, superSTV, scratch1, scratch2);
   masm.jump(onFail);
+}
+
+void CodeGenerator::callWasmStructAllocFun(LInstruction* lir,
+                                           wasm::SymbolicAddress fun,
+                                           Register typeDefData,
+                                           Register output) {
+  masm.Push(InstanceReg);
+  int32_t framePushedAfterInstance = masm.framePushed();
+  saveLive(lir);
+
+  masm.setupWasmABICall();
+  masm.passABIArg(InstanceReg);
+  masm.passABIArg(typeDefData);
+  int32_t instanceOffset = masm.framePushed() - framePushedAfterInstance;
+  CodeOffset offset =
+      masm.callWithABI(wasm::BytecodeOffset(0), fun,
+                       mozilla::Some(instanceOffset), MoveOp::GENERAL);
+  masm.storeCallPointerResult(output);
+
+  markSafepointAt(offset.offset(), lir);
+  lir->safepoint()->setFramePushedAtStackMapBase(framePushedAfterInstance);
+  lir->safepoint()->setWasmSafepointKind(WasmSafepointKind::CodegenCall);
+
+  restoreLive(lir);
+  masm.Pop(InstanceReg);
+#if JS_CODEGEN_ARM64
+  masm.syncStackPtr();
+#endif
+}
+
+// Out-of-line path to allocate wasm GC structs
+class OutOfLineWasmNewStruct : public OutOfLineCodeBase<CodeGenerator> {
+  LInstruction* lir_;
+  wasm::SymbolicAddress fun_;
+  Register typeDefData_;
+  Register output_;
+
+ public:
+  OutOfLineWasmNewStruct(LInstruction* lir, wasm::SymbolicAddress fun,
+                         Register typeDefData, Register output)
+      : lir_(lir), fun_(fun), typeDefData_(typeDefData), output_(output) {}
+
+  void accept(CodeGenerator* codegen) override {
+    codegen->visitOutOfLineWasmNewStruct(this);
+  }
+
+  LInstruction* lir() const { return lir_; }
+  wasm::SymbolicAddress fun() const { return fun_; }
+  Register typeDefData() const { return typeDefData_; }
+  Register output() const { return output_; }
+};
+
+void CodeGenerator::visitOutOfLineWasmNewStruct(OutOfLineWasmNewStruct* ool) {
+  callWasmStructAllocFun(ool->lir(), ool->fun(), ool->typeDefData(),
+                         ool->output());
+  masm.jump(ool->rejoin());
+}
+
+void CodeGenerator::visitWasmNewStructObject(LWasmNewStructObject* lir) {
+  MOZ_ASSERT(gen->compilingWasm());
+
+  MWasmNewStructObject* mir = lir->mir();
+
+  Register typeDefData = ToRegister(lir->typeDefData());
+  Register output = ToRegister(lir->output());
+
+  if (mir->isOutline()) {
+    wasm::SymbolicAddress fun = mir->zeroFields()
+                                    ? wasm::SymbolicAddress::StructNewOOL_true
+                                    : wasm::SymbolicAddress::StructNewOOL_false;
+    callWasmStructAllocFun(lir, fun, typeDefData, output);
+  } else {
+    wasm::SymbolicAddress fun = mir->zeroFields()
+                                    ? wasm::SymbolicAddress::StructNewIL_true
+                                    : wasm::SymbolicAddress::StructNewIL_false;
+
+    Register instance = ToRegister(lir->instance());
+    MOZ_ASSERT(instance == InstanceReg);
+
+    auto ool =
+        new (alloc()) OutOfLineWasmNewStruct(lir, fun, typeDefData, output);
+    addOutOfLineCode(ool, lir->mir());
+
+    Register temp1 = ToRegister(lir->temp0());
+    Register temp2 = ToRegister(lir->temp1());
+    masm.wasmNewStructObject(instance, output, typeDefData, temp1, temp2,
+                             ool->entry(), mir->allocKind(), mir->zeroFields());
+
+    masm.bind(ool->rejoin());
+  }
 }
 
 void CodeGenerator::visitWasmHeapReg(LWasmHeapReg* ins) {

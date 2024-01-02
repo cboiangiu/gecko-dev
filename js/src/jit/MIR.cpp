@@ -830,6 +830,30 @@ bool MDefinition::hasOneDefUse() const {
   return hasOneDefUse;
 }
 
+bool MDefinition::hasOneLiveDefUse() const {
+  bool hasOneDefUse = false;
+  for (MUseIterator i(uses_.begin()); i != uses_.end(); i++) {
+    if (!(*i)->consumer()->isDefinition()) {
+      continue;
+    }
+
+    MDefinition* def = (*i)->consumer()->toDefinition();
+    if (def->isRecoveredOnBailout()) {
+      continue;
+    }
+
+    // We already have a definition use. So 1+
+    if (hasOneDefUse) {
+      return false;
+    }
+
+    // We saw one definition. Loop to test if there is another.
+    hasOneDefUse = true;
+  }
+
+  return hasOneDefUse;
+}
+
 bool MDefinition::hasDefUses() const {
   for (MUseIterator i(uses_.begin()); i != uses_.end(); i++) {
     if ((*i)->consumer()->isDefinition()) {
@@ -1211,9 +1235,9 @@ void MConstant::printOpcode(GenericPrinter& out) const {
     case MIRType::Object:
       if (toObject().is<JSFunction>()) {
         JSFunction* fun = &toObject().as<JSFunction>();
-        if (fun->displayAtom()) {
+        if (fun->maybePartialDisplayAtom()) {
           out.put("function ");
-          EscapedStringPrinter(out, fun->displayAtom(), 0);
+          EscapedStringPrinter(out, fun->maybePartialDisplayAtom(), 0);
         } else {
           out.put("unnamed function");
         }
@@ -1868,6 +1892,13 @@ MGoto* MGoto::New(TempAllocator::Fallible alloc, MBasicBlock* target) {
 }
 
 MGoto* MGoto::New(TempAllocator& alloc) { return new (alloc) MGoto(nullptr); }
+
+MDefinition* MBox::foldsTo(TempAllocator& alloc) {
+  if (input()->isUnbox()) {
+    return input()->toUnbox()->input();
+  }
+  return this;
+}
 
 #ifdef JS_JITSPEW
 void MUnbox::printOpcode(GenericPrinter& out) const {
@@ -2703,36 +2734,6 @@ MDefinition* MMinMax::foldsTo(TempAllocator& alloc) {
     return lhs();
   }
 
-  // Fold min/max operations with same inputs.
-  if (lhs()->isMinMax() || rhs()->isMinMax()) {
-    auto* other = lhs()->isMinMax() ? lhs()->toMinMax() : rhs()->toMinMax();
-    auto* operand = lhs()->isMinMax() ? rhs() : lhs();
-
-    if (operand == other->lhs() || operand == other->rhs()) {
-      if (isMax() == other->isMax()) {
-        // min(x, min(x, y)) = min(x, y)
-        // max(x, max(x, y)) = max(x, y)
-        return other;
-      }
-      if (!IsFloatingPointType(type())) {
-        // When neither value is NaN:
-        // max(x, min(x, y)) = x
-        // min(x, max(x, y)) = x
-
-        // Ensure that any bailouts that we depend on to guarantee that |y| is
-        // Int32 are not removed.
-        auto* otherOp = operand == other->lhs() ? other->rhs() : other->lhs();
-        otherOp->setGuardRangeBailoutsUnchecked();
-
-        return operand;
-      }
-    }
-  }
-
-  if (!lhs()->isConstant() && !rhs()->isConstant()) {
-    return this;
-  }
-
   auto foldConstants = [&alloc](MDefinition* lhs, MDefinition* rhs,
                                 bool isMax) -> MConstant* {
     MOZ_ASSERT(lhs->type() == rhs->type());
@@ -2764,6 +2765,77 @@ MDefinition* MMinMax::foldsTo(TempAllocator& alloc) {
     MOZ_ASSERT(lhs->type() == MIRType::Double);
     return MConstant::New(alloc, DoubleValue(result));
   };
+
+  // Try to fold the following patterns when |x| and |y| are constants.
+  //
+  // min(min(x, z), min(y, z)) = min(min(x, y), z)
+  // max(max(x, z), max(y, z)) = max(max(x, y), z)
+  // max(min(x, z), min(y, z)) = min(max(x, y), z)
+  // min(max(x, z), max(y, z)) = max(min(x, y), z)
+  if (lhs()->isMinMax() && rhs()->isMinMax()) {
+    do {
+      auto* left = lhs()->toMinMax();
+      auto* right = rhs()->toMinMax();
+      if (left->isMax() != right->isMax()) {
+        break;
+      }
+
+      MDefinition* x;
+      MDefinition* y;
+      MDefinition* z;
+      if (left->lhs() == right->lhs()) {
+        std::tie(x, y, z) = std::tuple{left->rhs(), right->rhs(), left->lhs()};
+      } else if (left->lhs() == right->rhs()) {
+        std::tie(x, y, z) = std::tuple{left->rhs(), right->lhs(), left->lhs()};
+      } else if (left->rhs() == right->lhs()) {
+        std::tie(x, y, z) = std::tuple{left->lhs(), right->rhs(), left->rhs()};
+      } else if (left->rhs() == right->rhs()) {
+        std::tie(x, y, z) = std::tuple{left->lhs(), right->lhs(), left->rhs()};
+      } else {
+        break;
+      }
+
+      if (!x->isConstant() || !x->toConstant()->isTypeRepresentableAsDouble() ||
+          !y->isConstant() || !y->toConstant()->isTypeRepresentableAsDouble()) {
+        break;
+      }
+
+      if (auto* folded = foldConstants(x, y, isMax())) {
+        block()->insertBefore(this, folded);
+        return MMinMax::New(alloc, folded, z, type(), left->isMax());
+      }
+    } while (false);
+  }
+
+  // Fold min/max operations with same inputs.
+  if (lhs()->isMinMax() || rhs()->isMinMax()) {
+    auto* other = lhs()->isMinMax() ? lhs()->toMinMax() : rhs()->toMinMax();
+    auto* operand = lhs()->isMinMax() ? rhs() : lhs();
+
+    if (operand == other->lhs() || operand == other->rhs()) {
+      if (isMax() == other->isMax()) {
+        // min(x, min(x, y)) = min(x, y)
+        // max(x, max(x, y)) = max(x, y)
+        return other;
+      }
+      if (!IsFloatingPointType(type())) {
+        // When neither value is NaN:
+        // max(x, min(x, y)) = x
+        // min(x, max(x, y)) = x
+
+        // Ensure that any bailouts that we depend on to guarantee that |y| is
+        // Int32 are not removed.
+        auto* otherOp = operand == other->lhs() ? other->rhs() : other->lhs();
+        otherOp->setGuardRangeBailoutsUnchecked();
+
+        return operand;
+      }
+    }
+  }
+
+  if (!lhs()->isConstant() && !rhs()->isConstant()) {
+    return this;
+  }
 
   // Directly apply math utility to compare the rhs() and lhs() when
   // they are both constants.
@@ -2867,6 +2939,18 @@ MDefinition* MMinMax::foldsTo(TempAllocator& alloc) {
 
   return this;
 }
+
+#ifdef JS_JITSPEW
+void MMinMax::printOpcode(GenericPrinter& out) const {
+  MDefinition::printOpcode(out);
+  out.printf(" (%s)", isMax() ? "max" : "min");
+}
+
+void MMinMaxArray::printOpcode(GenericPrinter& out) const {
+  MDefinition::printOpcode(out);
+  out.printf(" (%s)", isMax() ? "max" : "min");
+}
+#endif
 
 MDefinition* MPow::foldsConstant(TempAllocator& alloc) {
   // Both `x` and `p` in `x^p` must be constants in order to precompute.
@@ -6078,6 +6162,10 @@ AliasSet MSetInitializedLength::getAliasSet() const {
   return AliasSet::Store(AliasSet::ObjectFields);
 }
 
+AliasSet MObjectKeysLength::getAliasSet() const {
+  return AliasSet::Load(AliasSet::ObjectFields);
+}
+
 AliasSet MArrayLength::getAliasSet() const {
   return AliasSet::Load(AliasSet::ObjectFields);
 }
@@ -6363,6 +6451,24 @@ MDefinition::AliasType MGuardShape::mightAlias(const MDefinition* store) const {
   return MInstruction::mightAlias(store);
 }
 
+bool MGuardFuse::congruentTo(const MDefinition* ins) const {
+  if (!ins->isGuardFuse()) {
+    return false;
+  }
+  if (fuseIndex() != ins->toGuardFuse()->fuseIndex()) {
+    return false;
+  }
+  return congruentIfOperandsEqual(ins);
+}
+
+AliasSet MGuardFuse::getAliasSet() const {
+  // The alias set below reflects the set of operations which could cause a fuse
+  // to be popped, and therefore MGuardFuse aliases with.
+  return AliasSet::Load(AliasSet::ObjectFields | AliasSet::DynamicSlot |
+                        AliasSet::FixedSlot |
+                        AliasSet::GlobalGenerationCounter);
+}
+
 AliasSet MGuardMultipleShapes::getAliasSet() const {
   // Note: This instruction loads the elements of the ListObject used to
   // store the list of shapes, but that object is internal and not exposed
@@ -6497,9 +6603,10 @@ bool MGuardFunctionScript::congruentTo(const MDefinition* ins) const {
 
 AliasSet MGuardFunctionScript::getAliasSet() const {
   // A JSFunction's BaseScript pointer is immutable. Relazification of
-  // self-hosted functions is an exception to this, but we don't use this
-  // guard for self-hosted functions.
-  MOZ_ASSERT(!flags_.isSelfHostedOrIntrinsic());
+  // top-level/named self-hosted functions is an exception to this, but we don't
+  // use this guard for those self-hosted functions.
+  // See IRGenerator::emitCalleeGuard.
+  MOZ_ASSERT_IF(flags_.isSelfHostedOrIntrinsic(), flags_.isLambda());
   return AliasSet::None();
 }
 
@@ -7145,6 +7252,112 @@ MInlineArgumentsSlice* MInlineArgumentsSlice::New(
   }
 
   return ins;
+}
+
+MDefinition* MArrayLength::foldsTo(TempAllocator& alloc) {
+  // Object.keys() is potentially effectful, in case of Proxies. Otherwise, when
+  // it is only computed for its length property, there is no need to
+  // materialize the Array which results from it and it can be marked as
+  // recovered on bailout as long as no properties are added to / removed from
+  // the object.
+  MDefinition* elems = elements();
+  if (!elems->isElements()) {
+    return this;
+  }
+
+  MDefinition* guardshape = elems->toElements()->object();
+  if (!guardshape->isGuardShape()) {
+    return this;
+  }
+
+  // The Guard shape is guarding the shape of the object returned by
+  // Object.keys, this guard can be removed as knowing the function is good
+  // enough to infer that we are returning an array.
+  MDefinition* keys = guardshape->toGuardShape()->object();
+  if (!keys->isObjectKeys()) {
+    return this;
+  }
+
+  // Object.keys() inline cache guards against proxies when creating the IC. We
+  // rely on this here as we are looking to elide `Object.keys(...)` call, which
+  // is only possible if we know for sure that no side-effect might have
+  // happened.
+  MDefinition* noproxy = keys->toObjectKeys()->object();
+  if (!noproxy->isGuardIsNotProxy()) {
+    // The guard might have been replaced by an assertion, in case the class is
+    // known at compile time. IF the guard has been removed check whether check
+    // has been removed.
+    MOZ_RELEASE_ASSERT(GetObjectKnownClass(noproxy) != KnownClass::None);
+    MOZ_RELEASE_ASSERT(!GetObjectKnownJSClass(noproxy)->isProxyObject());
+  }
+
+  // Check if both the elements and the Object.keys() have a single use. We only
+  // check for live uses, and are ok if a branch which was previously using the
+  // keys array has been removed since.
+  if (!elems->hasOneLiveDefUse() || !guardshape->hasOneLiveDefUse() ||
+      !keys->hasOneLiveDefUse()) {
+    return this;
+  }
+
+  // Check that the latest active resume point is the one from Object.keys(), in
+  // order to steal it. If this is not the latest active resume point then some
+  // side-effect might happen which updates the content of the object, making
+  // any recovery of the keys exhibit a different behavior than expected.
+  if (keys->toObjectKeys()->resumePoint() != block()->activeResumePoint(this)) {
+    return this;
+  }
+
+  // Verify whether any resume point captures the keys array after any aliasing
+  // mutations. If this were to be the case the recovery of ObjectKeys on
+  // bailout might compute a version which might not match with the elided
+  // result.
+  //
+  // Iterate over the resume point uses of ObjectKeys, and check whether the
+  // instructions they are attached to are aliasing Object fields. If so, skip
+  // this optimization.
+  AliasSet enumKeysAliasSet = AliasSet::Load(AliasSet::Flag::ObjectFields);
+  for (auto* use : UsesIterator(keys)) {
+    if (!use->consumer()->isResumePoint()) {
+      // There is only a single use, and this is the length computation as
+      // asserted with `hasOneLiveDefUse`.
+      continue;
+    }
+
+    MResumePoint* rp = use->consumer()->toResumePoint();
+    if (!rp->instruction()) {
+      // If there is no instruction, this is a resume point which is attached to
+      // the entry of a block. Thus no risk of mutating the object on which the
+      // keys are queried.
+      continue;
+    }
+
+    MInstruction* ins = rp->instruction();
+    if (ins == keys) {
+      continue;
+    }
+
+    // Check whether the instruction can potentially alias the object fields of
+    // the object from which we are querying the keys.
+    AliasSet mightAlias = ins->getAliasSet() & enumKeysAliasSet;
+    if (!mightAlias.isNone()) {
+      return this;
+    }
+  }
+
+  // Flag every instructions since Object.keys(..) as recovered on bailout, and
+  // make Object.keys(..) be the recovered value in-place of the shape guard.
+  setRecoveredOnBailout();
+  elems->setRecoveredOnBailout();
+  guardshape->replaceAllUsesWith(keys);
+  guardshape->block()->discard(guardshape->toGuardShape());
+  keys->setRecoveredOnBailout();
+
+  // Steal the resume point from Object.keys, which is ok as we confirmed that
+  // there is no other resume point in-between.
+  MObjectKeysLength* keysLength = MObjectKeysLength::New(alloc, noproxy);
+  keysLength->stealResumePoint(keys->toObjectKeys());
+
+  return keysLength;
 }
 
 MDefinition* MNormalizeSliceTerm::foldsTo(TempAllocator& alloc) {

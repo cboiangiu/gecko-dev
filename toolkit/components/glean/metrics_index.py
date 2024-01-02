@@ -16,6 +16,7 @@
 # Order is lexicographical, enforced by t/c/glean/tests/pytest/test_yaml_indices.py
 gecko_metrics = [
     "browser/base/content/metrics.yaml",
+    "dom/base/use_counter_metrics.yaml",
     "dom/media/metrics.yaml",
     "dom/media/webrtc/metrics.yaml",
     "dom/metrics.yaml",
@@ -31,9 +32,11 @@ gecko_metrics = [
     "toolkit/components/passwordmgr/metrics.yaml",
     "toolkit/components/pdfjs/metrics.yaml",
     "toolkit/components/processtools/metrics.yaml",
+    "toolkit/components/reportbrokensite/metrics.yaml",
     "toolkit/components/resistfingerprinting/metrics.yaml",
     "toolkit/components/translations/metrics.yaml",
     "toolkit/mozapps/extensions/metrics.yaml",
+    "toolkit/mozapps/handling/metrics.yaml",
     "xpcom/metrics.yaml",
 ]
 
@@ -43,8 +46,10 @@ firefox_desktop_metrics = [
     "browser/components/metrics.yaml",
     "browser/components/migration/metrics.yaml",
     "browser/components/newtab/metrics.yaml",
+    "browser/components/pocket/metrics.yaml",
     "browser/components/preferences/metrics.yaml",
     "browser/components/privatebrowsing/metrics.yaml",
+    "browser/components/protocolhandler/metrics.yaml",
     "browser/components/search/metrics.yaml",
     "browser/components/shopping/metrics.yaml",
     "browser/components/urlbar/metrics.yaml",
@@ -73,6 +78,7 @@ background_tasks_metrics = [
     "browser/components/metrics.yaml",
     "toolkit/components/backgroundtasks/metrics.yaml",
     "toolkit/components/crashes/metrics.yaml",
+    "toolkit/mozapps/defaultagent/metrics.yaml",
 ]
 
 # Test metrics
@@ -99,12 +105,14 @@ metrics_yamls = sorted(
 gecko_pings = [
     "dom/pings.yaml",
     "toolkit/components/glean/pings.yaml",
+    "toolkit/components/reportbrokensite/pings.yaml",
 ]
 
 # Pings that are sent by Firefox Desktop.
 # Order is lexicographical, enforced by t/c/glean/tests/pytest/test_yaml_indices.py
 firefox_desktop_pings = [
     "browser/components/newtab/pings.yaml",
+    "browser/components/pocket/pings.yaml",
     "browser/components/urlbar/pings.yaml",
     "toolkit/components/crashes/pings.yaml",
     "toolkit/components/telemetry/pings.yaml",
@@ -123,6 +131,7 @@ background_update_pings = [
 background_tasks_pings = [
     "toolkit/components/backgroundtasks/pings.yaml",
     "toolkit/components/crashes/pings.yaml",
+    "toolkit/mozapps/defaultagent/pings.yaml",
 ]
 
 # Test pings

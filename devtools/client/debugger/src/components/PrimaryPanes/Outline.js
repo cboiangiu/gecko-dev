@@ -6,7 +6,6 @@ import React, { Component } from "react";
 import { div, ul, li, span, h2, button } from "react-dom-factories";
 import PropTypes from "prop-types";
 import { connect } from "../../utils/connect";
-import { score as fuzzaldrinScore } from "fuzzaldrin-plus";
 
 import { containsPosition, positionAfter } from "../../utils/ast";
 import { createLocation } from "../../utils/location";
@@ -14,16 +13,20 @@ import { createLocation } from "../../utils/location";
 import actions from "../../actions";
 import {
   getSelectedLocation,
-  getSelectedSource,
-  getSymbols,
   getCursorPosition,
+  getSelectedSourceTextContent,
 } from "../../selectors";
 
 import OutlineFilter from "./OutlineFilter";
 import "./Outline.css";
 import PreviewFunction from "../shared/PreviewFunction";
 
+import { isFulfilled } from "../../utils/async-value";
+
 const classnames = require("devtools/client/shared/classnames.js");
+const {
+  score: fuzzaldrinScore,
+} = require("devtools/client/shared/vendor/fuzzaldrin-plus.js");
 
 // Set higher to make the fuzzaldrin filter more specific
 const FUZZALDRIN_FILTER_THRESHOLD = 15000;
@@ -60,7 +63,7 @@ export class Outline extends Component {
   constructor(props) {
     super(props);
     this.focusedElRef = null;
-    this.state = { filter: "", focusedItem: null };
+    this.state = { filter: "", focusedItem: null, symbols: null };
   }
 
   static get propTypes() {
@@ -70,18 +73,23 @@ export class Outline extends Component {
       flashLineRange: PropTypes.func.isRequired,
       onAlphabetizeClick: PropTypes.func.isRequired,
       selectLocation: PropTypes.func.isRequired,
-      selectedSource: PropTypes.object.isRequired,
-      symbols: PropTypes.object.isRequired,
+      selectedLocation: PropTypes.object.isRequired,
+      getFunctionSymbols: PropTypes.func.isRequired,
+      getClassSymbols: PropTypes.func.isRequired,
+      canFetchSymbols: PropTypes.bool,
     };
   }
 
+  componentDidMount() {
+    if (!this.props.canFetchSymbols) {
+      return;
+    }
+    this.getClassAndFunctionSymbols();
+  }
+
   componentDidUpdate(prevProps) {
-    const { cursorPosition, symbols } = this.props;
-    if (
-      cursorPosition &&
-      symbols &&
-      cursorPosition !== prevProps.cursorPosition
-    ) {
+    const { cursorPosition, selectedLocation, canFetchSymbols } = this.props;
+    if (cursorPosition && cursorPosition !== prevProps.cursorPosition) {
       this.setFocus(cursorPosition);
     }
 
@@ -91,10 +99,26 @@ export class Outline extends Component {
     ) {
       this.focusedElRef.scrollIntoView({ block: "center" });
     }
+
+    // Lets make sure the source text has been loaded and is different
+    if (canFetchSymbols && prevProps.selectedLocation !== selectedLocation) {
+      this.getClassAndFunctionSymbols();
+    }
   }
 
-  setFocus(cursorPosition) {
-    const { symbols } = this.props;
+  async getClassAndFunctionSymbols() {
+    const { selectedLocation, getFunctionSymbols, getClassSymbols } =
+      this.props;
+
+    const functions = await getFunctionSymbols(selectedLocation);
+    const classes = await getClassSymbols(selectedLocation);
+
+    this.setState({ symbols: { functions, classes } });
+  }
+
+  async setFocus(cursorPosition) {
+    const { symbols } = this.state;
+
     let classes = [];
     let functions = [];
 
@@ -104,8 +128,7 @@ export class Outline extends Component {
 
     // Find items that enclose the selected location
     const enclosedItems = [...classes, ...functions].filter(
-      ({ name, location }) =>
-        name != "anonymous" && containsPosition(location, cursorPosition)
+      ({ name, location }) => containsPosition(location, cursorPosition)
     );
 
     if (!enclosedItems.length) {
@@ -122,14 +145,14 @@ export class Outline extends Component {
   }
 
   selectItem(selectedItem) {
-    const { selectedSource, selectLocation } = this.props;
-    if (!selectedSource || !selectedItem) {
+    const { selectedLocation, selectLocation } = this.props;
+    if (!selectedLocation || !selectedItem) {
       return;
     }
 
     selectLocation(
       createLocation({
-        source: selectedSource,
+        source: selectedLocation.source,
         line: selectedItem.location.start.line,
         column: selectedItem.location.start.column,
       })
@@ -142,7 +165,8 @@ export class Outline extends Component {
     event.stopPropagation();
     event.preventDefault();
 
-    this.props.showOutlineContextMenu(event, func);
+    const { symbols } = this.state;
+    this.props.showOutlineContextMenu(event, func, symbols);
   }
 
   updateFilter = filter => {
@@ -150,7 +174,7 @@ export class Outline extends Component {
   };
 
   renderPlaceholder() {
-    const placeholderMessage = this.props.selectedSource
+    const placeholderMessage = this.props.selectedLocation
       ? L10N.getStr("outline.noFunctions")
       : L10N.getStr("outline.noFileSelected");
     return div(
@@ -218,7 +242,7 @@ export class Outline extends Component {
   }
 
   renderClassFunctions(klass, functions) {
-    const { symbols } = this.props;
+    const { symbols } = this.state;
 
     if (!symbols || klass == null || !functions.length) {
       return null;
@@ -306,10 +330,10 @@ export class Outline extends Component {
   }
 
   render() {
-    const { symbols, selectedSource } = this.props;
-    const { filter } = this.state;
+    const { selectedLocation } = this.props;
+    const { filter, symbols } = this.state;
 
-    if (!selectedSource) {
+    if (!selectedLocation) {
       return this.renderPlaceholder();
     }
 
@@ -317,11 +341,9 @@ export class Outline extends Component {
       return this.renderLoading();
     }
 
-    const symbolsToDisplay = symbols.functions.filter(
-      ({ name }) => name != "anonymous"
-    );
+    const { functions } = symbols;
 
-    if (symbolsToDisplay.length === 0) {
+    if (functions.length === 0) {
       return this.renderPlaceholder();
     }
 
@@ -335,7 +357,7 @@ export class Outline extends Component {
           filter: filter,
           updateFilter: this.updateFilter,
         }),
-        this.renderFunctions(symbolsToDisplay),
+        this.renderFunctions(functions),
         this.renderFooter()
       )
     );
@@ -343,12 +365,11 @@ export class Outline extends Component {
 }
 
 const mapStateToProps = state => {
-  const selectedSource = getSelectedSource(state);
-  const symbols = getSymbols(state, getSelectedLocation(state));
-
+  const selectedSourceTextContent = getSelectedSourceTextContent(state);
   return {
-    symbols,
-    selectedSource,
+    selectedLocation: getSelectedLocation(state),
+    canFetchSymbols:
+      selectedSourceTextContent && isFulfilled(selectedSourceTextContent),
     cursorPosition: getCursorPosition(state),
   };
 };
@@ -356,4 +377,6 @@ const mapStateToProps = state => {
 export default connect(mapStateToProps, {
   selectLocation: actions.selectLocation,
   showOutlineContextMenu: actions.showOutlineContextMenu,
+  getFunctionSymbols: actions.getFunctionSymbols,
+  getClassSymbols: actions.getClassSymbols,
 })(Outline);

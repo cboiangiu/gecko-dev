@@ -319,6 +319,13 @@ void TransactionWrapper::UpdateIsTransformAsyncZooming(uint64_t aAnimationId,
   wr_transaction_set_is_transform_async_zooming(mTxn, aAnimationId, aIsZooming);
 }
 
+void TransactionWrapper::AddMinimapData(
+    const wr::WrPipelineId& aPipelineId,
+    const layers::ScrollableLayerGuid::ViewID& aScrollId,
+    const MinimapData& aMinimapData) {
+  wr_transaction_add_minimap_data(mTxn, aPipelineId, aScrollId, aMinimapData);
+}
+
 /*static*/
 already_AddRefed<WebRenderAPI> WebRenderAPI::Create(
     layers::CompositorBridgeParent* aBridge,
@@ -339,7 +346,7 @@ already_AddRefed<WebRenderAPI> WebRenderAPI::Create(
   bool useDComp = false;
   bool useTripleBuffering = false;
   bool supportsExternalBufferTextures = false;
-  layers::SyncHandle syncHandle = 0;
+  layers::SyncHandle syncHandle = {};
 
   // Dispatch a synchronous task because the DocumentHandle object needs to be
   // created on the render thread. If need be we could delay waiting on this
@@ -369,12 +376,10 @@ already_AddRefed<WebRenderAPI> WebRenderAPI::Clone() {
   wr::DocumentHandle* docHandle = nullptr;
   wr_api_clone(mDocHandle, &docHandle);
 
-  RefPtr<WebRenderAPI> renderApi =
-      new WebRenderAPI(docHandle, mId, mBackend, mCompositor, mMaxTextureSize,
-                       mUseANGLE, mUseDComp, mUseTripleBuffering,
-                       mSupportsExternalBufferTextures, mSyncHandle);
-  renderApi->mRootApi = this;  // Hold root api
-  renderApi->mRootDocumentApi = this;
+  RefPtr<WebRenderAPI> renderApi = new WebRenderAPI(
+      docHandle, mId, mBackend, mCompositor, mMaxTextureSize, mUseANGLE,
+      mUseDComp, mUseTripleBuffering, mSupportsExternalBufferTextures,
+      mSyncHandle, this, this);
 
   return renderApi.forget();
 }
@@ -383,13 +388,12 @@ wr::WrIdNamespace WebRenderAPI::GetNamespace() {
   return wr_api_get_namespace(mDocHandle);
 }
 
-WebRenderAPI::WebRenderAPI(wr::DocumentHandle* aHandle, wr::WindowId aId,
-                           WebRenderBackend aBackend,
-                           WebRenderCompositor aCompositor,
-                           uint32_t aMaxTextureSize, bool aUseANGLE,
-                           bool aUseDComp, bool aUseTripleBuffering,
-                           bool aSupportsExternalBufferTextures,
-                           layers::SyncHandle aSyncHandle)
+WebRenderAPI::WebRenderAPI(
+    wr::DocumentHandle* aHandle, wr::WindowId aId, WebRenderBackend aBackend,
+    WebRenderCompositor aCompositor, uint32_t aMaxTextureSize, bool aUseANGLE,
+    bool aUseDComp, bool aUseTripleBuffering,
+    bool aSupportsExternalBufferTextures, layers::SyncHandle aSyncHandle,
+    wr::WebRenderAPI* aRootApi, wr::WebRenderAPI* aRootDocumentApi)
     : mDocHandle(aHandle),
       mId(aId),
       mBackend(aBackend),
@@ -401,7 +405,9 @@ WebRenderAPI::WebRenderAPI(wr::DocumentHandle* aHandle, wr::WindowId aId,
       mSupportsExternalBufferTextures(aSupportsExternalBufferTextures),
       mCaptureSequence(false),
       mSyncHandle(aSyncHandle),
-      mRendererDestroyed(false) {}
+      mRendererDestroyed(false),
+      mRootApi(aRootApi),
+      mRootDocumentApi(aRootDocumentApi) {}
 
 WebRenderAPI::~WebRenderAPI() {
   if (!mRootDocumentApi) {
@@ -429,6 +435,13 @@ void WebRenderAPI::DestroyRenderer() {
   task.Wait();
 
   mRendererDestroyed = true;
+}
+
+wr::WebRenderAPI* WebRenderAPI::GetRootAPI() {
+  if (mRootApi) {
+    return mRootApi;
+  }
+  return this;
 }
 
 void WebRenderAPI::UpdateDebugFlags(uint32_t aFlags) {
@@ -481,7 +494,7 @@ layers::RemoteTextureInfoList* WebRenderAPI::GetPendingRemoteTextureInfoList() {
 }
 
 bool WebRenderAPI::CheckIsRemoteTextureReady(
-    layers::RemoteTextureInfoList* aList) {
+    layers::RemoteTextureInfoList* aList, const TimeStamp& aTimeStamp) {
   MOZ_ASSERT(layers::CompositorThreadHolder::IsInCompositorThread());
   MOZ_ASSERT(aList);
   MOZ_ASSERT(gfx::gfxVars::UseCanvasRenderThread());
@@ -497,11 +510,25 @@ bool WebRenderAPI::CheckIsRemoteTextureReady(
     layers::CompositorThread()->Dispatch(runnable.forget());
   };
 
+  const auto maxWaitDurationMs = 10000;
+  const auto now = TimeStamp::Now();
+  const auto waitDurationMs =
+      static_cast<uint32_t>((now - aTimeStamp).ToMilliseconds());
+
+  const auto isTimeout = waitDurationMs > maxWaitDurationMs;
+  if (isTimeout) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    gfxCriticalNote << "RemoteTexture ready timeout";
+  }
+
   bool isReady = true;
   while (!aList->mList.empty() && isReady) {
     auto& front = aList->mList.front();
     isReady &= layers::RemoteTextureMap::Get()->CheckRemoteTextureReady(
         front, callback);
+    if (isTimeout) {
+      isReady = true;
+    }
     if (isReady) {
       aList->mList.pop();
     }
@@ -546,7 +573,8 @@ void WebRenderAPI::HandleWrTransactionEvents(RemoteTextureWaitType aType) {
       case WrTransactionEvent::Tag::PendingRemoteTextures:
         bool isReady = true;
         if (aType == RemoteTextureWaitType::AsyncWait) {
-          isReady = CheckIsRemoteTextureReady(front.RemoteTextureInfoList());
+          isReady = CheckIsRemoteTextureReady(front.RemoteTextureInfoList(),
+                                              front.mTimeStamp);
         } else if (aType == RemoteTextureWaitType::FlushWithWait) {
           WaitRemoteTextureReady(front.RemoteTextureInfoList());
         } else {
@@ -1061,7 +1089,6 @@ void DisplayListBuilder::Begin(layers::DisplayItemCache* aCache) {
   mActiveFixedPosTracker = nullptr;
   mDisplayItemCache = aCache;
   mCurrentCacheSlot = Nothing();
-  mRemotePipelineIds.Clear();
 }
 
 void DisplayListBuilder::End(BuiltDisplayList& aOutDisplayList) {
@@ -1087,7 +1114,6 @@ void DisplayListBuilder::End(layers::DisplayListData& aOutTransaction) {
   aOutTransaction.mDLSpatialTree.emplace(dlSpatialTree.inner.data,
                                          dlSpatialTree.inner.length,
                                          dlSpatialTree.inner.capacity);
-  aOutTransaction.mRemotePipelineIds = mRemotePipelineIds.Clone();
   dlItems.inner.capacity = 0;
   dlItems.inner.data = nullptr;
   dlCache.inner.capacity = 0;
@@ -1475,7 +1501,6 @@ void DisplayListBuilder::PushIFrame(const LayoutDeviceRect& aDevPxBounds,
                                     bool aIsBackfaceVisible,
                                     PipelineId aPipeline,
                                     bool aIgnoreMissingPipeline) {
-  mRemotePipelineIds.AppendElement(aPipeline);
   // If the incoming bounds size has decimals (As it could when zoom is
   // involved), and is pushed straight through here, the compositor would end up
   // calculating the destination rect to paint the rendered iframe into

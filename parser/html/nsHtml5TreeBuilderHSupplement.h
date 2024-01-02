@@ -58,6 +58,13 @@ bool mActive;
 void documentMode(nsHtml5DocumentMode m);
 
 nsIContentHandle* getDocumentFragmentForTemplate(nsIContentHandle* aTemplate);
+void setDocumentFragmentForTemplate(nsIContentHandle* aTemplate,
+                                    nsIContentHandle* aFragment);
+
+nsIContentHandle* getShadowRootFromHost(nsIContentHandle* aHost,
+                                        nsIContentHandle* aTemplateNode,
+                                        nsHtml5String aShadowRootMode,
+                                        bool aShadowRootDelegatesFocus);
 
 nsIContentHandle* getFormPointerForContext(nsIContentHandle* aContext);
 
@@ -110,6 +117,15 @@ nsHtml5TreeBuilder(nsAHtml5TreeOpSink* aOpSink, nsHtml5TreeOpStage* aStage,
                    bool aGenerateSpeculativeLoads);
 
 ~nsHtml5TreeBuilder();
+
+bool WantsLineAndColumn() {
+  // Perhaps just checking mBuilder would be sufficient.
+  // For createContextualFragment, we have non-null mBuilder and
+  // false for mPreventScriptExecution. However, do the line and
+  // column that get attached to script elements make any sense
+  // anyway in that case?
+  return !(mBuilder && mPreventScriptExecution);
+}
 
 void StartPlainTextViewSource(const nsAutoString& aTitle);
 

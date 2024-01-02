@@ -295,19 +295,25 @@ LoadInfo::LoadInfo(
         mOriginAttributes.SyncAttributesWithPrivateBrowsing(usePrivateBrowsing);
       }
     }
-  }
 
-  // For chrome docshell, the mPrivateBrowsingId remains 0 even its
-  // UsePrivateBrowsing() is true, so we only update the mPrivateBrowsingId in
-  // origin attributes if the type of the docshell is content.
-  if (aLoadingContext) {
-    nsCOMPtr<nsIDocShell> docShell = aLoadingContext->OwnerDoc()->GetDocShell();
-    if (docShell) {
-      if (docShell->GetBrowsingContext()->IsChrome()) {
-        MOZ_ASSERT(mOriginAttributes.mPrivateBrowsingId == 0,
-                   "chrome docshell shouldn't have mPrivateBrowsingId set.");
+    if (!loadContext) {
+      // Things like svg documents being used as images don't have a load
+      // context or a docshell, in that case try to inherit private browsing
+      // from the documents channel (which is how we determine which imgLoader
+      // is used).
+      nsCOMPtr<nsIChannel> channel = aLoadingContext->OwnerDoc()->GetChannel();
+      if (channel) {
+        mOriginAttributes.SyncAttributesWithPrivateBrowsing(
+            NS_UsePrivateBrowsing(channel));
       }
     }
+
+    // For chrome docshell, the mPrivateBrowsingId remains 0 even its
+    // UsePrivateBrowsing() is true, so we only update the mPrivateBrowsingId in
+    // origin attributes if the type of the docshell is content.
+    MOZ_ASSERT(!docShell || !docShell->GetBrowsingContext()->IsChrome() ||
+                   mOriginAttributes.mPrivateBrowsingId == 0,
+               "chrome docshell shouldn't have mPrivateBrowsingId set.");
   }
 }
 
@@ -630,6 +636,11 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
       mIsInDevToolsContext(rhs.mIsInDevToolsContext),
       mParserCreatedScript(rhs.mParserCreatedScript),
       mStoragePermission(rhs.mStoragePermission),
+      mOverriddenFingerprintingSettings(rhs.mOverriddenFingerprintingSettings),
+#ifdef DEBUG
+      mOverriddenFingerprintingSettingsIsSet(
+          rhs.mOverriddenFingerprintingSettingsIsSet),
+#endif
       mIsMetaRefresh(rhs.mIsMetaRefresh),
       mIsFromProcessingFrameAttributes(rhs.mIsFromProcessingFrameAttributes),
       mIsMediaRequest(rhs.mIsMediaRequest),
@@ -641,7 +652,9 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
       mUnstrippedURI(rhs.mUnstrippedURI),
       mInterceptionInfo(rhs.mInterceptionInfo),
       mHasInjectedCookieForCookieBannerHandling(
-          rhs.mHasInjectedCookieForCookieBannerHandling) {}
+          rhs.mHasInjectedCookieForCookieBannerHandling),
+      mWasSchemelessInput(rhs.mWasSchemelessInput) {
+}
 
 LoadInfo::LoadInfo(
     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
@@ -680,12 +693,14 @@ LoadInfo::LoadInfo(
     uint32_t aHttpsOnlyStatus, bool aHstsStatus,
     bool aHasValidUserGestureActivation, bool aAllowDeprecatedSystemRequests,
     bool aIsInDevToolsContext, bool aParserCreatedScript,
-    nsILoadInfo::StoragePermissionState aStoragePermission, bool aIsMetaRefresh,
-    uint32_t aRequestBlockingReason, nsINode* aLoadingContext,
+    nsILoadInfo::StoragePermissionState aStoragePermission,
+    const Maybe<RFPTarget>& aOverriddenFingerprintingSettings,
+    bool aIsMetaRefresh, uint32_t aRequestBlockingReason,
+    nsINode* aLoadingContext,
     nsILoadInfo::CrossOriginEmbedderPolicy aLoadingEmbedderPolicy,
     bool aIsOriginTrialCoepCredentiallessEnabledForTopLevel,
     nsIURI* aUnstrippedURI, nsIInterceptionInfo* aInterceptionInfo,
-    bool aHasInjectedCookieForCookieBannerHandling)
+    bool aHasInjectedCookieForCookieBannerHandling, bool aWasSchemelessInput)
     : mLoadingPrincipal(aLoadingPrincipal),
       mTriggeringPrincipal(aTriggeringPrincipal),
       mPrincipalToInherit(aPrincipalToInherit),
@@ -754,6 +769,7 @@ LoadInfo::LoadInfo(
       mIsInDevToolsContext(aIsInDevToolsContext),
       mParserCreatedScript(aParserCreatedScript),
       mStoragePermission(aStoragePermission),
+      mOverriddenFingerprintingSettings(aOverriddenFingerprintingSettings),
       mIsMetaRefresh(aIsMetaRefresh),
       mLoadingEmbedderPolicy(aLoadingEmbedderPolicy),
       mIsOriginTrialCoepCredentiallessEnabledForTopLevel(
@@ -761,7 +777,8 @@ LoadInfo::LoadInfo(
       mUnstrippedURI(aUnstrippedURI),
       mInterceptionInfo(aInterceptionInfo),
       mHasInjectedCookieForCookieBannerHandling(
-          aHasInjectedCookieForCookieBannerHandling) {
+          aHasInjectedCookieForCookieBannerHandling),
+      mWasSchemelessInput(aWasSchemelessInput) {
   // Only top level TYPE_DOCUMENT loads can have a null loadingPrincipal
   MOZ_ASSERT(mLoadingPrincipal ||
              aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT);
@@ -1128,6 +1145,25 @@ LoadInfo::SetStoragePermission(
     nsILoadInfo::StoragePermissionState aStoragePermission) {
   mStoragePermission = aStoragePermission;
   return NS_OK;
+}
+
+const Maybe<RFPTarget>& LoadInfo::GetOverriddenFingerprintingSettings() {
+#ifdef DEBUG
+  RefPtr<BrowsingContext> browsingContext;
+  GetTargetBrowsingContext(getter_AddRefs(browsingContext));
+
+  // Exclude this check if the target browsing context is for the parent
+  // process.
+  MOZ_ASSERT_IF(XRE_IsParentProcess() && browsingContext &&
+                    !browsingContext->IsInProcess(),
+                mOverriddenFingerprintingSettingsIsSet);
+#endif
+  return mOverriddenFingerprintingSettings;
+}
+
+void LoadInfo::SetOverriddenFingerprintingSettings(RFPTarget aTargets) {
+  mOverriddenFingerprintingSettings.reset();
+  mOverriddenFingerprintingSettings.emplace(aTargets);
 }
 
 NS_IMETHODIMP
@@ -2318,6 +2354,18 @@ LoadInfo::SetHasInjectedCookieForCookieBannerHandling(
     bool aHasInjectedCookieForCookieBannerHandling) {
   mHasInjectedCookieForCookieBannerHandling =
       aHasInjectedCookieForCookieBannerHandling;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetWasSchemelessInput(bool* aWasSchemelessInput) {
+  *aWasSchemelessInput = mWasSchemelessInput;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetWasSchemelessInput(bool aWasSchemelessInput) {
+  mWasSchemelessInput = aWasSchemelessInput;
   return NS_OK;
 }
 

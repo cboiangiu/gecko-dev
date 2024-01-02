@@ -9,7 +9,7 @@
 
 import { setSymbols } from "./symbols";
 import { setInScopeLines } from "../ast";
-import { togglePrettyPrint } from "./prettyPrint";
+import { prettyPrintAndSelectSource } from "./prettyPrint";
 import { addTab, closeTab } from "../tabs";
 import { loadSourceText } from "./loadSourceText";
 import { setBreakableLines } from ".";
@@ -17,7 +17,10 @@ import { setBreakableLines } from ".";
 import { prefs } from "../../utils/prefs";
 import { isMinified } from "../../utils/source";
 import { createLocation } from "../../utils/location";
-import { getRelatedMapLocation } from "../../utils/source-maps";
+import {
+  getRelatedMapLocation,
+  getOriginalLocation,
+} from "../../utils/source-maps";
 
 import {
   getSource,
@@ -31,6 +34,8 @@ import {
   tabExists,
   hasSource,
   hasSourceActor,
+  hasPrettyTab,
+  isSourceActorWithSourceMap,
 } from "../../selectors";
 
 // This is only used by jest tests (and within this module)
@@ -143,6 +148,18 @@ export function selectLocation(location, { keepContext = true } = {}) {
       getState()
     );
     if (keepContext) {
+      // Pretty print source may not be registered yet and getRelatedMapLocation may not return it.
+      // Wait for the pretty print source to be fully processed.
+      if (
+        !location.source.isOriginal &&
+        shouldSelectOriginalLocation &&
+        hasPrettyTab(getState(), location.source)
+      ) {
+        // Note that prettyPrintAndSelectSource has already been called a bit before when this generated source has been added
+        // but it is a slow operation and is most likely not resolved yet.
+        // prettyPrintAndSelectSource uses memoization to avoid doing the operation more than once, while waiting from both callsites.
+        await dispatch(prettyPrintAndSelectSource(location.source));
+      }
       if (shouldSelectOriginalLocation != location.source.isOriginal) {
         // getRelatedMapLocation will convert to the related generated/original location.
         // i.e if the original location is passed, the related generated location will be returned and vice versa.
@@ -176,7 +193,17 @@ export function selectLocation(location, { keepContext = true } = {}) {
 
     await dispatch(loadSourceText(source, sourceActor));
 
+    // Stop the async work if we started selecting another location
+    if (getSelectedLocation(getState()) != location) {
+      return;
+    }
+
     await dispatch(setBreakableLines(location));
+
+    // Stop the async work if we started selecting another location
+    if (getSelectedLocation(getState()) != location) {
+      return;
+    }
 
     const loadedSource = getSource(getState(), source.id);
 
@@ -194,13 +221,45 @@ export function selectLocation(location, { keepContext = true } = {}) {
       canPrettyPrintSource(getState(), location) &&
       isMinified(source, sourceTextContent)
     ) {
-      await dispatch(togglePrettyPrint(loadedSource.id));
+      await dispatch(prettyPrintAndSelectSource(loadedSource));
       dispatch(closeTab(loadedSource));
     }
 
     await dispatch(setSymbols(location));
+
+    // Stop the async work if we started selecting another location
+    if (getSelectedLocation(getState()) != location) {
+      return;
+    }
+
     // /!\ we don't historicaly wait for this async action
     dispatch(setInScopeLines());
+
+    // When we select a generated source which has a sourcemap,
+    // asynchronously fetch the related original location in order to display
+    // the mapped location in the editor's footer.
+    if (
+      !location.source.isOriginal &&
+      isSourceActorWithSourceMap(getState(), sourceActor.id)
+    ) {
+      let originalLocation = await getOriginalLocation(location, thunkArgs, {
+        looseSearch: true,
+      });
+      // We pass a null original location when the location doesn't map
+      // in order to know when we are done processing the source map.
+      // * `getOriginalLocation` would return the exact same location if it doesn't map
+      // * `getOriginalLocation` may also return a distinct location object,
+      //   but refering to the same `source` object (which is the bundle) when it doesn't
+      //   map to any known original location.
+      if (originalLocation.source === location.source) {
+        originalLocation = null;
+      }
+      dispatch({
+        type: "SET_ORIGINAL_SELECTED_LOCATION",
+        location,
+        originalLocation,
+      });
+    }
   };
 }
 

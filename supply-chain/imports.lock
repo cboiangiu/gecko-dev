@@ -8,6 +8,13 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.aho-corasick]]
+version = "1.1.0"
+when = "2023-09-18"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.anstyle]]
 version = "1.0.3"
 when = "2023-09-11"
@@ -37,36 +44,22 @@ user-login = "Amanieu"
 user-name = "Amanieu d'Antras"
 
 [[publisher.audio_thread_priority]]
-version = "0.26.1"
-when = "2022-03-22"
+version = "0.30.0"
+when = "2023-11-06"
 user-id = 1258
 user-login = "padenot"
 user-name = "Paul Adenot"
 
 [[publisher.authenticator]]
-version = "0.4.0-alpha.20"
-when = "2023-08-24"
-user-id = 175410
-user-login = "jschanck"
-user-name = "John Schanck"
-
-[[publisher.authenticator]]
-version = "0.4.0-alpha.21"
-when = "2023-09-11"
-user-id = 175410
-user-login = "jschanck"
-user-name = "John Schanck"
-
-[[publisher.authenticator]]
-version = "0.4.0-alpha.22"
-when = "2023-09-19"
-user-id = 175410
-user-login = "jschanck"
-user-name = "John Schanck"
-
-[[publisher.authenticator]]
 version = "0.4.0-alpha.23"
 when = "2023-10-05"
+user-id = 175410
+user-login = "jschanck"
+user-name = "John Schanck"
+
+[[publisher.authenticator]]
+version = "0.4.0-alpha.24"
+when = "2023-11-29"
 user-id = 175410
 user-login = "jschanck"
 user-name = "John Schanck"
@@ -100,13 +93,6 @@ user-login = "emilio"
 user-name = "Emilio Cobos Álvarez"
 
 [[publisher.clap]]
-version = "4.1.14"
-when = "2023-03-28"
-user-id = 6743
-user-login = "epage"
-user-name = "Ed Page"
-
-[[publisher.clap]]
 version = "4.4.5"
 when = "2023-09-25"
 user-id = 6743
@@ -114,22 +100,8 @@ user-login = "epage"
 user-name = "Ed Page"
 
 [[publisher.clap_builder]]
-version = "4.1.14"
-when = "2023-03-28"
-user-id = 6743
-user-login = "epage"
-user-name = "Ed Page"
-
-[[publisher.clap_builder]]
 version = "4.4.5"
 when = "2023-09-25"
-user-id = 6743
-user-login = "epage"
-user-name = "Ed Page"
-
-[[publisher.clap_derive]]
-version = "4.1.14"
-when = "2023-03-28"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -137,13 +109,6 @@ user-name = "Ed Page"
 [[publisher.clap_derive]]
 version = "4.4.2"
 when = "2023-08-31"
-user-id = 6743
-user-login = "epage"
-user-name = "Ed Page"
-
-[[publisher.clap_lex]]
-version = "0.4.1"
-when = "2023-03-28"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -233,8 +198,8 @@ user-login = "nical"
 user-name = "Nicolas Silva"
 
 [[publisher.flate2]]
-version = "1.0.24"
-when = "2022-05-28"
+version = "1.0.26"
+when = "2023-04-28"
 user-id = 4333
 user-login = "joshtriplett"
 user-name = "Josh Triplett"
@@ -254,15 +219,29 @@ user-login = "jrmuizel"
 user-name = "Jeff Muizelaar"
 
 [[publisher.glean]]
-version = "54.0.0"
-when = "2023-09-13"
+version = "55.0.0"
+when = "2023-10-23"
+user-id = 48
+user-login = "badboy"
+user-name = "Jan-Erik Rediger"
+
+[[publisher.glean]]
+version = "56.0.0"
+when = "2023-11-30"
 user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
 
 [[publisher.glean-core]]
-version = "54.0.0"
-when = "2023-09-13"
+version = "55.0.0"
+when = "2023-10-23"
+user-id = 48
+user-login = "badboy"
+user-name = "Jan-Erik Rediger"
+
+[[publisher.glean-core]]
+version = "56.0.0"
+when = "2023-11-30"
 user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
@@ -273,6 +252,13 @@ when = "2021-03-17"
 user-id = 84794
 user-login = "jamienicol"
 user-name = "Jamie Nicol"
+
+[[publisher.h2]]
+version = "0.3.22"
+when = "2023-11-15"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
 
 [[publisher.headers]]
 version = "0.3.9"
@@ -324,18 +310,18 @@ user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
 [[publisher.libc]]
-version = "0.2.132"
-when = "2022-08-16"
-user-id = 2915
-user-login = "Amanieu"
-user-name = "Amanieu d'Antras"
-
-[[publisher.libc]]
 version = "0.2.146"
 when = "2023-06-06"
 user-id = 2915
 user-login = "Amanieu"
 user-name = "Amanieu d'Antras"
+
+[[publisher.libc]]
+version = "0.2.150"
+when = "2023-11-05"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
 
 [[publisher.linux-raw-sys]]
 version = "0.4.7"
@@ -427,9 +413,22 @@ when = "2023-04-13"
 user-id = 101233
 user-login = "le-automaton"
 
+[[publisher.prio]]
+version = "0.15.3"
+when = "2023-10-03"
+user-id = 213776
+user-login = "divviup-github-automation"
+
 [[publisher.proc-macro2]]
 version = "1.0.66"
 when = "2023-07-16"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.proc-macro2]]
+version = "1.0.69"
+when = "2023-10-09"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -448,9 +447,30 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.regex]]
+version = "1.9.4"
+when = "2023-08-26"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-automata]]
+version = "0.3.7"
+when = "2023-08-26"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.regex-syntax]]
 version = "0.6.28"
 when = "2022-11-05"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-syntax]]
+version = "0.7.5"
+when = "2023-08-26"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -497,6 +517,20 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.serde]]
+version = "1.0.192"
+when = "2023-11-07"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde]]
+version = "1.0.193"
+when = "2023-11-21"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.serde_bytes]]
 version = "0.11.9"
 when = "2023-02-05"
@@ -507,6 +541,20 @@ user-name = "David Tolnay"
 [[publisher.serde_derive]]
 version = "1.0.163"
 when = "2023-05-10"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_derive]]
+version = "1.0.192"
+when = "2023-11-07"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_derive]]
+version = "1.0.193"
+when = "2023-11-21"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -533,13 +581,6 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.smallvec]]
-version = "1.10.0"
-when = "2022-10-02"
-user-id = 2017
-user-login = "mbrubeck"
-user-name = "Matt Brubeck"
-
-[[publisher.smallvec]]
 version = "1.11.1"
 when = "2023-09-20"
 user-id = 2017
@@ -553,9 +594,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.syn]]
+version = "2.0.39"
+when = "2023-11-06"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.termcolor]]
 version = "1.2.0"
 when = "2023-01-15"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.termcolor]]
+version = "1.4.0"
+when = "2023-11-14"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -616,12 +671,38 @@ user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
 
+[[publisher.uniffi]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
+
 [[publisher.uniffi_bindgen]]
 version = "0.24.3"
 when = "2023-08-01"
 user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
+
+[[publisher.uniffi_bindgen]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_bindgen]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
 
 [[publisher.uniffi_build]]
 version = "0.24.3"
@@ -630,12 +711,38 @@ user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
 
+[[publisher.uniffi_build]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_build]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
+
 [[publisher.uniffi_checksum_derive]]
 version = "0.24.3"
 when = "2023-08-01"
 user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
+
+[[publisher.uniffi_checksum_derive]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_checksum_derive]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
 
 [[publisher.uniffi_core]]
 version = "0.24.3"
@@ -644,12 +751,38 @@ user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
 
+[[publisher.uniffi_core]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_core]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
+
 [[publisher.uniffi_macros]]
 version = "0.24.3"
 when = "2023-08-01"
 user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
+
+[[publisher.uniffi_macros]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_macros]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
 
 [[publisher.uniffi_meta]]
 version = "0.24.3"
@@ -658,12 +791,51 @@ user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
 
+[[publisher.uniffi_meta]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_meta]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
+
 [[publisher.uniffi_testing]]
 version = "0.24.3"
 when = "2023-08-01"
 user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
+
+[[publisher.uniffi_testing]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_testing]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
+
+[[publisher.uniffi_udl]]
+version = "0.25.2"
+when = "2023-11-20"
+user-id = 111105
+user-login = "mhammond"
+user-name = "Mark Hammond"
+
+[[publisher.uniffi_udl]]
+version = "0.25.3"
+when = "2023-12-07"
+user-id = 127697
+user-login = "bendk"
 
 [[publisher.utf8_iter]]
 version = "1.0.3"
@@ -686,16 +858,16 @@ user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
+[[publisher.warp]]
+version = "0.3.6"
+when = "2023-09-27"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
 [[publisher.wasi]]
 version = "0.11.0+wasi-snapshot-preview1"
 when = "2022-01-19"
-user-id = 1
-user-login = "alexcrichton"
-user-name = "Alex Crichton"
-
-[[publisher.wasm-encoder]]
-version = "0.31.0"
-when = "2023-07-17"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
@@ -707,9 +879,9 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
-[[publisher.wasm-smith]]
-version = "0.12.12"
-when = "2023-07-17"
+[[publisher.wasm-encoder]]
+version = "0.38.0"
+when = "2023-11-20"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
@@ -721,23 +893,9 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
-[[publisher.wasmparser]]
-version = "0.109.0"
-when = "2023-07-17"
-user-id = 1
-user-login = "alexcrichton"
-user-name = "Alex Crichton"
-
-[[publisher.wasmparser]]
-version = "0.113.1"
-when = "2023-09-18"
-user-id = 1
-user-login = "alexcrichton"
-user-name = "Alex Crichton"
-
-[[publisher.wast]]
-version = "62.0.0"
-when = "2023-07-17"
+[[publisher.wasm-smith]]
+version = "0.13.0"
+when = "2023-11-20"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
@@ -745,6 +903,13 @@ user-name = "Alex Crichton"
 [[publisher.wast]]
 version = "65.0.1"
 when = "2023-09-18"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
+[[publisher.wast]]
+version = "69.0.0"
+when = "2023-11-20"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
@@ -965,16 +1130,6 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.1"
 
-[[audits.bytecode-alliance.audits.form_urlencoded]]
-who = "Alex Crichton <alex@alexcrichton.com>"
-criteria = "safe-to-deploy"
-version = "1.1.0"
-notes = """
-This is a small crate for working with url-encoded forms which doesn't have any
-more than what it says on the tin. Contains one `unsafe` block related to
-performance around utf-8 validation which is fairly easy to verify as correct.
-"""
-
 [[audits.bytecode-alliance.audits.futures-channel]]
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
@@ -1044,11 +1199,37 @@ criteria = "safe-to-deploy"
 delta = "0.7.1 -> 0.8.0"
 notes = "This was a small update to the crate which has to do with Rust language features and compiler versions, no substantial changes."
 
+[[audits.bytecode-alliance.audits.miniz_oxide]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+version = "0.7.1"
+notes = """
+This crate is a Rust implementation of zlib compression/decompression and has
+been used by default by the Rust standard library for quite some time. It's also
+a default dependency of the popular `backtrace` crate for decompressing debug
+information. This crate forbids unsafe code and does not otherwise access system
+resources. It's originally a port of the `miniz.c` library as well, and given
+its own longevity should be relatively hardened against some of the more common
+compression-related issues.
+"""
+
 [[audits.bytecode-alliance.audits.mio]]
 who = "Alex Crichton <alex@alexcrichton.com>"
 criteria = "safe-to-deploy"
 delta = "0.8.6 -> 0.8.8"
 notes = "Mostly OS portability updates along with some minor bugfixes."
+
+[[audits.bytecode-alliance.audits.object]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.30.3 -> 0.31.1"
+notes = "A large-ish update to the crate but nothing out of the ordering. Support for new formats like xcoff, new constants, minor refactorings, etc. Nothing out of the ordinary."
+
+[[audits.bytecode-alliance.audits.object]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.31.1 -> 0.32.0"
+notes = "Various new features and refactorings as one would expect from an object parsing crate, all looks good."
 
 [[audits.bytecode-alliance.audits.peeking_take_while]]
 who = "Nick Fitzgerald <fitzgen@gmail.com>"
@@ -1094,6 +1275,12 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.4.6"
 notes = "provides a datastructure implemented using std's Vec. all uses of unsafe are just delegating to the underlying unsafe Vec methods."
+
+[[audits.bytecode-alliance.audits.socket2]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.7 -> 0.4.9"
+notes = "Minor OS compat updates but otherwise nothing major here."
 
 [[audits.bytecode-alliance.audits.tempfile]]
 who = "Pat Hickey <phickey@fastly.com>"
@@ -1151,6 +1338,12 @@ notes = "No unsafe usage or ambient capabilities"
 who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
 version = "1.0.1"
+notes = "No unsafe usage or ambient capabilities"
+
+[[audits.embark-studios.audits.idna]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.4.0"
 notes = "No unsafe usage or ambient capabilities"
 
 [[audits.embark-studios.audits.line-wrap]]
@@ -1271,6 +1464,12 @@ criteria = "safe-to-run"
 version = "0.7.1"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
+[[audits.google.audits.tokio]]
+who = "Vovo Yang <vovoy@google.com>"
+criteria = "safe-to-run"
+version = "1.29.1"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
 [[audits.google.audits.tokio-stream]]
 who = "David Koloski <dkoloski@google.com>"
 criteria = "safe-to-deploy"
@@ -1327,6 +1526,13 @@ user-id = 101233 # le-automaton
 start = "2020-09-28"
 end = "2024-03-23"
 
+[[audits.isrg.wildcard-audits.prio]]
+who = "David Cook <dcook@divviup.org>"
+criteria = "safe-to-deploy"
+user-id = 213776 # divviup-github-automation
+start = "2020-09-28"
+end = "2024-03-23"
+
 [[audits.isrg.audits.base64]]
 who = "Tim Geoghegan <timg@letsencrypt.org>"
 criteria = "safe-to-deploy"
@@ -1347,10 +1553,21 @@ who = "David Cook <dcook@divviup.org>"
 criteria = "safe-to-deploy"
 version = "0.9.0"
 
+[[audits.isrg.audits.getrandom]]
+who = "Tim Geoghegan <timg@letsencrypt.org>"
+criteria = "safe-to-deploy"
+delta = "0.2.9 -> 0.2.10"
+notes = "These changes include some new `unsafe` code for the `emscripten` and `psvita` targets, but all it does is call `libc::getentropy`."
+
 [[audits.isrg.audits.keccak]]
 who = "David Cook <dcook@divviup.org>"
 criteria = "safe-to-deploy"
 version = "0.1.2"
+
+[[audits.isrg.audits.keccak]]
+who = "Brandon Pitman <bran@bran.land>"
+criteria = "safe-to-deploy"
+delta = "0.1.3 -> 0.1.4"
 
 [[audits.isrg.audits.once_cell]]
 who = "Brandon Pitman <bran@bran.land>"
@@ -1361,6 +1578,11 @@ delta = "1.17.1 -> 1.17.2"
 who = "David Cook <dcook@divviup.org>"
 criteria = "safe-to-deploy"
 delta = "1.17.2 -> 1.18.0"
+
+[[audits.isrg.audits.once_cell]]
+who = "Brandon Pitman <bran@bran.land>"
+criteria = "safe-to-deploy"
+delta = "1.18.0 -> 1.19.0"
 
 [[audits.isrg.audits.rand_chacha]]
 who = "David Cook <dcook@divviup.org>"
@@ -1391,6 +1613,83 @@ version = "0.10.2"
 who = "David Cook <dcook@divviup.org>"
 criteria = "safe-to-deploy"
 version = "0.10.6"
+
+[[audits.isrg.audits.sha3]]
+who = "Brandon Pitman <bran@bran.land>"
+criteria = "safe-to-deploy"
+delta = "0.10.7 -> 0.10.8"
+
+[[audits.mozilla.wildcard-audits.uniffi]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2021-11-22"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_bindgen]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2021-11-22"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_build]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2021-11-22"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_checksum_derive]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2023-11-20"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_core]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2023-11-20"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_macros]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2021-11-22"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_meta]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2023-11-20"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_testing]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2023-11-20"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.uniffi_udl]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+user-id = 111105 # Mark Hammond (mhammond)
+start = "2023-11-20"
+end = "2024-11-28"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
 
 [[audits.mozilla.wildcard-audits.zeitstempel]]
 who = "Jan-Erik Rediger <jrediger@mozilla.com>"

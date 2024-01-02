@@ -22,7 +22,6 @@
 #include "nsCaret.h"
 #include "nsContentUtils.h"
 #include "nsGkAtoms.h"
-#include "nsQuickSort.h"
 #include "SVGPaintServerFrame.h"
 #include "nsTArray.h"
 #include "nsTextFrame.h"
@@ -34,6 +33,7 @@
 #include "nsLayoutUtils.h"
 #include "nsFrameSelection.h"
 #include "nsStyleStructInlines.h"
+#include "mozilla/CaretAssociationHint.h"
 #include "mozilla/DisplaySVGItem.h"
 #include "mozilla/Likely.h"
 #include "mozilla/PresShell.h"
@@ -1421,7 +1421,6 @@ class MOZ_STACK_CLASS TextFrameIterator {
       : mRootFrame(aRoot),
         mSubtree(aSubtree),
         mCurrentFrame(aRoot),
-        mCurrentPosition(),
         mSubtreePosition(mSubtree ? eBeforeSubtree : eWithinSubtree) {
     Init();
   }
@@ -1436,7 +1435,6 @@ class MOZ_STACK_CLASS TextFrameIterator {
                      ? aSubtree->GetPrimaryFrame()
                      : nullptr),
         mCurrentFrame(aRoot),
-        mCurrentPosition(),
         mSubtreePosition(mSubtree ? eBeforeSubtree : eWithinSubtree) {
     Init();
   }
@@ -1483,16 +1481,14 @@ class MOZ_STACK_CLASS TextFrameIterator {
    * are inside one.
    */
   nsIFrame* TextPathFrame() const {
-    return mTextPathFrames.IsEmpty()
-               ? nullptr
-               : mTextPathFrames.ElementAt(mTextPathFrames.Length() - 1);
+    return mTextPathFrames.IsEmpty() ? nullptr : mTextPathFrames.LastElement();
   }
 
   /**
    * Returns the current frame's computed dominant-baseline value.
    */
   StyleDominantBaseline DominantBaseline() const {
-    return mBaselines.ElementAt(mBaselines.Length() - 1);
+    return mBaselines.LastElement();
   }
 
   /**
@@ -3505,7 +3501,7 @@ void SVGTextFrame::SelectSubString(nsIContent* aContent, uint32_t charnum,
 
   frameSelection->HandleClick(content, charnum, charnum + nchars,
                               nsFrameSelection::FocusMode::kCollapseToNewPoint,
-                              CARET_ASSOCIATE_BEFORE);
+                              CaretAssociationHint::Before);
 }
 
 /**
@@ -3765,9 +3761,7 @@ already_AddRefed<DOMSVGPoint> SVGTextFrame::GetStartPositionOfChar(
   // We need to return the start position of the whole glyph.
   uint32_t startIndex = it.GlyphStartTextElementCharIndex();
 
-  RefPtr<DOMSVGPoint> point =
-      new DOMSVGPoint(ToPoint(mPositions[startIndex].mPosition));
-  return point.forget();
+  return do_AddRef(new DOMSVGPoint(ToPoint(mPositions[startIndex].mPosition)));
 }
 
 /**
@@ -3863,8 +3857,7 @@ already_AddRefed<DOMSVGPoint> SVGTextFrame::GetEndPositionOfChar(
              Matrix::Translation(ToPoint(mPositions[startIndex].mPosition));
   Point p = m.TransformPoint(Point(advance / mFontSizeScaleFactor, 0));
 
-  RefPtr<DOMSVGPoint> point = new DOMSVGPoint(p);
-  return point.forget();
+  return do_AddRef(new DOMSVGPoint(p));
 }
 
 /**
@@ -3932,8 +3925,7 @@ already_AddRefed<SVGRect> SVGTextFrame::GetExtentOfChar(nsIContent* aContent,
   // Transform the glyph's rect into user space.
   gfxRect r = m.TransformBounds(glyphRect);
 
-  RefPtr<SVGRect> rect = new SVGRect(aContent, ToRect(r));
-  return rect.forget();
+  return do_AddRef(new SVGRect(aContent, ToRect(r)));
 }
 
 /**

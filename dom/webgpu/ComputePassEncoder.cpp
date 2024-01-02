@@ -27,6 +27,7 @@ void ScopedFfiComputeTraits::release(ffi::WGPUComputePass* raw) {
 
 ffi::WGPUComputePass* BeginComputePass(
     RawId aEncoderId, const dom::GPUComputePassDescriptor& aDesc) {
+  MOZ_RELEASE_ASSERT(aEncoderId);
   ffi::WGPUComputePassDescriptor desc = {};
 
   webgpu::StringHelper label(aDesc.mLabel);
@@ -98,12 +99,12 @@ void ComputePassEncoder::InsertDebugMarker(const nsAString& aString) {
   }
 }
 
-void ComputePassEncoder::End(ErrorResult& aRv) {
+void ComputePassEncoder::End() {
   if (mValid) {
     mValid = false;
     auto* pass = mPass.forget();
     MOZ_ASSERT(pass);
-    mParent->EndComputePass(*pass, aRv);
+    mParent->EndComputePass(*pass);
   }
 }
 

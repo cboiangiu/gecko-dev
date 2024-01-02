@@ -19,6 +19,7 @@
 #include "SimpleMap.h"
 #include "VPXDecoder.h"
 #include "VideoUtils.h"
+#include "mozilla/fallible.h"
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/java/CodecProxyWrappers.h"
@@ -65,6 +66,17 @@ class RenderOrReleaseOutput {
   java::CodecProxy::GlobalRef mCodec;
   java::Sample::GlobalRef mSample;
 };
+
+static bool areSmpte432ColorPrimariesBuggy() {
+  if (jni::GetAPIVersion() >= 34) {
+    const auto socManufacturer =
+        java::sdk::Build::SOC_MANUFACTURER()->ToString();
+    if (socManufacturer.EqualsASCII("Google")) {
+      return true;
+    }
+  }
+  return false;
+}
 
 class RemoteVideoDecoder final : public RemoteDataDecoder {
  public:
@@ -401,9 +413,16 @@ class RemoteVideoDecoder final : public RemoteDataDecoder {
     }
 
     if (ok && (size > 0 || presentationTimeUs >= 0)) {
+      // On certain devices SMPTE 432 color primaries are rendered incorrectly,
+      // so we force BT709 to be used instead. The magic number 10 comes from
+      // libstagefright's kColorStandardDCI_P3.
+      static bool isSmpte432Buggy = areSmpte432ColorPrimariesBuggy();
+      bool forceBT709ColorSpace = isSmpte432Buggy && mColorSpace == Some(10);
+
       RefPtr<layers::Image> img = new layers::SurfaceTextureImage(
           mSurfaceHandle, inputInfo.mImageSize, false /* NOT continuous */,
-          gl::OriginPos::BottomLeft, mConfig.HasAlpha(), mTransformOverride);
+          gl::OriginPos::BottomLeft, mConfig.HasAlpha(), forceBT709ColorSpace,
+          mTransformOverride);
       img->AsSurfaceTextureImage()->RegisterSetCurrentCallback(
           std::move(releaseSample));
 
@@ -1019,7 +1038,11 @@ RefPtr<MediaDataDecoder::DecodePromise> RemoteDataDecoder::Decode(
   MOZ_ASSERT(GetState() != State::SHUTDOWN);
   MOZ_ASSERT(aSample != nullptr);
   jni::ByteBuffer::LocalRef bytes = jni::ByteBuffer::New(
-      const_cast<uint8_t*>(aSample->Data()), aSample->Size());
+      const_cast<uint8_t*>(aSample->Data()), aSample->Size(), fallible);
+  if (!bytes) {
+    return DecodePromise::CreateAndReject(
+        MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__), __func__);
+  }
 
   SetState(State::DRAINABLE);
   MOZ_ASSERT(aSample->Size() <= INT32_MAX);

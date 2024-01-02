@@ -304,11 +304,7 @@ var gDevToolsBrowser = (exports.gDevToolsBrowser = {
         if (!toolbox) {
           break;
         }
-        const dbg = await toolbox.getPanel("jsdebugger");
-        if (!dbg) {
-          break;
-        }
-        dbg.toggleJavascriptTracing();
+        await toolbox.commands.tracerCommand.toggle();
         break;
     }
   },
@@ -354,8 +350,11 @@ var gDevToolsBrowser = (exports.gDevToolsBrowser = {
     if (gDevToolsBrowser._trackedBrowserWindows.has(win)) {
       return;
     }
+    if (!win.document.getElementById("menuWebDeveloperPopup")) {
+      // Menus etc. set up here are browser specific.
+      return;
+    }
     gDevToolsBrowser._trackedBrowserWindows.add(win);
-
     BrowserMenus.addMenus(win.document);
 
     this.updateCommandAvailability(win);

@@ -6,30 +6,69 @@
 
 #include "PHCManager.h"
 
-#include "replace_malloc_bridge.h"
+#include "PHC.h"
+#include "mozilla/Literals.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_memory.h"
+#include "mozilla/Telemetry.h"
+#include "prsystem.h"
 
 namespace mozilla {
 
 using namespace phc;
 
-static const char kPHCPref[] = "memory.phc.enabled";
+static const char kPHCEnabledPref[] = "memory.phc.enabled";
+static const char kPHCMinRamMBPref[] = "memory.phc.min_ram_mb";
 
-static PHCState GetPHCStateFromPref() {
-  return StaticPrefs::memory_phc_enabled() ? Enabled : OnlyFree;
+// True if PHC has ever been enabled for this process.
+static bool sWasPHCEnabled = false;
+
+static void UpdatePHCState() {
+  size_t mem_size = PR_GetPhysicalMemorySize() / (1_MiB);
+  size_t min_mem_size = StaticPrefs::memory_phc_min_ram_mb();
+
+  // Only enable PHC if there are at least 8GB of ram.  Note that we use
+  // 1000 bytes per kilobyte rather than 1024.  Some 8GB machines will have
+  // slightly lower actual RAM available after some hardware devices
+  // reserve some.
+  if (StaticPrefs::memory_phc_enabled() && mem_size >= min_mem_size) {
+    SetPHCState(Enabled);
+    sWasPHCEnabled = true;
+  } else {
+    SetPHCState(OnlyFree);
+  }
 }
 
 static void PrefChangeCallback(const char* aPrefName, void* aNull) {
-  MOZ_ASSERT(0 == strcmp(aPrefName, kPHCPref));
+  MOZ_ASSERT((0 == strcmp(aPrefName, kPHCEnabledPref)) ||
+             (0 == strcmp(aPrefName, kPHCMinRamMBPref)));
 
-  ReplaceMalloc::SetPHCState(GetPHCStateFromPref());
+  UpdatePHCState();
 }
 
 void InitPHCState() {
-  ReplaceMalloc::SetPHCState(GetPHCStateFromPref());
+  Preferences::RegisterCallback(PrefChangeCallback, kPHCEnabledPref);
+  Preferences::RegisterCallback(PrefChangeCallback, kPHCMinRamMBPref);
+  UpdatePHCState();
+}
 
-  Preferences::RegisterCallback(PrefChangeCallback, kPHCPref);
+void ReportPHCTelemetry() {
+  if (!sWasPHCEnabled) {
+    return;
+  }
+
+  MemoryUsage usage;
+  PHCMemoryUsage(usage);
+
+  Accumulate(Telemetry::MEMORY_PHC_SLOP, usage.mFragmentationBytes);
+
+  PHCStats stats;
+  GetPHCStats(stats);
+
+  Accumulate(Telemetry::MEMORY_PHC_SLOTS_ALLOCATED, stats.mSlotsAllocated);
+  Accumulate(Telemetry::MEMORY_PHC_SLOTS_FREED, stats.mSlotsFreed);
+  // There are also slots that are unused (neither free nor allocated) they
+  // can be calculated by knowing the total number of slots.
 }
 
 };  // namespace mozilla

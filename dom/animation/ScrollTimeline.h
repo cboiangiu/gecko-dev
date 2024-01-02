@@ -165,8 +165,9 @@ class ScrollTimeline : public AnimationTimeline {
     // FIXME: Bug 1737927: Need to check the animation mutation observers for
     // animations with scroll timelines.
     // nsAutoAnimationMutationBatch mb(mDocument);
-
-    Tick();
+    TickState state;
+    Tick(state);
+    // TODO: Do we need to synchronize scroll animations?
   }
 
   // If the source of a ScrollTimeline is an element whose principal box does
@@ -195,6 +196,9 @@ class ScrollTimeline : public AnimationTimeline {
   void ReplacePropertiesWith(const Element* aReferenceElement,
                              PseudoStyleType aPseudoType,
                              const StyleScrollTimeline& aNew);
+
+  void NotifyAnimationContentVisibilityChanged(Animation* aAnimation,
+                                               bool aIsVisible) override;
 
  protected:
   virtual ~ScrollTimeline() { Teardown(); }

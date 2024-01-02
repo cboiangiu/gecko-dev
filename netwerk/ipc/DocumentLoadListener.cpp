@@ -159,6 +159,8 @@ static auto CreateDocumentLoadInfo(CanonicalBrowsingContext* aBrowsingContext,
     loadInfo->SetHttpsOnlyStatus(httpsOnlyStatus);
   }
 
+  loadInfo->SetWasSchemelessInput(aLoadState->GetWasSchemelessInput());
+
   loadInfo->SetTriggeringSandboxFlags(aLoadState->TriggeringSandboxFlags());
   loadInfo->SetTriggeringWindowId(aLoadState->TriggeringWindowId());
   loadInfo->SetTriggeringStorageAccess(aLoadState->TriggeringStorageAccess());
@@ -451,9 +453,25 @@ void DocumentLoadListener::AddURIVisit(nsIChannel* aChannel,
   nsCOMPtr<nsIWidget> widget =
       browsingContext->GetParentProcessWidgetContaining();
 
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
+
+  // Check if the URI has a http scheme and if either HSTS is enabled for this
+  // host, or if we were upgraded by HTTPS-Only/First. If this is the case, we
+  // want to mark this URI specially, as it will be followed shortly by an
+  // almost identical https history entry. That way the global history
+  // implementation can handle the visit appropriately (e.g. by marking it as
+  // `hidden`, so only the https url appears in default history views).
+  bool wasUpgraded =
+      uri->SchemeIs("http") &&
+      (loadInfo->GetHstsStatus() ||
+       (loadInfo->GetHttpsOnlyStatus() &
+        (nsILoadInfo::HTTPS_ONLY_UPGRADED_HTTPS_FIRST |
+         nsILoadInfo::HTTPS_ONLY_UPGRADED_LISTENER_NOT_REGISTERED |
+         nsILoadInfo::HTTPS_ONLY_UPGRADED_LISTENER_REGISTERED)));
+
   nsDocShell::InternalAddURIVisit(uri, previousURI, previousFlags,
                                   responseStatus, browsingContext, widget,
-                                  mLoadStateLoadType);
+                                  mLoadStateLoadType, wasUpgraded);
 }
 
 CanonicalBrowsingContext* DocumentLoadListener::GetLoadingBrowsingContext()
@@ -915,7 +933,7 @@ auto DocumentLoadListener::OpenDocument(
     nsDocShellLoadState* aLoadState, uint32_t aCacheKey,
     const Maybe<uint64_t>& aChannelId, const TimeStamp& aAsyncOpenTime,
     nsDOMNavigationTiming* aTiming, Maybe<dom::ClientInfo>&& aInfo,
-    Maybe<bool> aUriModified, Maybe<bool> aIsXFOError,
+    Maybe<bool> aUriModified, Maybe<bool> aIsEmbeddingBlockedError,
     dom::ContentParent* aContentParent, nsresult* aRv) -> RefPtr<OpenPromise> {
   LOG(("DocumentLoadListener [%p] OpenDocument [uri=%s]", this,
        aLoadState->URI()->GetSpecOrDefault().get()));
@@ -932,7 +950,8 @@ auto DocumentLoadListener::OpenDocument(
       CreateDocumentLoadInfo(browsingContext, aLoadState);
 
   nsLoadFlags loadFlags = aLoadState->CalculateChannelLoadFlags(
-      browsingContext, std::move(aUriModified), std::move(aIsXFOError));
+      browsingContext, std::move(aUriModified),
+      std::move(aIsEmbeddingBlockedError));
 
   // Keep track of navigation for the Bounce Tracking Protection.
   if (browsingContext->IsTopContent()) {
@@ -1541,6 +1560,17 @@ void DocumentLoadListener::SerializeRedirectData(
   }
 
   aArgs.registrarId() = mRedirectChannelId;
+
+#ifdef DEBUG
+  // We only set the granularFingerprintingProtection field when opening http
+  // channels. So, we mark the field as set here if the channel is not a
+  // nsHTTPChannel to pass the assertion check for getting this field in below
+  // LoadInfoToLoadInfoArgs() call.
+  if (!baseChannel) {
+    static_cast<mozilla::net::LoadInfo*>(redirectLoadInfo.get())
+        ->MarkOverriddenFingerprintingSettingsAsSet();
+  }
+#endif
 
   MOZ_ALWAYS_SUCCEEDS(
       ipc::LoadInfoToLoadInfoArgs(redirectLoadInfo, &aArgs.loadInfo()));
@@ -2343,11 +2373,13 @@ bool DocumentLoadListener::MaybeHandleLoadErrorWithURIFixup(nsresult aStatus) {
   }
 
   nsCOMPtr<nsIInputStream> newPostData;
+  bool wasSchemelessInput = false;
   nsCOMPtr<nsIURI> newURI = nsDocShell::AttemptURIFixup(
       mChannel, aStatus, mOriginalUriString, mLoadStateLoadType, bc->IsTop(),
       mLoadStateInternalLoadFlags &
           nsDocShell::INTERNAL_LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP,
-      bc->UsePrivateBrowsing(), true, getter_AddRefs(newPostData));
+      bc->UsePrivateBrowsing(), true, getter_AddRefs(newPostData),
+      &wasSchemelessInput);
 
   // Since aStatus will be NS_OK for 4xx and 5xx error codes we
   // have to check each request which was upgraded by https-first.
@@ -2379,6 +2411,9 @@ bool DocumentLoadListener::MaybeHandleLoadErrorWithURIFixup(nsresult aStatus) {
   loadState->SetTriggeringPrincipal(triggeringPrincipal);
 
   loadState->SetPostDataStream(newPostData);
+
+  // Record whether the protocol was added through a fixup.
+  loadState->SetWasSchemelessInput(wasSchemelessInput);
 
   if (isHTTPSFirstFixup) {
     // We have to exempt the load from HTTPS-First to prevent a

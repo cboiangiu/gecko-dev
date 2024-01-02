@@ -150,6 +150,8 @@ def setup_vscode(command_context, interactive):
     else:
         new_settings = setup_clangd_rust_in_vscode(command_context)
 
+    relobjdir = mozpath.relpath(command_context.topobjdir, command_context.topsrcdir)
+
     # Add file associations.
     new_settings = {
         **new_settings,
@@ -159,10 +161,12 @@ def setup_vscode(command_context, interactive):
         },
         # Note, the top-level editor settings are left as default to allow the
         # user's defaults (if any) to take effect.
-        "[javascript][javascriptreact][typescript][typescriptreact][json][html]": {
+        "[javascript][javascriptreact][typescript][typescriptreact][json][jsonc][html]": {
             "editor.defaultFormatter": "esbenp.prettier-vscode",
             "editor.formatOnSave": True,
         },
+        "files.exclude": {"obj-*": True, relobjdir: True},
+        "files.watcherExclude": {"obj-*": True, relobjdir: True},
     }
 
     import difflib
@@ -202,17 +206,14 @@ def setup_vscode(command_context, interactive):
         # If we've got an old section with the formatting configuration, remove it
         # so that we effectively "upgrade" the user to include json from the new
         # settings. The user is presented with the diffs so should spot any issues.
-        if "[javascript][javascriptreact][typescript][typescriptreact]" in old_settings:
-            old_settings.pop(
-                "[javascript][javascriptreact][typescript][typescriptreact]"
-            )
-        if (
-            "[javascript][javascriptreact][typescript][typescriptreact][json]"
-            in old_settings
-        ):
-            old_settings.pop(
-                "[javascript][javascriptreact][typescript][typescriptreact][json]"
-            )
+        deprecated = [
+            "[javascript][javascriptreact][typescript][typescriptreact]",
+            "[javascript][javascriptreact][typescript][typescriptreact][json]",
+            "[javascript][javascriptreact][typescript][typescriptreact][json][html]",
+        ]
+        for entry in deprecated:
+            if entry in old_settings:
+                old_settings.pop(entry)
 
         settings = {**old_settings, **new_settings}
 

@@ -2237,20 +2237,19 @@ class BookmarkObserverRecorder {
               IFNULL(h.hidden, 0) AS hidden,
               IFNULL(h.visit_count, 0) AS visit_count,
               h.last_visit_date,
-              (
-                SELECT GROUP_CONCAT(t.title, ',')
-                FROM moz_bookmarks t
-                LEFT JOIN moz_bookmarks ref ON ref.fk = h.id
-                WHERE t.id = +ref.parent
-                  AND t.parent = (
-                    SELECT id FROM moz_bookmarks
-                    WHERE guid = '${lazy.PlacesUtils.bookmarks.tagsGuid}'
-                  )
-              ) AS tags
+              (SELECT group_concat(pp.title ORDER BY pp.title)
+               FROM moz_bookmarks bb
+               JOIN moz_bookmarks pp ON pp.id = bb.parent
+               JOIN moz_bookmarks gg ON gg.id = pp.parent
+               WHERE bb.fk = h.id
+               AND gg.guid = '${lazy.PlacesUtils.bookmarks.tagsGuid}'
+              ) AS tags,
+              t.guid AS tGuid, t.id AS tId, t.title AS tTitle
        FROM itemsAdded n
        JOIN moz_bookmarks b ON b.guid = n.guid
        JOIN moz_bookmarks p ON p.id = b.parent
        LEFT JOIN moz_places h ON h.id = b.fk
+       LEFT JOIN moz_bookmarks t ON t.guid = target_folder_guid(url)
        ${this.orderBy("n.level", "b.parent", "b.position")}`,
       null,
       (row, cancel) => {
@@ -2279,6 +2278,9 @@ class BookmarkObserverRecorder {
             ? lazy.PlacesUtils.toDate(lastVisitDate).getTime()
             : null,
           tags: row.getResultByName("tags"),
+          targetFolderGuid: row.getResultByName("tGuid"),
+          targetFolderItemId: row.getResultByName("tId"),
+          targetFolderTitle: row.getResultByName("tTitle"),
         };
 
         this.noteItemAdded(info);
@@ -2301,16 +2303,13 @@ class BookmarkObserverRecorder {
               h.url AS url, IFNULL(b.title, '') AS title,
               IFNULL(h.frecency, 0) AS frecency, IFNULL(h.hidden, 0) AS hidden,
               IFNULL(h.visit_count, 0) AS visit_count,
-              h.last_visit_date,
-              (
-                SELECT GROUP_CONCAT(t.title, ',')
-                FROM moz_bookmarks t
-                LEFT JOIN moz_bookmarks ref ON ref.fk = h.id
-                WHERE t.id = +ref.parent
-                  AND t.parent = (
-                    SELECT id FROM moz_bookmarks
-                    WHERE guid = '${lazy.PlacesUtils.bookmarks.tagsGuid}'
-                  )
+              b.dateAdded, h.last_visit_date,
+              (SELECT group_concat(pp.title ORDER BY pp.title)
+               FROM moz_bookmarks bb
+               JOIN moz_bookmarks pp ON pp.id = bb.parent
+               JOIN moz_bookmarks gg ON gg.id = pp.parent
+               WHERE bb.fk = h.id
+               AND gg.guid = '${lazy.PlacesUtils.bookmarks.tagsGuid}'
               ) AS tags
        FROM itemsMoved c
        JOIN moz_bookmarks b ON b.id = c.itemId
@@ -2339,6 +2338,9 @@ class BookmarkObserverRecorder {
           frecency: row.getResultByName("frecency"),
           hidden: row.getResultByName("hidden"),
           visitCount: row.getResultByName("visit_count"),
+          dateAdded: lazy.PlacesUtils.toDate(
+            row.getResultByName("dateAdded")
+          ).getTime(),
           lastVisitDate: lastVisitDate
             ? lazy.PlacesUtils.toDate(lastVisitDate).getTime()
             : null,
@@ -2425,6 +2427,9 @@ class BookmarkObserverRecorder {
         hidden: info.hidden,
         visitCount: info.visitCount,
         lastVisitDate: info.lastVisitDate,
+        targetFolderGuid: info.targetFolderGuid,
+        targetFolderItemId: info.targetFolderItemId,
+        targetFolderTitle: info.targetFolderTitle,
       })
     );
   }
@@ -2466,6 +2471,7 @@ class BookmarkObserverRecorder {
         frecency: info.frecency,
         hidden: info.hidden,
         visitCount: info.visitCount,
+        dateAdded: info.dateAdded,
         lastVisitDate: info.lastVisitDate,
       })
     );

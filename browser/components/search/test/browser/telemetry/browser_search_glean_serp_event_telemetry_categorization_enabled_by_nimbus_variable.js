@@ -17,10 +17,8 @@ ChromeUtils.defineESModuleGetters(this, {
 ChromeUtils.defineESModuleGetters(lazy, {
   ExperimentAPI: "resource://nimbus/ExperimentAPI.sys.mjs",
   ExperimentFakes: "resource://testing-common/NimbusTestUtils.sys.mjs",
-  SearchSERPCategorization: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchSERPDomainToCategoriesMap:
     "resource:///modules/SearchSERPTelemetry.sys.mjs",
-  sinon: "resource://testing-common/Sinon.sys.mjs",
 });
 
 XPCOMUtils.defineLazyPreferenceGetter(
@@ -36,7 +34,7 @@ const TEST_PROVIDER_INFO = [
     telemetryId: "example",
     searchPageRegexp:
       /^https:\/\/example.org\/browser\/browser\/components\/search\/test\/browser\/telemetry\/searchTelemetry/,
-    queryParamName: "s",
+    queryParamNames: ["s"],
     codeParamName: "abc",
     taggedCodes: ["ff"],
     adServerAttributes: ["mozAttr"],
@@ -78,17 +76,12 @@ const TEST_PROVIDER_INFO = [
 const client = RemoteSettings(TELEMETRY_CATEGORIZATION_KEY);
 const db = client.db;
 
-let stub;
 add_setup(async function () {
   SearchSERPTelemetry.overrideSearchTelemetryForTests(TEST_PROVIDER_INFO);
 
   // Enable local telemetry recording for the duration of the tests.
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
-
-  await SpecialPowers.pushPrefEnv({
-    set: [["browser.search.log", true]],
-  });
 
   // Clear existing Remote Settings data.
   await db.clear();
@@ -104,15 +97,12 @@ add_setup(async function () {
   info("Add data to Remote Settings DB.");
   await db.importChanges({}, Date.now());
 
-  stub = lazy.sinon.stub(lazy.SearchSERPCategorization, "dummyLogger");
-
   registerCleanupFunction(async () => {
     Services.telemetry.canRecordExtended = oldCanRecord;
     await SpecialPowers.popPrefEnv();
     resetTelemetry();
     await db.clear();
     client.attachments.cacheImpl.delete(record.id);
-    stub.restore();
   });
 });
 
@@ -164,19 +154,30 @@ add_task(async function test_enable_experiment_when_pref_is_not_enabled() {
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, url);
   await promise;
 
-  Assert.deepEqual(
-    Array.from(stub.getCall(0).args[0]),
-    ["foobar.org"],
-    "Categorization of non-ads should match."
-  );
-
-  Assert.deepEqual(
-    Array.from(stub.getCall(1).args[0]),
-    ["abc.org", "def.org"],
-    "Categorization of ads should match."
-  );
-
-  BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.removeTab(tab);
+  assertCategorizationValues([
+    {
+      organic_category: "3",
+      organic_num_domains: "1",
+      organic_num_inconclusive: "0",
+      organic_num_unknown: "0",
+      sponsored_category: "4",
+      sponsored_num_domains: "2",
+      sponsored_num_inconclusive: "0",
+      sponsored_num_unknown: "0",
+      mappings_version: "1",
+      app_version: APP_VERSION,
+      channel: CHANNEL,
+      locale: LOCALE,
+      region: REGION,
+      partner_code: "ff",
+      provider: "example",
+      tagged: "true",
+      num_ads_clicked: "0",
+      num_ads_visible: "2",
+    },
+  ]);
+  resetTelemetry();
 
   info("End experiment.");
   await doExperimentCleanup();
@@ -197,13 +198,10 @@ add_task(async function test_enable_experiment_when_pref_is_not_enabled() {
   // Wait an arbitrary amount for a possible categorization.
   // eslint-disable-next-line mozilla/no-arbitrary-setTimeout
   await new Promise(resolve => setTimeout(resolve, 1500));
-  Assert.equal(
-    stub.getCall(2),
-    null,
-    "dummyLogger should not have been called if experiment in un-enrolled."
-  );
+  BrowserTestUtils.removeTab(tab);
+
+  assertCategorizationValues([]);
 
   // Clean up.
-  BrowserTestUtils.removeTab(tab);
   prefBranch.setBoolPref(TELEMETRY_PREF, originalPrefValue);
 });

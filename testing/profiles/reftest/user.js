@@ -7,7 +7,6 @@ user_pref("browser.safebrowsing.blockedURIs.enabled", false);
 user_pref("browser.safebrowsing.downloads.enabled", false);
 user_pref("browser.safebrowsing.downloads.remote.url", "http://127.0.0.1/safebrowsing-dummy/gethash");
 user_pref("browser.safebrowsing.malware.enabled", false);
-user_pref("browser.safebrowsing.passwords.enabled", false);
 // Likewise for safebrowsing.
 user_pref("browser.safebrowsing.phishing.enabled", false);
 user_pref("browser.safebrowsing.provider.google.gethashURL", "http://127.0.0.1/safebrowsing-dummyg/gethash");
@@ -53,10 +52,10 @@ user_pref("image.decode-sync.enabled", true);
 // reflow so that that rare edge case doesn't lead to reftest
 // failures.
 user_pref("layout.interruptible-reflow.enabled", false);
-// Disable the fade out (over time) of overlay scrollbars, since we
-// can't guarantee taking both reftest snapshots at the same point
-// during the fade.
+// Disable the fade of overlay scrollbars, since we can't guarantee taking both
+// reftest snapshots at the same point during the fade.
 user_pref("layout.testing.overlay-scrollbars.always-visible", true);
+user_pref("ui.scrollbarFadeDuration", 0);
 // The broken image icon doesn't block the load event and thus there's no easy
 // way to guarantee it's loaded by the time we take the reftest screenshot.
 user_pref("layout.image.eager_broken_image_icon", true);

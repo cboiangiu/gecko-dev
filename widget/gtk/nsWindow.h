@@ -243,6 +243,7 @@ class nsWindow final : public nsBaseWidget {
 
   void OnScrollEvent(GdkEventScroll* aEvent);
 
+  void OnVisibilityNotifyEvent(GdkVisibilityState aState);
   void OnWindowStateEvent(GtkWidget* aWidget, GdkEventWindowState* aEvent);
   void OnDragDataReceivedEvent(GtkWidget* aWidget, GdkDragContext* aDragContext,
                                gint aX, gint aY,
@@ -559,6 +560,8 @@ class nsWindow final : public nsBaseWidget {
 
   float mAspectRatio = 0.0f;
   float mAspectRatioSaved = 0.0f;
+  mozilla::Maybe<GtkOrientation> mAspectResizer;
+  LayoutDeviceIntPoint mLastResizePoint;
 
   // The size requested, which might not be reflected in mBounds.  Used in
   // WaylandPopupSetDirectPosition() to remember intended size for popup
@@ -655,14 +658,8 @@ class nsWindow final : public nsBaseWidget {
   bool mHasMappedToplevel : 1;
   bool mRetryPointerGrab : 1;
   bool mPanInProgress : 1;
-  // Use dedicated GdkWindow for mContainer
-  bool mDrawToContainer : 1;
   // Draw titlebar with :backdrop css state (inactive/unfocused).
   bool mTitlebarBackdropState : 1;
-  // It's undecorated popup utility window, without resizers/titlebar,
-  // movable by mouse. Used on Wayland for popups without
-  // parent (for instance WebRTC sharing indicator, notifications).
-  bool mIsWaylandPanelWindow : 1;
   // It's child window, i.e. window which is nested in parent window.
   // This is obsoleted and should not be used.
   // We use GdkWindow hierarchy for such windows.
@@ -673,6 +670,7 @@ class nsWindow final : public nsBaseWidget {
   // We can expect at least one size-allocate event after early resizes.
   bool mHasReceivedSizeAllocate : 1;
   bool mWidgetCursorLocked : 1;
+  bool mUndecorated : 1;
 
   /*  Gkt creates popup in two incarnations - wl_subsurface and xdg_popup.
    *  Kind of popup is choosen before GdkWindow is mapped so we can change
@@ -982,6 +980,8 @@ class nsWindow final : public nsBaseWidget {
   void SetUserTimeAndStartupTokenForActivatedWindow();
 
   void KioskLockOnMonitor();
+
+  void EmulateResizeDrag(GdkEventMotion* aEvent);
 
 #ifdef MOZ_X11
   typedef enum {GTK_WIDGET_COMPOSIDED_DEFAULT = 0,

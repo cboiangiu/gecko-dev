@@ -776,6 +776,10 @@ class MDefinition : public MNode {
   // (only counting MDefinitions, ignoring MResumePoints)
   bool hasOneDefUse() const;
 
+  // Test whether this MDefinition has exactly one live use. (only counting
+  // MDefinitions which are not recovered on bailout and ignoring MResumePoints)
+  bool hasOneLiveDefUse() const;
+
   // Test whether this MDefinition has at least one use.
   // (only counting MDefinitions, ignoring MResumePoints)
   bool hasDefUses() const;
@@ -2983,6 +2987,9 @@ class MBox : public MUnaryInstruction, public NoTypePolicy::Data {
   bool congruentTo(const MDefinition* ins) const override {
     return congruentIfOperandsEqual(ins);
   }
+
+  MDefinition* foldsTo(TempAllocator& alloc) override;
+
   AliasSet getAliasSet() const override { return AliasSet::None(); }
 
   ALLOW_CLONE(MBox)
@@ -4612,6 +4619,10 @@ class MMinMax : public MBinaryInstruction, public ArithPolicy::Data {
   bool isFloat32Commutative() const override { return true; }
   void trySpecializeFloat32(TempAllocator& alloc) override;
 
+#ifdef JS_JITSPEW
+  void printOpcode(GenericPrinter& out) const override;
+#endif
+
   ALLOW_CLONE(MMinMax)
 };
 
@@ -4646,6 +4657,10 @@ class MMinMaxArray : public MUnaryInstruction, public SingleObjectPolicy::Data {
   AliasSet getAliasSet() const override {
     return AliasSet::Load(AliasSet::ObjectFields | AliasSet::Element);
   }
+
+#ifdef JS_JITSPEW
+  void printOpcode(GenericPrinter& out) const override;
+#endif
 };
 
 class MAbs : public MUnaryInstruction, public ArithPolicy::Data {
@@ -11499,6 +11514,32 @@ class MWasmRefIsSubtypeOfConcrete : public MBinaryInstruction,
   }
 
   MDefinition* foldsTo(TempAllocator& alloc) override;
+};
+
+class MWasmNewStructObject : public MBinaryInstruction,
+                             public NoTypePolicy::Data {
+ private:
+  bool isOutline_;
+  bool zeroFields_;
+  gc::AllocKind allocKind_;
+
+  MWasmNewStructObject(MDefinition* instance, MDefinition* typeDefData,
+                       bool isOutline, bool zeroFields, gc::AllocKind allocKind)
+      : MBinaryInstruction(classOpcode, instance, typeDefData),
+        isOutline_(isOutline),
+        zeroFields_(zeroFields),
+        allocKind_(allocKind) {
+    setResultType(MIRType::WasmAnyRef);
+  }
+
+ public:
+  INSTRUCTION_HEADER(WasmNewStructObject)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, instance), (1, typeDefData))
+
+  bool isOutline() const { return isOutline_; }
+  bool zeroFields() const { return zeroFields_; }
+  gc::AllocKind allocKind() const { return allocKind_; }
 };
 
 #ifdef FUZZING_JS_FUZZILLI

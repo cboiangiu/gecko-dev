@@ -95,32 +95,37 @@ struct KeySystemConfig {
       mCodecsDecrypted.AppendElement(aCodec);
     }
 
-#ifdef DEBUG
     EMECodecString GetDebugInfo() const {
       EMECodecString info;
-      info.AppendLiteral("decoding: [");
-      for (const auto& codec : mCodecsDecoded) {
-        info.Append(codec);
-        info.AppendLiteral(",");
+      info.AppendLiteral("decoding-and-decrypting:[");
+      for (size_t idx = 0; idx < mCodecsDecoded.Length(); idx++) {
+        info.Append(mCodecsDecoded[idx]);
+        if (idx + 1 < mCodecsDecoded.Length()) {
+          info.AppendLiteral(",");
+        }
       }
-      info.AppendLiteral("], ");
-      info.AppendLiteral("decrypting: [");
-      for (const auto& codec : mCodecsDecrypted) {
-        info.Append(codec);
-        info.AppendLiteral(",");
+      info.AppendLiteral("],");
+      info.AppendLiteral("decrypting-only:[");
+      for (size_t idx = 0; idx < mCodecsDecrypted.Length(); idx++) {
+        info.Append(mCodecsDecrypted[idx]);
+        if (idx + 1 < mCodecsDecrypted.Length()) {
+          info.AppendLiteral(",");
+        }
       }
       info.AppendLiteral("]");
       return info;
     }
-#endif
+
    private:
     nsTArray<EMECodecString> mCodecsDecoded;
     nsTArray<EMECodecString> mCodecsDecrypted;
   };
 
+  // Return true if given key system is supported on the current device.
   static bool Supports(const nsAString& aKeySystem);
   static bool CreateKeySystemConfigs(const nsAString& aKeySystem,
                                      nsTArray<KeySystemConfig>& aOutConfigs);
+  static void GetGMPKeySystemConfigs(dom::Promise* aPromise);
 
   KeySystemConfig() = default;
   ~KeySystemConfig() = default;
@@ -155,9 +160,11 @@ struct KeySystemConfig {
   KeySystemConfig(KeySystemConfig&&) = default;
   KeySystemConfig& operator=(KeySystemConfig&&) = default;
 
-#ifdef DEBUG
   nsString GetDebugInfo() const;
-#endif
+
+  // Return true if the given key system is equal to `mKeySystem`, or it can be
+  // mapped to the same key system
+  bool IsSameKeySystem(const nsAString& aKeySystem) const;
 
   nsString mKeySystem;
   nsTArray<nsString> mInitDataTypes;

@@ -47,21 +47,21 @@ const kPixelValueFloat = 0x66 / 0xff; // 0.4
 const expect = {
   /* prettier-ignore */
   'opaque': new Uint8ClampedArray([
-    0, 0, kPixelValue, 0xff, // blue
-    0, kPixelValue, 0, 0xff, // green
-    kPixelValue, 0, 0, 0xff, // red
-    kPixelValue, kPixelValue, 0, 0xff, // yellow
+           0x00,        0x00, kPixelValue, 0xff, // blue
+           0x00, kPixelValue,        0x00, 0xff, // green
+    kPixelValue,        0x00,        0x00, 0xff, // red
+    kPixelValue, kPixelValue,        0x00, 0xff, // yellow
   ]),
   /* prettier-ignore */
   'premultiplied': new Uint8ClampedArray([
-    0, 0, 0xff, kPixelValue, // blue
-    0, 0xff, 0, kPixelValue, // green
-    0xff, 0, 0, kPixelValue, // red
-    0xff, 0xff, 0, kPixelValue, // yellow
+    0x00, 0x00, 0xff, kPixelValue, // blue
+    0x00, 0xff, 0x00, kPixelValue, // green
+    0xff, 0x00, 0x00, kPixelValue, // red
+    0xff, 0xff, 0x00, kPixelValue, // yellow
   ]),
 };
 
-async function initWebGPUCanvasContent<T extends CanvasType>(
+function initWebGPUCanvasContent<T extends CanvasType>(
   t: GPUTest,
   format: GPUTextureFormat,
   alphaMode: GPUCanvasAlphaMode,
@@ -206,7 +206,7 @@ g.test('onscreenCanvas,snapshot')
       .combine('snapshotType', ['toDataURL', 'toBlob', 'imageBitmap'])
   )
   .fn(async t => {
-    const canvas = await initWebGPUCanvasContent(
+    const canvas = initWebGPUCanvasContent(
       t,
       t.params.format,
       t.params.alphaMode,
@@ -268,7 +268,7 @@ g.test('offscreenCanvas,snapshot')
       .combine('snapshotType', ['convertToBlob', 'transferToImageBitmap', 'imageBitmap'])
   )
   .fn(async t => {
-    const offscreenCanvas = await initWebGPUCanvasContent(
+    const offscreenCanvas = initWebGPUCanvasContent(
       t,
       t.params.format,
       t.params.alphaMode,
@@ -279,7 +279,7 @@ g.test('offscreenCanvas,snapshot')
     let snapshot: HTMLImageElement | ImageBitmap;
     switch (t.params.snapshotType) {
       case 'convertToBlob': {
-        if (typeof offscreenCanvas.convertToBlob === undefined) {
+        if (typeof offscreenCanvas.convertToBlob === 'undefined') {
           t.skip("Browser doesn't support OffscreenCanvas.convertToBlob");
           return;
         }
@@ -292,7 +292,7 @@ g.test('offscreenCanvas,snapshot')
         break;
       }
       case 'transferToImageBitmap': {
-        if (typeof offscreenCanvas.transferToImageBitmap === undefined) {
+        if (typeof offscreenCanvas.transferToImageBitmap === 'undefined') {
           t.skip("Browser doesn't support OffscreenCanvas.transferToImageBitmap");
           return;
         }
@@ -326,9 +326,9 @@ g.test('onscreenCanvas,uploadToWebGL')
       .combine('webgl', ['webgl', 'webgl2'])
       .combine('upload', ['texImage2D', 'texSubImage2D'])
   )
-  .fn(async t => {
+  .fn(t => {
     const { format, webgl, upload } = t.params;
-    const canvas = await initWebGPUCanvasContent(t, format, t.params.alphaMode, 'srgb', 'onscreen');
+    const canvas = initWebGPUCanvasContent(t, format, t.params.alphaMode, 'srgb', 'onscreen');
 
     const expectCanvas: HTMLCanvasElement = createOnscreenCanvas(t, canvas.width, canvas.height);
     const gl = expectCanvas.getContext(webgl) as WebGLRenderingContext | WebGL2RenderingContext;
@@ -393,16 +393,10 @@ g.test('drawTo2DCanvas')
       .combine('webgpuCanvasType', kAllCanvasTypes)
       .combine('canvas2DType', kAllCanvasTypes)
   )
-  .fn(async t => {
+  .fn(t => {
     const { format, webgpuCanvasType, alphaMode, colorSpace, canvas2DType } = t.params;
 
-    const canvas = await initWebGPUCanvasContent(
-      t,
-      format,
-      alphaMode,
-      colorSpace,
-      webgpuCanvasType
-    );
+    const canvas = initWebGPUCanvasContent(t, format, alphaMode, colorSpace, webgpuCanvasType);
 
     const expectCanvas = createCanvas(t, canvas2DType, canvas.width, canvas.height);
     const ctx = expectCanvas.getContext('2d') as CanvasRenderingContext2D;
@@ -454,7 +448,9 @@ g.test('transferToImageBitmap_unconfigured_nonzero_size')
 
 g.test('transferToImageBitmap_zero_size')
   .desc(
-    `Regression test for a crash when calling transferImageBitmap on an unconfigured. Case where the canvas is empty.`
+    `Regression test for a crash when calling transferImageBitmap on an unconfigured. Case where the canvas is empty.
+
+    TODO: Spec and expect a particular Exception type here.`
   )
   .params(u => u.combine('configure', [true, false]))
   .fn(t => {
@@ -467,6 +463,18 @@ g.test('transferToImageBitmap_zero_size')
     }
 
     // Transferring would give an empty ImageBitmap which is not possible, so an Exception is thrown.
+    t.shouldThrow(true, () => {
+      canvas.transferToImageBitmap();
+    });
+  });
+
+g.test('transferToImageBitmap_huge_size')
+  .desc(`Regression test for a crash when calling transferImageBitmap on a HUGE canvas.`)
+  .fn(t => {
+    const canvas = createCanvas(t, 'offscreen', 1000000, 1000000);
+    canvas.getContext('webgpu')!;
+
+    // Transferring to such a HUGE image bitmap would not be possible, so an Exception is thrown.
     t.shouldThrow(true, () => {
       canvas.transferToImageBitmap();
     });

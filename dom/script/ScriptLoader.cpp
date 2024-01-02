@@ -8,10 +8,10 @@
 #include "ScriptLoadHandler.h"
 #include "ScriptTrace.h"
 #include "ModuleLoader.h"
+#include "nsGenericHTMLElement.h"
 
 #include "mozilla/Assertions.h"
 #include "mozilla/dom/FetchPriority.h"
-#include "mozilla/dom/HTMLScriptElement.h"
 #include "mozilla/dom/RequestBinding.h"
 #include "nsIChildChannel.h"
 #include "zlib.h"
@@ -20,13 +20,12 @@
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "js/Array.h"         // JS::GetArrayLength
-#include "js/ColumnNumber.h"  // #include "js/CompilationAndEvaluation.h"
-
+#include "js/ColumnNumber.h"  // JS::ColumnNumberOneOrigin
 #include "js/CompilationAndEvaluation.h"
 #include "js/CompileOptions.h"  // JS::CompileOptions, JS::OwningCompileOptions, JS::DecodeOptions, JS::OwningDecodeOptions, JS::DelazificationOption
 #include "js/ContextOptions.h"  // JS::ContextOptionsRef
 #include "js/experimental/JSStencil.h"  // JS::Stencil, JS::InstantiationStorage
-#include "js/experimental/CompileScript.h"  // JS::FrontendContext, JS::NewFrontendContext, JS::DestroyFrontendContext, JS::SetNativeStackQuota, JS::CompilationStorage, JS::CompileGlobalScriptToStencil, JS::CompileModuleScriptToStencil, JS::DecodeStencil, JS::PrepareForInstantiate
+#include "js/experimental/CompileScript.h"  // JS::FrontendContext, JS::NewFrontendContext, JS::DestroyFrontendContext, JS::SetNativeStackQuota, JS::ThreadStackQuotaForSize, JS::CompilationStorage, JS::CompileGlobalScriptToStencil, JS::CompileModuleScriptToStencil, JS::DecodeStencil, JS::PrepareForInstantiate
 #include "js/friend/ErrorMessages.h"        // js::GetErrorMessage, JSMSG_*
 #include "js/loader/ScriptLoadRequest.h"
 #include "ScriptCompression.h"
@@ -666,8 +665,62 @@ void ScriptLoader::PrepareCacheInfoChannel(nsIChannel* aChannel,
   }
 }
 
-static void AdjustPriorityForNonLinkPreloadScripts(
+static void AdjustPriorityAndClassOfServiceForLinkPreloadScripts(
     nsIChannel* aChannel, ScriptLoadRequest* aRequest) {
+  MOZ_ASSERT(aRequest->GetScriptLoadContext()->IsLinkPreloadScript());
+
+  if (!StaticPrefs::network_fetchpriority_enabled()) {
+    // Put it to the group that is not blocked by leaders and doesn't block
+    // follower at the same time.
+    // Giving it a much higher priority will make this request be processed
+    // ahead of other Unblocked requests, but with the same weight as
+    // Leaders. This will make us behave similar way for both http2 and http1.
+    ScriptLoadContext::PrioritizeAsPreload(aChannel);
+    return;
+  }
+
+  if (nsCOMPtr<nsIClassOfService> cos = do_QueryInterface(aChannel)) {
+    cos->AddClassFlags(nsIClassOfService::Unblocked);
+  }
+
+  if (nsCOMPtr<nsISupportsPriority> supportsPriority =
+          do_QueryInterface(aChannel)) {
+    LOG(("Is <link rel=[module]preload"));
+
+    const RequestPriority fetchPriority = aRequest->FetchPriority();
+    // The spec defines the priority to be set in an implementation defined
+    // manner (<https://fetch.spec.whatwg.org/#concept-fetch>, step 15 and
+    // <https://html.spec.whatwg.org/#concept-script-fetch-options-fetch-priority>).
+    // For web-compatibility, the fetch priority mapping from
+    // <https://web.dev/articles/fetch-priority#browser_priority_and_fetchpriority>
+    // is taken.
+    const int32_t supportsPriorityValue = [&]() {
+      switch (fetchPriority) {
+        case RequestPriority::Auto: {
+          return nsISupportsPriority::PRIORITY_HIGH;
+        }
+        case RequestPriority::High: {
+          return nsISupportsPriority::PRIORITY_HIGH;
+        }
+        case RequestPriority::Low: {
+          return nsISupportsPriority::PRIORITY_LOW;
+        }
+        default: {
+          MOZ_ASSERT_UNREACHABLE();
+          return nsISupportsPriority::PRIORITY_NORMAL;
+        }
+      }
+    }();
+
+    LogPriorityMapping(ScriptLoader::gScriptLoaderLog,
+                       ToFetchPriority(fetchPriority), supportsPriorityValue);
+
+    supportsPriority->SetPriority(supportsPriorityValue);
+  }
+}
+
+void AdjustPriorityForNonLinkPreloadScripts(nsIChannel* aChannel,
+                                            ScriptLoadRequest* aRequest) {
   MOZ_ASSERT(!aRequest->GetScriptLoadContext()->IsLinkPreloadScript());
 
   if (!StaticPrefs::network_fetchpriority_enabled()) {
@@ -676,33 +729,36 @@ static void AdjustPriorityForNonLinkPreloadScripts(
 
   if (nsCOMPtr<nsISupportsPriority> supportsPriority =
           do_QueryInterface(aChannel)) {
+    LOG(("Is not <link rel=[module]preload"));
     const RequestPriority fetchPriority = aRequest->FetchPriority();
     // The spec defines the priority to be set in an implementation defined
     // manner (<https://fetch.spec.whatwg.org/#concept-fetch>, step 15 and
     // <https://html.spec.whatwg.org/#concept-script-fetch-options-fetch-priority>).
     // For web-compatibility, the fetch priority mapping from
-    // <https://web.dev/fetch-priority/#browser-priority-and-fetchpriority> is
-    // taken.
-    switch (fetchPriority) {
-      case RequestPriority::Auto:
-        LOG(("ScriptLoader::%s:, fetchpriority=auto", __FUNCTION__));
-        break;
-      case RequestPriority::Low: {
-        LOG(("ScriptLoader::%s:, fetchpriority=low, setting priority",
-             __FUNCTION__));
-        supportsPriority->SetPriority(nsISupportsPriority::PRIORITY_LOW);
-        break;
+    // <https://web.dev/articles/fetch-priority#browser_priority_and_fetchpriority>
+    // is taken.
+    const Maybe<int32_t> supportsPriorityValue = [&]() -> Maybe<int32_t> {
+      switch (fetchPriority) {
+        case RequestPriority::Auto:
+          return Nothing{};
+        case RequestPriority::Low: {
+          return Some(nsISupportsPriority::PRIORITY_LOW);
+        }
+        case RequestPriority::High: {
+          return Some(nsISupportsPriority::PRIORITY_HIGH);
+        }
+        default: {
+          MOZ_ASSERT_UNREACHABLE();
+          return Nothing{};
+        }
       }
-      case RequestPriority::High: {
-        LOG(("ScriptLoader::%s:, fetchpriority=high, setting priority",
-             __FUNCTION__));
-        supportsPriority->SetPriority(nsISupportsPriority::PRIORITY_HIGH);
-        break;
-      }
-      default: {
-        MOZ_ASSERT_UNREACHABLE();
-        break;
-      }
+    }();
+
+    if (supportsPriorityValue) {
+      LogPriorityMapping(ScriptLoader::gScriptLoaderLog,
+                         ToFetchPriority(fetchPriority),
+                         *supportsPriorityValue);
+      supportsPriority->SetPriority(*supportsPriorityValue);
     }
   }
 }
@@ -712,12 +768,9 @@ void ScriptLoader::PrepareRequestPriorityAndRequestDependencies(
     nsIChannel* aChannel, ScriptLoadRequest* aRequest) {
   if (aRequest->GetScriptLoadContext()->IsLinkPreloadScript()) {
     // This is <link rel="preload" as="script"> or <link rel="modulepreload">
-    // initiated speculative load, put it to the group that is not blocked by
-    // leaders and doesn't block follower at the same time. Giving it a much
-    // higher priority will make this request be processed ahead of other
-    // Unblocked requests, but with the same weight as Leaders. This will make
-    // us behave similar way for both http2 and http1.
-    ScriptLoadContext::PrioritizeAsPreload(aChannel);
+    // initiated speculative load
+    // (https://developer.mozilla.org/en-US/docs/Web/Performance/Speculative_loading).
+    AdjustPriorityAndClassOfServiceForLinkPreloadScripts(aChannel, aRequest);
     ScriptLoadContext::AddLoadBackgroundFlag(aChannel);
   } else if (nsCOMPtr<nsIClassOfService> cos = do_QueryInterface(aChannel)) {
     AdjustPriorityForNonLinkPreloadScripts(aChannel, aRequest);
@@ -920,8 +973,8 @@ static bool CSPAllowsInlineScript(nsIScriptElement* aElement,
       nsIContentSecurityPolicy::SCRIPT_SRC_ELEM_DIRECTIVE,
       false /* aHasUnsafeHash */, aNonce, parserCreated, element,
       nullptr /* nsICSPEventListener */, u""_ns,
-      aElement->GetScriptLineNumber(), aElement->GetScriptColumnNumber(),
-      &allowInlineScript);
+      aElement->GetScriptLineNumber(),
+      aElement->GetScriptColumnNumber().oneOriginValue(), &allowInlineScript);
   return NS_SUCCEEDED(rv) && allowInlineScript;
 }
 
@@ -1078,17 +1131,11 @@ bool ScriptLoader::ProcessExternalScript(nsIScriptElement* aElement,
     return false;
   }
 
-  // If there are a preloaded request and an import map, we won't use the
-  // preloaded request and will try to create a new one for this, because the
-  // import map isn't preloaded, and the preloaded request may have used the
-  // wrong module specifiers.
-  //
-  // We use IsModuleFetched() to check if the module has been fetched, if it
-  // hasn't been fetched we can simply just reuse it.
-  if (request && mModuleLoader->IsModuleFetched(request->mURI) &&
+  if (request && request->IsModuleRequest() &&
       mModuleLoader->HasImportMapRegistered()) {
-    DebugOnly<bool> removed = mModuleLoader->RemoveFetchedModule(request->mURI);
-    MOZ_ASSERT(removed);
+    // We don't preload module scripts after seeing an import map but a script
+    // can dynamically insert an import map after preloading has happened.
+    request->Cancel();
     request = nullptr;
   }
 
@@ -1155,9 +1202,9 @@ bool ScriptLoader::ProcessExternalScript(nsIScriptElement* aElement,
           NewRunnableMethod("nsIScriptElement::FireErrorEvent", aElement,
                             &nsIScriptElement::FireErrorEvent);
       if (mDocument) {
-        mDocument->Dispatch(TaskCategory::Other, runnable.forget());
+        mDocument->Dispatch(runnable.forget());
       } else {
-        NS_DispatchToCurrentThread(runnable);
+        NS_DispatchToCurrentThread(runnable.forget());
       }
       return false;
     }
@@ -1606,14 +1653,14 @@ class OffThreadCompilationCompleteTask : public Task {
   }
 #endif
 
-  bool Run() override {
+  TaskResult Run() override {
     MOZ_ASSERT(NS_IsMainThread());
 
     RefPtr<ScriptLoadContext> context = mRequest->GetScriptLoadContext();
 
     if (!context->mCompileOrDecodeTask) {
       // Request has been cancelled by MaybeCancelOffThreadScript.
-      return true;
+      return TaskResult::Complete;
     }
 
     RecordStopTime();
@@ -1638,7 +1685,7 @@ class OffThreadCompilationCompleteTask : public Task {
 
     mRequest = nullptr;
     mLoader = nullptr;
-    return true;
+    return TaskResult::Complete;
   }
 
  private:
@@ -1659,6 +1706,14 @@ class OffThreadCompilationCompleteTask : public Task {
 };
 
 } /* anonymous namespace */
+
+// TODO: This uses the same heuristics and the same threshold as the
+//       JS::CanCompileOffThread / JS::CanDecodeOffThread APIs, but the
+//       heuristics needs to be updated to reflect the change regarding the
+//       Stencil API, and also the thread management on the consumer side
+//       (bug 1846160).
+static constexpr size_t OffThreadMinimumTextLength = 5 * 1000;
+static constexpr size_t OffThreadMinimumBytecodeLength = 5 * 1000;
 
 nsresult ScriptLoader::AttemptOffThreadScriptCompile(
     ScriptLoadRequest* aRequest, bool* aCouldCompileOut) {
@@ -1695,14 +1750,6 @@ nsresult ScriptLoader::AttemptOffThreadScriptCompile(
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
-
-  // TODO: This uses the same heuristics and the same threshold as the
-  //       JS::CanCompileOffThread / JS::CanDecodeOffThread APIs, but the
-  //       heuristics needs to be updated to reflect the change regarding the
-  //       Stencil API, and also the thread management on the consumer side
-  //       (bug 1846160).
-  static constexpr size_t OffThreadMinimumTextLength = 5 * 1000;
-  static constexpr size_t OffThreadMinimumBytecodeLength = 5 * 1000;
 
   if (aRequest->IsTextSource()) {
     if (!StaticPrefs::javascript_options_parallel_parsing() ||
@@ -1857,30 +1904,24 @@ class ScriptOrModuleCompileTask final : public CompileOrDecodeTask {
     return NS_OK;
   }
 
-  bool Run() override {
+  TaskResult Run() override {
     MutexAutoLock lock(mMutex);
 
     if (IsCancelled(lock)) {
-      return true;
+      return TaskResult::Complete;
     }
 
     RefPtr<JS::Stencil> stencil = Compile();
 
     DidRunTask(lock, std::move(stencil));
-    return true;
+    return TaskResult::Complete;
   }
 
  private:
-  static size_t ThreadStackQuotaForSize(size_t size) {
-    // Set the stack quota to 10% less that the actual size.
-    // NOTE: This follows what JS helper thread does.
-    return size_t(double(size) * 0.9);
-  }
-
   already_AddRefed<JS::Stencil> Compile() {
     size_t stackSize = TaskController::GetThreadStackSize();
     JS::SetNativeStackQuota(mFrontendContext,
-                            ThreadStackQuotaForSize(stackSize));
+                            JS::ThreadStackQuotaForSize(stackSize));
 
     JS::CompilationStorage compileStorage;
     auto compile = [&](auto& source) {
@@ -1918,7 +1959,7 @@ using ModuleCompileTask =
 class ScriptDecodeTask final : public CompileOrDecodeTask {
  public:
   explicit ScriptDecodeTask(const JS::TranscodeRange& aRange)
-      : CompileOrDecodeTask(), mRange(aRange) {}
+      : mRange(aRange) {}
 
   nsresult Init(JS::DecodeOptions& aOptions) {
     nsresult rv = InitFrontendContext();
@@ -1932,11 +1973,11 @@ class ScriptDecodeTask final : public CompileOrDecodeTask {
     return NS_OK;
   }
 
-  bool Run() override {
+  TaskResult Run() override {
     MutexAutoLock lock(mMutex);
 
     if (IsCancelled(lock)) {
-      return true;
+      return TaskResult::Complete;
     }
 
     RefPtr<JS::Stencil> stencil = Decode();
@@ -1946,7 +1987,7 @@ class ScriptDecodeTask final : public CompileOrDecodeTask {
     mOptions.steal(std::move(mDecodeOptions));
 
     DidRunTask(lock, std::move(stencil));
-    return true;
+    return TaskResult::Complete;
   }
 
  private:
@@ -2001,8 +2042,8 @@ nsresult ScriptLoader::CreateOffThreadTask(
             : 0;
 
     LOG(
-        ("ScriptLoadRequest (%p): non-on-demand-only Parsing Enabled for "
-         "url=%s mTotalFullParseSize=%u",
+        ("ScriptLoadRequest (%p): non-on-demand-only (omt) Parsing Enabled "
+         "for url=%s mTotalFullParseSize=%u",
          aRequest, aRequest->mURI->GetSpecOrDefault().get(),
          mTotalFullParseSize));
   }
@@ -2338,8 +2379,7 @@ nsresult ScriptLoader::FillCompileOptionsForRequest(
   if (aRequest->GetScriptLoadContext()->mIsInline &&
       aRequest->GetScriptLoadContext()->GetParserCreated() ==
           FROM_PARSER_NETWORK) {
-    aOptions->setColumn(JS::ColumnNumberZeroOrigin(
-        aRequest->GetScriptLoadContext()->mColumnNo));
+    aOptions->setColumn(aRequest->GetScriptLoadContext()->mColumnNo);
   }
   aOptions->setIsRunOnce(true);
   aOptions->setNoScriptRval(true);
@@ -2717,6 +2757,23 @@ nsresult ScriptLoader::EvaluateScript(nsIGlobalObject* aGlobalObject,
     return rv;
   }
 
+  // Apply the delazify strategy if the script is small.
+  if (aRequest->IsTextSource() &&
+      aRequest->ScriptTextLength() < OffThreadMinimumTextLength &&
+      ShouldApplyDelazifyStrategy(aRequest)) {
+    ApplyDelazifyStrategy(&options);
+    mTotalFullParseSize +=
+        aRequest->ScriptTextLength() > 0
+            ? static_cast<uint32_t>(aRequest->ScriptTextLength())
+            : 0;
+
+    LOG(
+        ("ScriptLoadRequest (%p): non-on-demand-only (non-omt) Parsing Enabled "
+         "for url=%s mTotalFullParseSize=%u",
+         aRequest, aRequest->mURI->GetSpecOrDefault().get(),
+         mTotalFullParseSize));
+  }
+
   TRACE_FOR_TEST(aRequest->GetScriptLoadContext()->GetScriptElement(),
                  "scriptloader_execute");
   JS::Rooted<JSObject*> global(cx, aGlobalObject->GetGlobalJSObject());
@@ -3042,7 +3099,7 @@ void ScriptLoader::ProcessPendingRequestsAsync() {
         NewRunnableMethod("dom::ScriptLoader::ProcessPendingRequests", this,
                           &ScriptLoader::ProcessPendingRequests);
     if (mDocument) {
-      mDocument->Dispatch(TaskCategory::Other, task.forget());
+      mDocument->Dispatch(task.forget());
     } else {
       NS_DispatchToCurrentThread(task.forget());
     }
@@ -3423,12 +3480,15 @@ void ScriptLoader::ReportErrorToConsole(ScriptLoadRequest* aRequest,
   nsIScriptElement* element =
       aRequest->GetScriptLoadContext()->GetScriptElement();
   uint32_t lineNo = element ? element->GetScriptLineNumber() : 0;
-  uint32_t columnNo = element ? element->GetScriptColumnNumber() : 0;
+  JS::ColumnNumberOneOrigin columnNo;
+  if (element) {
+    columnNo = element->GetScriptColumnNumber();
+  }
 
-  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  "Script Loader"_ns, mDocument,
-                                  nsContentUtils::eDOM_PROPERTIES, message,
-                                  params, nullptr, u""_ns, lineNo, columnNo);
+  nsContentUtils::ReportToConsole(
+      nsIScriptError::warningFlag, "Script Loader"_ns, mDocument,
+      nsContentUtils::eDOM_PROPERTIES, message, params, nullptr, u""_ns, lineNo,
+      columnNo.oneOriginValue());
 }
 
 void ScriptLoader::ReportWarningToConsole(
@@ -3437,11 +3497,14 @@ void ScriptLoader::ReportWarningToConsole(
   nsIScriptElement* element =
       aRequest->GetScriptLoadContext()->GetScriptElement();
   uint32_t lineNo = element ? element->GetScriptLineNumber() : 0;
-  uint32_t columnNo = element ? element->GetScriptColumnNumber() : 0;
-  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  "Script Loader"_ns, mDocument,
-                                  nsContentUtils::eDOM_PROPERTIES, aMessageName,
-                                  aParams, nullptr, u""_ns, lineNo, columnNo);
+  JS::ColumnNumberOneOrigin columnNo;
+  if (element) {
+    columnNo = element->GetScriptColumnNumber();
+  }
+  nsContentUtils::ReportToConsole(
+      nsIScriptError::warningFlag, "Script Loader"_ns, mDocument,
+      nsContentUtils::eDOM_PROPERTIES, aMessageName, aParams, nullptr, u""_ns,
+      lineNo, columnNo.oneOriginValue());
 }
 
 void ScriptLoader::ReportPreloadErrorsToConsole(ScriptLoadRequest* aRequest) {
@@ -3522,10 +3585,8 @@ void ScriptLoader::HandleLoadError(ScriptLoadRequest* aRequest,
         modReq->CancelDynamicImport(aResult);
       }
     } else {
-      MOZ_ASSERT(!modReq->IsTopLevel());
       MOZ_ASSERT(!modReq->isInList());
       modReq->Cancel();
-      // The error is handled for the top level module.
     }
   } else if (mParserBlockingRequest == aRequest) {
     MOZ_ASSERT(!aRequest->isInList());
@@ -3892,7 +3953,7 @@ void ScriptLoader::PreloadURI(
   GetSRIMetadata(aIntegrity, &sriMetadata);
 
   const auto requestPriority = FetchPriorityToRequestPriority(
-      HTMLScriptElement::ToFetchPriority(aFetchPriority));
+      nsGenericHTMLElement::ToFetchPriority(aFetchPriority));
 
   // For link type "modulepreload":
   // https://html.spec.whatwg.org/multipage/links.html#link-type-modulepreload

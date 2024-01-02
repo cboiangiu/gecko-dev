@@ -174,11 +174,46 @@ set_config("ENABLE_DECORATORS", enable_decorators)
 set_define("ENABLE_DECORATORS", enable_decorators)
 
 
+# Portable Baseline Intepreter
+# =======================================================
+option(
+    "--enable-portable-baseline-interp",
+    default=False,
+    help="{Enable|Disable} the portable baseline interpreter.",
+)
+set_define(
+    "ENABLE_PORTABLE_BASELINE_INTERP",
+    depends_if("--enable-portable-baseline-interp")(lambda _: True),
+)
+set_config(
+    "ENABLE_PORTABLE_BASELINE_INTERP",
+    depends_if("--enable-portable-baseline-interp")(lambda _: True),
+)
+
+# Option to always force PBL tier.
+option(
+    "--enable-portable-baseline-interp-force",
+    default=False,
+    help="{Enable|Disable} forcing use of the portable baseline interpreter.",
+)
+
+set_define(
+    "ENABLE_PORTABLE_BASELINE_INTERP_FORCE",
+    depends_if("--enable-portable-baseline-interp-force")(lambda _: True),
+)
+set_config(
+    "ENABLE_PORTABLE_BASELINE_INTERP_FORCE",
+    depends_if("--enable-portable-baseline-interp-force")(lambda _: True),
+)
+
+
 # JIT support
 # =======================================================
-@depends(target, "--enable-record-tuple")
-def jit_default(target, enable_record_tuple):
+@depends(target, "--enable-record-tuple", "--enable-portable-baseline-interp")
+def jit_default(target, enable_record_tuple, enable_portable_baseline_interp):
     if enable_record_tuple:
+        return False
+    if enable_portable_baseline_interp:
         return False
     if target.cpu in (
         "x86",
@@ -739,6 +774,33 @@ def wasm_gc(value, function_references, no_experimental):
 set_config("ENABLE_WASM_GC", wasm_gc)
 set_define("ENABLE_WASM_GC", wasm_gc)
 
+# Support for WebAssembly JS String Builtins
+# ==========================================
+
+
+@depends(milestone.is_nightly)
+def default_wasm_js_string_builtins(is_nightly):
+    if is_nightly:
+        return True
+
+
+option(
+    "--enable-wasm-js-string-builtins",
+    default=default_wasm_js_string_builtins,
+    help="{Enable|Disable} WebAssembly JS String Builtins",
+)
+
+
+@depends("--enable-wasm-js-string-builtins", "--wasm-no-experimental")
+def wasm_js_string_builtins(value, no_experimental):
+    if no_experimental or not value:
+        return
+
+    return True
+
+
+set_config("ENABLE_WASM_JS_STRING_BUILTINS", wasm_js_string_builtins)
+set_define("ENABLE_WASM_JS_STRING_BUILTINS", wasm_js_string_builtins)
 
 # Support for WebAssembly shared memory and atomics.
 #
@@ -1339,10 +1401,7 @@ with only_when(compile_environment & depends(target.os)(lambda os: os != "WINNT"
 
     set_define("MOZ_DEMANGLE_SYMBOLS", demangle_symbols)
 
-    set_define(
-        "HAVE__UNWIND_BACKTRACE",
-        check_symbol("_Unwind_Backtrace", when=check_header("unwind.h")),
-    )
+    set_define("HAVE__UNWIND_BACKTRACE", True, when=have_unwind)
 
 with only_when(compile_environment):
     set_define("HAVE__GETC_NOLOCK", check_symbol("_getc_nolock"))

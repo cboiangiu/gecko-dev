@@ -134,8 +134,8 @@
 #include "nsICanvasRenderingContextInternal.h"
 #include "nsIContent.h"
 #include "nsIContentInlines.h"
-#include "nsIContentViewer.h"
 #include "nsIDocShell.h"
+#include "nsIDocumentViewer.h"
 #include "nsIFrameInlines.h"
 #include "nsIImageLoadingContent.h"
 #include "nsIInterfaceRequestorUtils.h"
@@ -416,15 +416,15 @@ static Array<MinAndMaxScale, 2> GetMinAndMaxScaleForAnimationProperty(
         anim->GetEffect() ? anim->GetEffect()->AsKeyframeEffect() : nullptr;
     MOZ_ASSERT(effect, "A playing animation should have a keyframe effect");
     for (const AnimationProperty& prop : effect->Properties()) {
-      if (prop.mProperty != eCSSProperty_transform &&
-          prop.mProperty != eCSSProperty_scale) {
+      if (prop.mProperty.mID != eCSSProperty_transform &&
+          prop.mProperty.mID != eCSSProperty_scale) {
         continue;
       }
 
       // 0: eCSSProperty_transform.
       // 1: eCSSProperty_scale.
       MinAndMaxScale& scales =
-          minAndMaxScales[prop.mProperty == eCSSProperty_transform ? 0 : 1];
+          minAndMaxScales[prop.mProperty.mID == eCSSProperty_transform ? 0 : 1];
 
       // We need to factor in the scale of the base style if the base style
       // will be used on the compositor.
@@ -3168,7 +3168,8 @@ void nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
   }
 
   builder->ClearHaveScrollableDisplayPort();
-  if (builder->IsPaintingToWindow()) {
+  if (builder->IsPaintingToWindow() &&
+      nsLayoutUtils::AsyncPanZoomEnabled(aFrame)) {
     DisplayPortUtils::MaybeCreateDisplayPortInFirstScrollFrameEncountered(
         aFrame, builder);
   }
@@ -5047,10 +5048,10 @@ nscoord nsLayoutUtils::IntrinsicForAxis(
         }
 
         if (MOZ_UNLIKELY(aFlags & nsLayoutUtils::MIN_INTRINSIC_ISIZE) &&
-            // FIXME: Bug 1715681. Should we use eReplacedSizing instead
-            // because eReplaced is set on some other frames which are
+            // FIXME: Bug 1715681. Should we use HasReplacedSizing instead
+            // because IsReplaced is set on some other frames which are
             // non-replaced elements, e.g. <select>?
-            aFrame->IsFrameOfType(nsIFrame::eReplaced)) {
+            aFrame->IsReplaced()) {
           // This is the 'min-width/height:auto' "transferred size" piece of:
           // https://drafts.csswg.org/css-flexbox-1/#min-size-auto
           // https://drafts.csswg.org/css-grid/#min-size-auto
@@ -5079,8 +5080,7 @@ nscoord nsLayoutUtils::IntrinsicForAxis(
   // then we can drop the check of eSupportsAspectRatio).
   const AspectRatio ar = stylePos->mAspectRatio.ToLayoutRatio();
   if (isInlineAxis && ar && nsIFrame::ToExtremumLength(styleISize) &&
-      aFrame->IsFrameOfType(nsIFrame::eSupportsAspectRatio) &&
-      !inlineSizeFromAspectRatio) {
+      aFrame->SupportsAspectRatio() && !inlineSizeFromAspectRatio) {
     // This 'B' in |styleBSize| means the block size of |aFrame|. We go into
     // this branch only if |aAxis| is the inline axis of |aFrame|.
     const StyleSize& styleBSize =
@@ -5185,7 +5185,12 @@ nscoord nsLayoutUtils::MinSizeContributionForAxis(
   nscoord minSize;
   nscoord* fixedMinSize = nullptr;
   if (size.IsAuto()) {
-    if (aFrame->StyleDisplay()->mOverflowX == StyleOverflow::Visible) {
+    if (aFrame->StyleDisplay()->IsScrollableOverflow()) {
+      // min-[width|height]:auto with scrollable overflow computes to
+      // zero.
+      minSize = 0;
+      fixedMinSize = &minSize;
+    } else {
       size = aAxis == eAxisHorizontal ? stylePos->mWidth : stylePos->mHeight;
       // This is same as above: keywords should behaves as property's initial
       // values in block axis.
@@ -5203,10 +5208,6 @@ nscoord nsLayoutUtils::MinSizeContributionForAxis(
         fixedMinSize = &minSize;
       }
       // fall through - the caller will have to deal with "transferred size"
-    } else {
-      // min-[width|height]:auto with overflow != visible computes to zero.
-      minSize = 0;
-      fixedMinSize = &minSize;
     }
   } else if (GetAbsoluteCoord(size, minSize)) {
     fixedMinSize = &minSize;
@@ -6963,7 +6964,7 @@ const nsIFrame* nsLayoutUtils::GetDisplayRootFrame(const nsIFrame* aFrame) {
 nsIFrame* nsLayoutUtils::GetReferenceFrame(nsIFrame* aFrame) {
   nsIFrame* f = aFrame;
   for (;;) {
-    if (f->IsTransformed() || f->IsPreserve3DLeaf() || IsPopup(f)) {
+    if (f->IsTransformed() || IsPopup(f)) {
       return f;
     }
     nsIFrame* parent = GetCrossDocParentFrameInProcess(f);
@@ -8211,8 +8212,7 @@ static bool ShouldInflateFontsForContainer(const nsIFrame* aFrame) {
          // We also want to disable font inflation for containers that have
          // preformatted text.
          // MathML cells need special treatment. See bug 1002526 comment 56.
-         (styleText->WhiteSpaceCanWrap(aFrame) ||
-          aFrame->IsFrameOfType(nsIFrame::eMathML));
+         (styleText->WhiteSpaceCanWrap(aFrame) || aFrame->IsMathMLFrame());
 }
 
 nscoord nsLayoutUtils::InflationMinFontSizeFor(const nsIFrame* aFrame) {
@@ -8321,7 +8321,7 @@ nsRect nsLayoutUtils::GetBoxShadowRectForFrame(nsIFrame* aFrame,
 }
 
 /* static */
-bool nsLayoutUtils::GetContentViewerSize(
+bool nsLayoutUtils::GetDocumentViewerSize(
     const nsPresContext* aPresContext, LayoutDeviceIntSize& aOutSize,
     SubtractDynamicToolbar aSubtractDynamicToolbar) {
   nsCOMPtr<nsIDocShell> docShell = aPresContext->GetDocShell();
@@ -8329,14 +8329,14 @@ bool nsLayoutUtils::GetContentViewerSize(
     return false;
   }
 
-  nsCOMPtr<nsIContentViewer> cv;
-  docShell->GetContentViewer(getter_AddRefs(cv));
-  if (!cv) {
+  nsCOMPtr<nsIDocumentViewer> viewer;
+  docShell->GetDocViewer(getter_AddRefs(viewer));
+  if (!viewer) {
     return false;
   }
 
   nsIntRect bounds;
-  cv->GetBounds(bounds);
+  viewer->GetBounds(bounds);
 
   if (aPresContext->IsRootContentDocumentCrossProcess() &&
       aSubtractDynamicToolbar == SubtractDynamicToolbar::Yes &&
@@ -8391,8 +8391,8 @@ bool nsLayoutUtils::UpdateCompositionBoundsForRCDRSF(
   }
 
   LayoutDeviceIntSize contentSize;
-  if (!GetContentViewerSize(aPresContext, contentSize,
-                            shouldSubtractDynamicToolbar)) {
+  if (!GetDocumentViewerSize(aPresContext, contentSize,
+                             shouldSubtractDynamicToolbar)) {
     return false;
   }
   aCompBounds.SizeTo(ViewAs<ParentLayerPixel>(
@@ -8668,8 +8668,7 @@ AutoMaybeDisableFontInflation::AutoMaybeDisableFontInflation(nsIFrame* aFrame) {
   // descendants) width, we could probably disable inflation in
   // fewer cases than we currently do.
   // MathML cells need special treatment. See bug 1002526 comment 56.
-  if (aFrame->IsContainerForFontSizeInflation() &&
-      !aFrame->IsFrameOfType(nsIFrame::eMathML)) {
+  if (aFrame->IsContainerForFontSizeInflation() && !aFrame->IsMathMLFrame()) {
     mPresContext = aFrame->PresContext();
     mOldValue = mPresContext->mInflationDisabledForShrinkWrap;
     mPresContext->mInflationDisabledForShrinkWrap = true;
@@ -9538,7 +9537,7 @@ bool nsLayoutUtils::IsInvisibleBreak(nsINode* aNode,
   }
 
   nsContainerFrame* f = frame->GetParent();
-  while (f && f->IsFrameOfType(nsIFrame::eLineParticipant)) {
+  while (f && f->IsLineParticipant()) {
     f = f->GetParent();
   }
   nsBlockFrame* blockAncestor = do_QueryFrame(f);
@@ -9578,44 +9577,38 @@ bool nsLayoutUtils::IsInvisibleBreak(nsINode* aNode,
 }
 
 /* static */
-nsRect nsLayoutUtils::ComputeSVGViewBox(SVGViewportElement* aElement) {
+nsRect nsLayoutUtils::ComputeSVGOriginBox(SVGViewportElement* aElement) {
   if (!aElement) {
     return {};
   }
 
   if (aElement->HasViewBox()) {
-    // If a `viewBox` attribute is specified for the SVG viewport creating
-    // element:
-    // 1. The reference box is positioned at the origin of the coordinate
-    //    system established by the `viewBox` attribute.
-    // 2. The dimension of the reference box is set to the width and height
-    //    values of the `viewBox` attribute.
+    // Return the "origin box", which is defined as a rect positioned at the
+    // origin, but with the width and height given by the viewBox attribute
+    //
+    // https://drafts.csswg.org/css-box-3/#valdef-box-view-box
+    //
+    // For more discussion see
+    // https://github.com/web-platform-tests/interop/issues/509
     const SVGViewBox& value = aElement->GetAnimatedViewBox()->GetAnimValue();
-    return nsRect(nsPresContext::CSSPixelsToAppUnits(value.x),
-                  nsPresContext::CSSPixelsToAppUnits(value.y),
-                  nsPresContext::CSSPixelsToAppUnits(value.width),
+    return nsRect(0, 0, nsPresContext::CSSPixelsToAppUnits(value.width),
                   nsPresContext::CSSPixelsToAppUnits(value.height));
   }
 
   // No viewBox is specified, uses the nearest SVG viewport as reference
   // box.
-  svgFloatSize viewportSize = aElement->GetViewportSize();
+  auto viewportSize = aElement->GetViewportSize();
   return nsRect(0, 0, nsPresContext::CSSPixelsToAppUnits(viewportSize.width),
                 nsPresContext::CSSPixelsToAppUnits(viewportSize.height));
 }
 
-static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
-                                      StyleGeometryBox aGeometryBox) {
+/* static */
+nsRect nsLayoutUtils::ComputeSVGReferenceRect(nsIFrame* aFrame,
+                                              StyleGeometryBox aGeometryBox) {
   MOZ_ASSERT(aFrame->GetContent()->IsSVGElement());
   nsRect r;
 
-  // For SVG elements without associated CSS layout box, the used value for
-  // content-box and padding-box is fill-box and for
-  // border-box and margin-box is stroke-box.
   switch (aGeometryBox) {
-    case StyleGeometryBox::NoBox:
-    case StyleGeometryBox::BorderBox:
-    case StyleGeometryBox::MarginBox:
     case StyleGeometryBox::StrokeBox: {
       // XXX Bug 1299876
       // The size of stroke-box is not correct if this graphic element has
@@ -9633,11 +9626,9 @@ static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
         // We should not render without a viewport so return an empty rect.
         break;
       }
-      r = nsLayoutUtils::ComputeSVGViewBox(viewportElement);
+      r = nsLayoutUtils::ComputeSVGOriginBox(viewportElement);
       break;
     }
-    case StyleGeometryBox::ContentBox:
-    case StyleGeometryBox::PaddingBox:
     case StyleGeometryBox::FillBox: {
       gfxRect bbox =
           SVGUtils::GetBBox(aFrame, SVGUtils::eBBoxIncludeFillGeometry);
@@ -9645,10 +9636,7 @@ static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
       break;
     }
     default: {
-      MOZ_ASSERT_UNREACHABLE("unknown StyleGeometryBox type");
-      gfxRect bbox =
-          SVGUtils::GetBBox(aFrame, SVGUtils::eBBoxIncludeFillGeometry);
-      r = nsLayoutUtils::RoundGfxRectToAppRect(bbox, AppUnitsPerCSSPixel());
+      MOZ_ASSERT_UNREACHABLE("unsupported SVG box");
       break;
     }
   }
@@ -9661,8 +9649,6 @@ nsRect nsLayoutUtils::ComputeHTMLReferenceRect(const nsIFrame* aFrame,
                                                StyleGeometryBox aGeometryBox) {
   nsRect r;
 
-  // For elements with associated CSS layout box, the used value for fill-box,
-  // stroke-box and view-box is border-box.
   switch (aGeometryBox) {
     case StyleGeometryBox::ContentBox:
       r = aFrame->GetContentRectRelativeToSelf();
@@ -9673,40 +9659,15 @@ nsRect nsLayoutUtils::ComputeHTMLReferenceRect(const nsIFrame* aFrame,
     case StyleGeometryBox::MarginBox:
       r = aFrame->GetMarginRectRelativeToSelf();
       break;
-    case StyleGeometryBox::NoBox:
     case StyleGeometryBox::BorderBox:
-    case StyleGeometryBox::FillBox:
-    case StyleGeometryBox::StrokeBox:
-    case StyleGeometryBox::ViewBox:
       r = aFrame->GetRectRelativeToSelf();
       break;
     default:
-      MOZ_ASSERT_UNREACHABLE("unknown StyleGeometryBox type");
-      r = aFrame->GetRectRelativeToSelf();
+      MOZ_ASSERT_UNREACHABLE("unsupported CSS box");
       break;
   }
 
   return r;
-}
-
-/* static */
-StyleGeometryBox nsLayoutUtils::CoordBoxToGeometryBox(StyleCoordBox aCoordBox) {
-  switch (aCoordBox) {
-    case StyleCoordBox::ContentBox:
-      return StyleGeometryBox::ContentBox;
-    case StyleCoordBox::PaddingBox:
-      return StyleGeometryBox::PaddingBox;
-    case StyleCoordBox::BorderBox:
-      return StyleGeometryBox::BorderBox;
-    case StyleCoordBox::FillBox:
-      return StyleGeometryBox::FillBox;
-    case StyleCoordBox::StrokeBox:
-      return StyleGeometryBox::StrokeBox;
-    case StyleCoordBox::ViewBox:
-      return StyleGeometryBox::ViewBox;
-  }
-  MOZ_ASSERT_UNREACHABLE("Unknown coord-box type");
-  return StyleGeometryBox::BorderBox;
 }
 
 static StyleGeometryBox ShapeBoxToGeometryBox(const StyleShapeBox& aBox) {
@@ -9743,25 +9704,56 @@ static StyleGeometryBox ClipPathBoxToGeometryBox(
   return StyleGeometryBox::NoBox;
 }
 
+// The mapping is from
+// https://drafts.fxtf.org/css-masking-1/#typedef-geometry-box
 /* static */
-nsRect nsLayoutUtils::ComputeGeometryBox(nsIFrame* aFrame,
-                                         StyleGeometryBox aGeometryBox) {
-  // We use ComputeSVGReferenceRect for all SVG elements, except <svg>
-  // element, which does have an associated CSS layout box. In this case we
-  // should still use ComputeHTMLReferenceRect for region computing.
-  return aFrame->HasAnyStateBits(NS_FRAME_SVG_LAYOUT)
-             ? ComputeSVGReferenceRect(aFrame, aGeometryBox)
-             : ComputeHTMLReferenceRect(aFrame, aGeometryBox);
-}
+nsRect nsLayoutUtils::ComputeClipPathGeometryBox(
+    nsIFrame* aFrame, const StyleShapeGeometryBox& aBox) {
+  StyleGeometryBox box = ClipPathBoxToGeometryBox(aBox);
 
-nsRect nsLayoutUtils::ComputeGeometryBox(nsIFrame* aFrame,
-                                         const StyleShapeBox& aBox) {
-  return ComputeGeometryBox(aFrame, ShapeBoxToGeometryBox(aBox));
-}
+  if (aFrame->HasAnyStateBits(NS_FRAME_SVG_LAYOUT)) {
+    // For SVG elements without associated CSS layout box, the used value for
+    // content-box and padding-box is fill-box and for border-box and margin-box
+    // is stroke-box.
+    switch (box) {
+      case StyleGeometryBox::ContentBox:
+      case StyleGeometryBox::PaddingBox:
+      case StyleGeometryBox::FillBox:
+        return ComputeSVGReferenceRect(aFrame, StyleGeometryBox::FillBox);
+      case StyleGeometryBox::NoBox:
+      case StyleGeometryBox::BorderBox:
+      case StyleGeometryBox::MarginBox:
+      case StyleGeometryBox::StrokeBox:
+        return ComputeSVGReferenceRect(aFrame, StyleGeometryBox::StrokeBox);
+      case StyleGeometryBox::ViewBox:
+        return ComputeSVGReferenceRect(aFrame, StyleGeometryBox::ViewBox);
+      default:
+        MOZ_ASSERT_UNREACHABLE("Unknown clip-path geometry box");
+        // Use default, border-box (as stroke-box in SVG layout).
+        return ComputeSVGReferenceRect(aFrame, StyleGeometryBox::StrokeBox);
+    }
+  }
 
-nsRect nsLayoutUtils::ComputeGeometryBox(nsIFrame* aFrame,
-                                         const StyleShapeGeometryBox& aBox) {
-  return ComputeGeometryBox(aFrame, ClipPathBoxToGeometryBox(aBox));
+  // For elements with associated CSS layout box, the used value for fill-box is
+  // content-box and for stroke-box and view-box is border-box.
+  switch (box) {
+    case StyleGeometryBox::FillBox:
+    case StyleGeometryBox::ContentBox:
+      return ComputeHTMLReferenceRect(aFrame, StyleGeometryBox::ContentBox);
+    case StyleGeometryBox::NoBox:
+    case StyleGeometryBox::StrokeBox:
+    case StyleGeometryBox::ViewBox:
+    case StyleGeometryBox::BorderBox:
+      return ComputeHTMLReferenceRect(aFrame, StyleGeometryBox::BorderBox);
+    case StyleGeometryBox::PaddingBox:
+      return ComputeHTMLReferenceRect(aFrame, StyleGeometryBox::PaddingBox);
+    case StyleGeometryBox::MarginBox:
+      return ComputeHTMLReferenceRect(aFrame, StyleGeometryBox::MarginBox);
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unknown clip-path geometry box");
+      // Use default, border-box.
+      return ComputeHTMLReferenceRect(aFrame, StyleGeometryBox::BorderBox);
+  }
 }
 
 /* static */
@@ -9770,7 +9762,7 @@ nsPoint nsLayoutUtils::ComputeOffsetToUserSpace(nsDisplayListBuilder* aBuilder,
   nsPoint offsetToBoundingBox =
       aBuilder->ToReferenceFrame(aFrame) -
       SVGIntegrationUtils::GetOffsetToBoundingBox(aFrame);
-  if (!aFrame->IsFrameOfType(nsIFrame::eSVG)) {
+  if (!aFrame->IsSVGFrame()) {
     // Snap the offset if the reference frame is not a SVG frame, since other
     // frames will be snapped to pixel when rendering.
     offsetToBoundingBox =
@@ -10089,7 +10081,7 @@ template <typename SizeType>
   if (RefPtr<MobileViewportManager> MVM =
           aPresContext->PresShell()->GetMobileViewportManager()) {
     displaySize = MVM->DisplaySize();
-  } else if (!nsLayoutUtils::GetContentViewerSize(aPresContext, displaySize)) {
+  } else if (!nsLayoutUtils::GetDocumentViewerSize(aPresContext, displaySize)) {
     return aSize;
   }
 

@@ -7,7 +7,7 @@
  * Test for middle click behavior.
  */
 
-add_task(async function test_setup() {
+add_setup(async () => {
   CustomizableUI.addWidgetToArea("home-button", "nav-bar");
   await SpecialPowers.pushPrefEnv({
     set: [["browser.tabs.searchclipboardfor.middleclick", false]],
@@ -63,7 +63,7 @@ add_task(async function test_middleClickOnHomeButton() {
       isLoadInBackground: false,
       startPagePref: "https://example.com",
       expectedURLBarFocus: false,
-      expectedURLBarValue: "https://example.com",
+      expectedURLBarValue: UrlbarTestUtils.trimURL("https://example.com"),
     },
     {
       isMiddleMousePastePrefOn: true,
@@ -77,7 +77,7 @@ add_task(async function test_middleClickOnHomeButton() {
       isLoadInBackground: false,
       startPagePref: "https://example.com",
       expectedURLBarFocus: false,
-      expectedURLBarValue: "https://example.com",
+      expectedURLBarValue: UrlbarTestUtils.trimURL("https://example.com"),
     },
     {
       isMiddleMousePastePrefOn: false,

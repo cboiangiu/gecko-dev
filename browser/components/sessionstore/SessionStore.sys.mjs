@@ -80,19 +80,6 @@ const CHROME_FLAGS_MAP = [
   // Do not inherit remoteness and fissionness from the previous session.
   //[Ci.nsIWebBrowserChrome.CHROME_REMOTE_WINDOW, "remote", "non-remote"],
   //[Ci.nsIWebBrowserChrome.CHROME_FISSION_WINDOW, "fission", "non-fission"],
-  [Ci.nsIWebBrowserChrome.CHROME_WINDOW_POPUP, "popup"],
-  [
-    Ci.nsIWebBrowserChrome.CHROME_WINDOW_POPUP |
-      Ci.nsIWebBrowserChrome.CHROME_TITLEBAR,
-    "",
-    "titlebar=0",
-  ],
-  [
-    Ci.nsIWebBrowserChrome.CHROME_WINDOW_POPUP |
-      Ci.nsIWebBrowserChrome.CHROME_WINDOW_CLOSE,
-    "",
-    "close=0",
-  ],
   [Ci.nsIWebBrowserChrome.CHROME_WINDOW_LOWERED, "alwayslowered"],
   [Ci.nsIWebBrowserChrome.CHROME_WINDOW_RAISED, "alwaysraised"],
   // "chrome" and "suppressanimation" are always set.
@@ -837,6 +824,14 @@ export var SessionStore = {
 
   finishTabRemotenessChange(aTab, aSwitchId) {
     SessionStoreInternal.finishTabRemotenessChange(aTab, aSwitchId);
+  },
+
+  /**
+   * Clear session store data for a given private browsing window.
+   * @param {ChromeWindow} win - Open private browsing window to clear data for.
+   */
+  purgeDataForPrivateWindow(win) {
+    return SessionStoreInternal.purgeDataForPrivateWindow(win);
   },
 };
 
@@ -1839,7 +1834,9 @@ var SessionStoreInternal = {
             target.linkedBrowser,
             aEvent.detail.adoptedBy.linkedBrowser
           );
-        } else {
+        } else if (!aEvent.detail.skipSessionStore) {
+          // `skipSessionStore` is set by tab close callers to indicate that we
+          // shouldn't record the closed tab.
           this.onTabClose(win, target);
         }
         this.onTabRemove(win, target);
@@ -2350,7 +2347,7 @@ var SessionStoreInternal = {
           // It's possible that a tab switched its privacy state at some point
           // before our flush, so we need to filter again.
           lazy.PrivacyFilter.filterPrivateTabs(winData);
-          this.maybeSaveClosedWindow(winData, isLastWindow);
+          this.maybeSaveClosedWindow(winData, isLastWindow, true);
 
           if (!isLastWindow && winData.closedId > -1) {
             this._addClosedAction(
@@ -2429,7 +2426,7 @@ var SessionStoreInternal = {
    *        to call this method again asynchronously (for example, after
    *        a window flush).
    */
-  maybeSaveClosedWindow(winData, isLastWindow) {
+  maybeSaveClosedWindow(winData, isLastWindow, recordTelemetry = false) {
     // Make sure SessionStore is still running, and make sure that we
     // haven't chosen to forget this window.
     if (
@@ -2488,6 +2485,14 @@ var SessionStoreInternal = {
         }
         if (alreadyStored) {
           this._removeClosedWindow(winIndex);
+          return;
+        }
+        // we only do this after the TabStateFlusher promise resolves in ssi_onClose
+        if (recordTelemetry) {
+          let closedTabsHistogram = Services.telemetry.getHistogramById(
+            "FX_SESSION_RESTORE_CLOSED_TABS_NOT_SAVED"
+          );
+          closedTabsHistogram.add(winData._closedTabs.length);
         }
       }
     }
@@ -2700,6 +2705,37 @@ var SessionStoreInternal = {
     }
 
     this._uninit();
+  },
+
+  /**
+   * Clear session store data for a given private browsing window.
+   * @param {ChromeWindow} win - Open private browsing window to clear data for.
+   */
+  purgeDataForPrivateWindow(win) {
+    // No need to clear data if already shutting down.
+    if (lazy.RunState.isQuitting) {
+      return;
+    }
+
+    // Check if we have data for the given window.
+    let windowData = this._windows[win.__SSi];
+    if (!windowData) {
+      return;
+    }
+
+    // Clear closed tab data.
+    if (windowData._closedTabs.length) {
+      // Remove all of the closed tabs data.
+      // This also clears out the permenentKey-mapped data for pending state updates
+      // and removes the tabs from from the _lastClosedActions list
+      while (windowData._closedTabs.length) {
+        this.removeClosedTabData(windowData, windowData._closedTabs, 0);
+      }
+      // Reset the closed tab list.
+      windowData._closedTabs = [];
+      windowData._lastClosedTabGroupCount = -1;
+      this._closedObjectsChanged = true;
+    }
   },
 
   /**
@@ -2938,12 +2974,6 @@ var SessionStoreInternal = {
    *        Tab reference
    */
   onTabClose: function ssi_onTabClose(aWindow, aTab) {
-    // notify the tabbrowser that the tab state will be retrieved for the last time
-    // (so that extension authors can easily set data on soon-to-be-closed tabs)
-    var event = aWindow.document.createEvent("Events");
-    event.initEvent("SSTabClosing", true, false);
-    aTab.dispatchEvent(event);
-
     // don't update our internal state if we don't have to
     if (this._max_tabs_undo == 0) {
       return;
@@ -6489,27 +6519,29 @@ var SessionStoreInternal = {
           activeIndex = Math.min(activeIndex, tabState.entries.length - 1);
           activeIndex = Math.max(activeIndex, 0);
 
-          let title =
-            tabState.entries[activeIndex].title ||
-            tabState.entries[activeIndex].url;
+          if (activeIndex in tabState.entries) {
+            let title =
+              tabState.entries[activeIndex].title ||
+              tabState.entries[activeIndex].url;
 
-          let tabData = {
-            state: tabState,
-            title,
-            image: tabState.image,
-            pos: tIndex,
-            closedAt: Date.now(),
-            closedInGroup: false,
-            removeAfterRestore: true,
-          };
+            let tabData = {
+              state: tabState,
+              title,
+              image: tabState.image,
+              pos: tIndex,
+              closedAt: Date.now(),
+              closedInGroup: false,
+              removeAfterRestore: true,
+            };
 
-          if (this._shouldSaveTabState(tabState)) {
-            this.saveClosedTabData(
-              window,
-              newWindowState._closedTabs,
-              tabData,
-              false
-            );
+            if (this._shouldSaveTabState(tabState)) {
+              this.saveClosedTabData(
+                window,
+                newWindowState._closedTabs,
+                tabData,
+                false
+              );
+            }
           }
         }
         tIndex++;
@@ -6517,20 +6549,16 @@ var SessionStoreInternal = {
 
       hasPinnedTabs ||= !!newWindowState.tabs.length;
 
-      // At this point the window in the state object has been modified (or not)
-      // We want to build the rest of this new window object if we have pinnedTabs.
-      if (
-        newWindowState.tabs.length ||
-        (PERSIST_SESSIONS && newWindowState._closedTabs.length)
-      ) {
-        // First get the other attributes off the window
+      // Only transfer over window attributes for pinned tabs, which has
+      // already been extracted into newWindowState.tabs.
+      if (newWindowState.tabs.length) {
         WINDOW_ATTRIBUTES.forEach(function (attr) {
           if (attr in window) {
             newWindowState[attr] = window[attr];
             delete window[attr];
           }
         });
-        // We're just copying position data into the pinned window.
+        // We're just copying position data into the window for pinned tabs.
         // Not copying over:
         // - extData
         // - isPopup
@@ -6540,8 +6568,14 @@ var SessionStoreInternal = {
         // remaining data
         window.__lastSessionWindowID = newWindowState.__lastSessionWindowID =
           "" + Date.now() + Math.random();
+      }
 
-        // Actually add this window to our defaultState
+      // If this newWindowState contains pinned tabs (stored in tabs) or
+      // closed tabs, add it to the defaultState so they're available immediately.
+      if (
+        newWindowState.tabs.length ||
+        (PERSIST_SESSIONS && newWindowState._closedTabs.length)
+      ) {
         defaultState.windows.push(newWindowState);
         // Remove the window from the state if it doesn't have any tabs
         if (!window.tabs.length) {

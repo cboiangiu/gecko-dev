@@ -83,6 +83,8 @@ class StyleRuleActor extends Actor {
 
     if (CSSRule.isInstance(item)) {
       this.type = item.type;
+      this.ruleClassName = ChromeUtils.getClassName(item);
+
       this.rawRule = item;
       this._computeRuleIndex();
       if (this.#isRuleSupported() && this.rawRule.parentStyleSheet) {
@@ -93,6 +95,7 @@ class StyleRuleActor extends Actor {
     } else {
       // Fake a rule
       this.type = ELEMENT_STYLE;
+      this.ruleClassName = ELEMENT_STYLE;
       this.rawNode = item;
       this.rawRule = {
         style: item.style,
@@ -135,12 +138,6 @@ class StyleRuleActor extends Actor {
       // If a rule has been modified via CSSOM, then we should fall back to
       // non-authored editing.
       // https://bugzilla.mozilla.org/show_bug.cgi?id=1224121
-      return false;
-    }
-    if (this._parentSheet.href === "about:PreferenceStyleSheet") {
-      // Special case about:PreferenceStyleSheet, as it is generated on the
-      // fly and the URI is not registered with the about: protocol handler
-      // https://bugzilla.mozilla.org/show_bug.cgi?id=935803#c37
       return false;
     }
     return true;
@@ -244,7 +241,7 @@ class StyleRuleActor extends Actor {
       data.ruleIndex = 0;
     } else {
       data.selector =
-        this.type === CSSRule.KEYFRAME_RULE
+        this.ruleClassName === "CSSKeyframeRule"
           ? this.rawRule.keyText
           : this.rawRule.selectorText;
       // Used to differentiate between changes to rules with identical selectors.
@@ -355,9 +352,15 @@ class StyleRuleActor extends Actor {
     // return a promise.  See bug 1205868.
     form.authoredText = this.authoredText;
 
-    switch (this.type) {
-      case CSSRule.STYLE_RULE:
+    switch (this.ruleClassName) {
+      case "CSSStyleRule":
         form.selectors = CssLogic.getSelectors(this.rawRule);
+
+        // Only add the property when there are elements in the array to save up on serialization.
+        const selectorWarnings = this.rawRule.getSelectorWarnings();
+        if (selectorWarnings.length) {
+          form.selectorWarnings = selectorWarnings;
+        }
         if (computeDesugaredSelector) {
           form.desugaredSelectors = this.getDesugaredSelectors();
         }
@@ -372,17 +375,17 @@ class StyleRuleActor extends Actor {
         form.cssText = this.rawStyle.cssText || "";
         form.authoredText = this.rawNode.getAttribute("style");
         break;
-      case CSSRule.CHARSET_RULE:
+      case "CSSCharsetRule":
         form.encoding = this.rawRule.encoding;
         break;
-      case CSSRule.IMPORT_RULE:
+      case "CSSImportRule":
         form.href = this.rawRule.href;
         break;
-      case CSSRule.KEYFRAMES_RULE:
+      case "CSSKeyframesRule":
         form.cssText = this.rawRule.cssText;
         form.name = this.rawRule.name;
         break;
-      case CSSRule.KEYFRAME_RULE:
+      case "CSSKeyframeRule":
         form.cssText = this.rawStyle.cssText || "";
         form.keyText = this.rawRule.keyText || "";
         break;
@@ -448,6 +451,24 @@ class StyleRuleActor extends Actor {
           `${decl.name}:initial`,
           supportsOptions
         );
+
+        if (SharedCssLogic.isCssVariable(decl.name)) {
+          decl.isCustomProperty = true;
+          // We only compute `inherits` for css variable declarations.
+          // For "regular" declaration, we use `CssPropertiesFront.isInherited`,
+          // which doesn't depend on the state of the document (a given property will
+          // always have the same isInherited value).
+          // CSS variables on the other hand can be registered custom properties (e.g.,
+          // `@property`/`CSS.registerProperty`), with a `inherits` definition that can
+          // be true or false.
+          // As such custom properties can be registered at any time during the page
+          // lifecycle, we always recompute the `inherits` information for CSS variables.
+          decl.inherits = InspectorUtils.isInheritedProperty(
+            this.pageStyle.inspector.window.document,
+            decl.name
+          );
+        }
+
         return decl;
       });
 
@@ -517,10 +538,18 @@ class StyleRuleActor extends Actor {
         // All the previous cases where about at-rules; this one is for regular rule
         // that are ancestors because CSS nesting was used.
         // In such case, we want to return the selectorText so it can be displayed in the UI.
-        ancestorData.push({
+        const ancestor = {
           type,
-          selectorText: rawRule.selectorText,
-        });
+          selectors: CssLogic.getSelectors(rawRule),
+        };
+
+        // Only add the property when there are elements in the array to save up on serialization.
+        const selectorWarnings = rawRule.getSelectorWarnings();
+        if (selectorWarnings.length) {
+          ancestor.selectorWarnings = selectorWarnings;
+        }
+
+        ancestorData.push(ancestor);
         computeDesugaredSelector = true;
       }
     }

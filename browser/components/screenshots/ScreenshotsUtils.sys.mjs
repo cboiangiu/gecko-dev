@@ -21,19 +21,31 @@ ChromeUtils.defineLazyGetter(lazy, "screenshotsLocalization", () => {
   return new Localization(["browser/screenshots.ftl"], true);
 });
 
-const PanelPosition = "bottomright topright";
-const PanelOffsetX = -33;
-const PanelOffsetY = -8;
-// The max dimension for a canvas is defined https://searchfox.org/mozilla-central/rev/f40d29a11f2eb4685256b59934e637012ea6fb78/gfx/cairo/cairo/src/cairo-image-surface.c#62.
-// The max number of pixels for a canvas is 124925329 or 11177 x 11177.
+// The max dimension for a canvas is 32,767 https://searchfox.org/mozilla-central/rev/f40d29a11f2eb4685256b59934e637012ea6fb78/gfx/cairo/cairo/src/cairo-image-surface.c#62.
+// The max number of pixels for a canvas is 472,907,776 pixels (i.e., 22,528 x 20,992) https://developer.mozilla.org/en-US/docs/Web/HTML/Element/canvas#maximum_canvas_size
 // We have to limit screenshots to these dimensions otherwise it will cause an error.
 export const MAX_CAPTURE_DIMENSION = 32766;
-export const MAX_CAPTURE_AREA = 124925329;
+export const MAX_CAPTURE_AREA = 472907776;
+export const MAX_SNAPSHOT_DIMENSION = 1024;
 
 export class ScreenshotsComponentParent extends JSWindowActorParent {
   async receiveMessage(message) {
-    let browser = message.target.browsingContext.topFrameElement;
     let region, title;
+    let browser = message.target.browsingContext.topFrameElement;
+    // ignore message from child actors with no associated browser element
+    if (!browser) {
+      return;
+    }
+    if (
+      ScreenshotsUtils.getUIPhase(browser) == UIPhases.CLOSED &&
+      !ScreenshotsUtils.browserToScreenshotsState.has(browser)
+    ) {
+      // We've already exited or never opened and there's no UI or state that could
+      // handle this message. We additionally check for screenshot-state to ensure we
+      // don't ignore an overlay message when there is no current selection - which
+      // otherwise looks like the UIPhases.CLOSED state.
+      return;
+    }
     switch (message.name) {
       case "Screenshots:CancelScreenshot":
         let { reason } = message.data;
@@ -88,6 +100,7 @@ export const UIPhases = {
 export var ScreenshotsUtils = {
   browserToScreenshotsState: new WeakMap(),
   initialized: false,
+  methodsUsed: {},
 
   /**
    * Figures out which of various states the screenshots UI is in, for the given browser.
@@ -100,13 +113,17 @@ export var ScreenshotsUtils = {
       return UIPhases.PREVIEW;
     }
     const buttonsPanel = this.panelForBrowser(browser);
-    if (buttonsPanel && buttonsPanel.state !== "closed") {
+    if (buttonsPanel && !buttonsPanel.hidden) {
       return UIPhases.INITIAL;
     }
     if (perBrowserState?.hasOverlaySelection) {
       return UIPhases.OVERLAYSELECTION;
     }
     return UIPhases.CLOSED;
+  },
+
+  resetMethodsUsed() {
+    this.methodsUsed = { fullpage: 0, visible: 0 };
   },
 
   initialize() {
@@ -119,9 +136,9 @@ export var ScreenshotsUtils = {
       ) {
         return;
       }
+      this.resetMethodsUsed();
       Services.telemetry.setEventRecordingEnabled("screenshots", true);
       Services.obs.addObserver(this, "menuitem-screenshot");
-      Services.obs.addObserver(this, "screenshots-take-screenshot");
       this.initialized = true;
       if (Cu.isInAutomation) {
         Services.obs.notifyObservers(null, "screenshots-component-initialized");
@@ -132,7 +149,6 @@ export var ScreenshotsUtils = {
   uninitialize() {
     if (this.initialized) {
       Services.obs.removeObserver(this, "menuitem-screenshot");
-      Services.obs.removeObserver(this, "screenshots-take-screenshot");
       this.initialized = false;
     }
   },
@@ -160,16 +176,6 @@ export var ScreenshotsUtils = {
         this.start(browser, data);
         break;
       }
-      case "screenshots-take-screenshot": {
-        this.closePanel(browser);
-        this.closeOverlay(browser);
-
-        // init UI as a tab dialog box
-        this.openPreviewDialog(browser).then(dialog => {
-          this.doScreenshot(browser, dialog, data);
-        });
-        break;
-      }
     }
   },
 
@@ -192,6 +198,7 @@ export var ScreenshotsUtils = {
 
   /**
    * Creates/gets and returns a Screenshots actor.
+   *
    * @param browser The current browser.
    * @returns JSWindowActor The screenshot actor.
    */
@@ -211,6 +218,7 @@ export var ScreenshotsUtils = {
     const uiPhase = this.getUIPhase(browser);
     switch (uiPhase) {
       case UIPhases.CLOSED:
+        this.captureFocusedElement(browser, "previousFocusRef");
         this.showPanelAndOverlay(browser, reason);
         break;
       case UIPhases.INITIAL:
@@ -230,9 +238,13 @@ export var ScreenshotsUtils = {
    * @param browser The current browser.
    */
   exit(browser) {
+    this.captureFocusedElement(browser, "currentFocusRef");
     this.closeDialogBox(browser);
     this.closePanel(browser);
     this.closeOverlay(browser);
+    this.resetMethodsUsed();
+    this.attemptToRestoreFocus(browser);
+
     this.browserToScreenshotsState.delete(browser);
     if (Cu.isInAutomation) {
       Services.obs.notifyObservers(null, "screenshots-exit");
@@ -241,6 +253,7 @@ export var ScreenshotsUtils = {
 
   /**
    * Cancel/abort the screenshots operation for the given browser
+   *
    * @param browser The current browser.
    */
   cancel(browser, reason) {
@@ -250,6 +263,7 @@ export var ScreenshotsUtils = {
 
   /**
    * Update internal UI state associated with the given browser
+   *
    * @param browser The current browser.
    * @param nameValues {object} An object with one or more named property values
    */
@@ -263,7 +277,94 @@ export var ScreenshotsUtils = {
   },
 
   /**
+   * Attempt to place focus on the element that had focus before screenshots UI was shown
+   *
+   * @param browser The current browser.
+   */
+  attemptToRestoreFocus(browser) {
+    const document = browser.ownerDocument;
+    const window = browser.ownerGlobal;
+
+    const doFocus = () => {
+      // Move focus it back to where it was previously.
+      prevFocus.setAttribute("refocused-by-panel", true);
+      try {
+        let fm = Services.focus;
+        fm.setFocus(prevFocus, fm.FLAG_NOSCROLL);
+      } catch (e) {
+        prevFocus.focus();
+      }
+      prevFocus.removeAttribute("refocused-by-panel");
+      let focusedElement;
+      try {
+        focusedElement = document.commandDispatcher.focusedElement;
+        if (!focusedElement) {
+          focusedElement = document.activeElement;
+        }
+      } catch (ex) {
+        focusedElement = document.activeElement;
+      }
+    };
+
+    let perBrowserState = this.browserToScreenshotsState.get(browser) || {};
+    let prevFocus = perBrowserState.previousFocusRef?.get();
+    let currentFocus = perBrowserState.currentFocusRef?.get();
+    delete perBrowserState.currentFocusRef;
+
+    // Avoid changing focus if focus changed during exit - perhaps exit was caused
+    // by a user action which resulted in focus moving
+    let nowFocus;
+    try {
+      nowFocus = document.commandDispatcher.focusedElement;
+    } catch (e) {
+      nowFocus = document.activeElement;
+    }
+    if (nowFocus && nowFocus != currentFocus) {
+      return;
+    }
+
+    let dialog = this.getDialog(browser);
+    let panel = this.panelForBrowser(browser);
+
+    if (prevFocus) {
+      // Try to restore focus
+      try {
+        if (document.commandDispatcher.focusedWindow != window) {
+          // Focus has already been set to a different window
+          return;
+        }
+      } catch (ex) {}
+
+      if (!currentFocus) {
+        doFocus();
+        return;
+      }
+      while (currentFocus) {
+        if (
+          (dialog && currentFocus == dialog) ||
+          (panel && currentFocus == panel) ||
+          currentFocus == browser
+        ) {
+          doFocus();
+          return;
+        }
+        currentFocus = currentFocus.parentNode;
+        if (
+          currentFocus &&
+          currentFocus.nodeType == currentFocus.DOCUMENT_FRAGMENT_NODE &&
+          currentFocus.host
+        ) {
+          // focus was in a shadowRoot, we'll try the host",
+          currentFocus = currentFocus.host;
+        }
+      }
+      doFocus();
+    }
+  },
+
+  /**
    * Set a flag so we don't try to exit when preview dialog next closes.
+   *
    * @param browser The current browser.
    * @param reason [string] Optional reason string passed along when recording telemetry events
    */
@@ -283,6 +384,7 @@ export var ScreenshotsUtils = {
 
   /**
    * Open the tab dialog for preview
+   *
    * @param browser The current browser
    */
   async openPreviewDialog(browser) {
@@ -296,6 +398,7 @@ export var ScreenshotsUtils = {
       },
       browser
     );
+
     this.setPerBrowserState(browser, {
       previewDialog: dialog,
       exitOnPreviewClose: true,
@@ -304,6 +407,29 @@ export var ScreenshotsUtils = {
       }),
     });
     return dialog;
+  },
+
+  /**
+   * Take a weak-reference to whatever element currently has focus and associate it with
+   * the UI state for this browser.
+   *
+   * @param browser The current browser.
+   * @param {string} stateRefName The property name for this element reference.
+   */
+  captureFocusedElement(browser, stateRefName) {
+    let document = browser.ownerDocument;
+    let focusedElement;
+    try {
+      focusedElement = document.commandDispatcher.focusedElement;
+      if (!focusedElement) {
+        focusedElement = document.activeElement;
+      }
+    } catch (ex) {
+      focusedElement = document.activeElement;
+    }
+    this.setPerBrowserState(browser, {
+      [stateRefName]: Cu.getWeakReference(focusedElement),
+    });
   },
 
   /**
@@ -325,9 +451,14 @@ export var ScreenshotsUtils = {
     if (!buttonsPanel) {
       let doc = browser.ownerDocument;
       let template = doc.getElementById("screenshotsPagePanelTemplate");
-      let clone = template.content.cloneNode(true);
-      template.replaceWith(clone);
+      let fragmentClone = template.content.cloneNode(true);
+      buttonsPanel = fragmentClone.firstElementChild;
+      template.replaceWith(buttonsPanel);
+
+      let anchor = browser.ownerDocument.querySelector("#navigator-toolbox");
+      anchor.appendChild(buttonsPanel);
     }
+
     return this.panelForBrowser(browser);
   },
 
@@ -335,21 +466,13 @@ export var ScreenshotsUtils = {
    * Open the buttons panel.
    * @param browser The current browser
    */
-  async openPanel(browser) {
+  openPanel(browser) {
     let buttonsPanel = this.panelForBrowser(browser);
-    if (buttonsPanel.state !== "closed") {
+    if (!buttonsPanel.hidden) {
       return;
     }
-
+    buttonsPanel.hidden = false;
     buttonsPanel.ownerDocument.addEventListener("keydown", this);
-    let anchor = browser.ownerDocument.getElementById("navigator-toolbox");
-    buttonsPanel.openPopup(anchor, PanelPosition, PanelOffsetX, PanelOffsetY);
-
-    if (buttonsPanel.state !== "open") {
-      await new Promise(resolve => {
-        buttonsPanel.addEventListener("popupshown", resolve, { once: true });
-      });
-    }
     buttonsPanel
       .querySelector("screenshots-buttons")
       .focusFirst({ focusVisible: true });
@@ -364,9 +487,7 @@ export var ScreenshotsUtils = {
     if (!buttonsPanel) {
       return;
     }
-    if (buttonsPanel.state !== "closed") {
-      buttonsPanel.hidePopup();
-    }
+    buttonsPanel.hidden = true;
     buttonsPanel.ownerDocument.removeEventListener("keydown", this);
   },
 
@@ -381,7 +502,7 @@ export var ScreenshotsUtils = {
     actor.sendAsyncMessage("Screenshots:ShowOverlay");
     this.createPanelForBrowser(browser);
     this.recordTelemetryEvent("started", data, {});
-    await this.openPanel(browser);
+    this.openPanel(browser);
   },
 
   /**
@@ -389,9 +510,9 @@ export var ScreenshotsUtils = {
    * The overlay lives in the child document; so although closing is actually async, we assume success.
    * @param browser The current browser.
    */
-  closeOverlay(browser) {
+  closeOverlay(browser, options = {}) {
     let actor = this.getActor(browser);
-    actor?.sendAsyncMessage("Screenshots:HideOverlay");
+    actor?.sendAsyncMessage("Screenshots:HideOverlay", options);
 
     if (this.browserToScreenshotsState.has(browser)) {
       this.setPerBrowserState(browser, {
@@ -544,6 +665,8 @@ export var ScreenshotsUtils = {
 
     rect.width = Math.floor(width / rect.devicePixelRatio);
     rect.height = Math.floor(height / rect.devicePixelRatio);
+    rect.right = rect.left + rect.width;
+    rect.bottom = rect.top + rect.height;
 
     if (cropped) {
       let [errorTitle, errorMessage] =
@@ -557,23 +680,27 @@ export var ScreenshotsUtils = {
   },
 
   /**
-   * Add screenshot-ui to the dialog box and then take the screenshot
+   * Open and add screenshot-ui to the dialog box and then take the screenshot
    * @param browser The current browser.
-   * @param dialog The dialog box to show the screenshot preview.
    * @param type The type of screenshot taken.
    */
-  async doScreenshot(browser, dialog, type) {
+  async doScreenshot(browser, type) {
+    this.closePanel(browser);
+    this.closeOverlay(browser, { doNotResetMethods: true });
+
+    let dialog = await this.openPreviewDialog(browser);
     await dialog._dialogReady;
     let screenshotsUI =
       dialog._frame.contentDocument.createElement("screenshots-ui");
     dialog._frame.contentDocument.body.appendChild(screenshotsUI);
 
     let rect;
-    if (type === "full-page") {
+    if (type === "full_page") {
       rect = await this.fetchFullPageBounds(browser);
-      type = "full_page";
+      this.methodsUsed.fullpage += 1;
     } else {
       rect = await this.fetchVisibleBounds(browser);
+      this.methodsUsed.visible += 1;
     }
     this.recordTelemetryEvent("selected", type, {});
     return this.takeScreenshot(browser, dialog, rect);
@@ -586,7 +713,7 @@ export var ScreenshotsUtils = {
    * @param rect DOMRect containing bounds of the screenshot.
    */
   async takeScreenshot(browser, dialog, rect) {
-    let { canvas, snapshot } = await this.createCanvas(rect, browser);
+    let canvas = await this.createCanvas(rect, browser);
 
     let newImg = dialog._frame.contentDocument.createElement("img");
     let url = canvas.toDataURL();
@@ -601,34 +728,20 @@ export var ScreenshotsUtils = {
     if (Cu.isInAutomation) {
       Services.obs.notifyObservers(null, "screenshots-preview-ready");
     }
-
-    snapshot.close();
   },
 
   /**
    * Creates a canvas and draws a snapshot of the screenshot on the canvas
    * @param region The bounds of screenshots
    * @param browser The current browser
-   * @returns The canvas and snapshot in an object
+   * @returns The canvas
    */
   async createCanvas(region, browser) {
     this.cropScreenshotRectIfNeeded(region);
 
-    let rect = new DOMRect(
-      region.left,
-      region.top,
-      region.width,
-      region.height
-    );
     let { devicePixelRatio } = region;
 
     let browsingContext = BrowsingContext.get(browser.browsingContext.id);
-
-    let snapshot = await browsingContext.currentWindowGlobal.drawSnapshot(
-      rect,
-      devicePixelRatio,
-      "rgb(255,255,255)"
-    );
 
     let canvas = browser.ownerDocument.createElementNS(
       "http://www.w3.org/1999/xhtml",
@@ -636,12 +749,48 @@ export var ScreenshotsUtils = {
     );
     let context = canvas.getContext("2d");
 
-    canvas.width = snapshot.width;
-    canvas.height = snapshot.height;
+    canvas.width = region.width * devicePixelRatio;
+    canvas.height = region.height * devicePixelRatio;
 
-    context.drawImage(snapshot, 0, 0);
+    for (
+      let startLeft = region.left;
+      startLeft < region.right;
+      startLeft += MAX_SNAPSHOT_DIMENSION
+    ) {
+      for (
+        let startTop = region.top;
+        startTop < region.bottom;
+        startTop += MAX_SNAPSHOT_DIMENSION
+      ) {
+        let height =
+          startTop + MAX_SNAPSHOT_DIMENSION > region.bottom
+            ? region.bottom - startTop
+            : MAX_SNAPSHOT_DIMENSION;
+        let width =
+          startLeft + MAX_SNAPSHOT_DIMENSION > region.right
+            ? region.right - startLeft
+            : MAX_SNAPSHOT_DIMENSION;
+        let rect = new DOMRect(startLeft, startTop, width, height);
 
-    return { canvas, snapshot };
+        let snapshot = await browsingContext.currentWindowGlobal.drawSnapshot(
+          rect,
+          devicePixelRatio,
+          "rgb(255,255,255)"
+        );
+
+        context.drawImage(
+          snapshot,
+          (startLeft - region.left) * devicePixelRatio,
+          (startTop - region.top) * devicePixelRatio,
+          width * devicePixelRatio,
+          height * devicePixelRatio
+        );
+
+        snapshot.close();
+      }
+    }
+
+    return canvas;
   },
 
   /**
@@ -650,21 +799,22 @@ export var ScreenshotsUtils = {
    * @param browser The current browser
    */
   async copyScreenshotFromRegion(region, browser) {
-    let { canvas, snapshot } = await this.createCanvas(region, browser);
+    let canvas = await this.createCanvas(region, browser);
     let url = canvas.toDataURL();
 
-    this.copyScreenshot(url, browser);
-    snapshot.close();
-
-    this.recordTelemetryEvent("copy", "overlay_copy", {});
+    await this.copyScreenshot(url, browser, {
+      object: "overlay_copy",
+    });
   },
 
   /**
    * Copy the image to the clipboard
+   * This is called from the preview dialog
    * @param dataUrl The image data
    * @param browser The current browser
+   * @param data Telemetry data
    */
-  copyScreenshot(dataUrl, browser) {
+  async copyScreenshot(dataUrl, browser, data) {
     // Guard against missing image data.
     if (!dataUrl) {
       return;
@@ -697,6 +847,15 @@ export var ScreenshotsUtils = {
     );
 
     this.showCopiedConfirmationHint(browser);
+
+    let extra = await this.getActor(browser).sendQuery(
+      "Screenshots:GetMethodsUsed"
+    );
+    this.recordTelemetryEvent("copy", data.object, {
+      ...extra,
+      ...this.methodsUsed,
+    });
+    this.resetMethodsUsed();
   },
 
   /**
@@ -706,22 +865,23 @@ export var ScreenshotsUtils = {
    * @param browser The current browser
    */
   async downloadScreenshotFromRegion(title, region, browser) {
-    let { canvas, snapshot } = await this.createCanvas(region, browser);
+    let canvas = await this.createCanvas(region, browser);
     let dataUrl = canvas.toDataURL();
 
-    await this.downloadScreenshot(title, dataUrl, browser);
-    snapshot.close();
-
-    this.recordTelemetryEvent("download", "overlay_download", {});
+    await this.downloadScreenshot(title, dataUrl, browser, {
+      object: "overlay_download",
+    });
   },
 
   /**
    * Download the screenshot
+   * This is called from the preview dialog
    * @param title The title of the current page or null and getFilename will get the title
    * @param dataUrl The image data
    * @param browser The current browser
+   * @param data Telemetry data
    */
-  async downloadScreenshot(title, dataUrl, browser) {
+  async downloadScreenshot(title, dataUrl, browser, data) {
     // Guard against missing image data.
     if (!dataUrl) {
       return;
@@ -750,9 +910,23 @@ export var ScreenshotsUtils = {
       // Await successful completion of the save via the download manager
       await download.start();
     } catch (ex) {}
+
+    let extra = await this.getActor(browser).sendQuery(
+      "Screenshots:GetMethodsUsed"
+    );
+    this.recordTelemetryEvent("download", data.object, {
+      ...extra,
+      ...this.methodsUsed,
+    });
+    this.resetMethodsUsed();
   },
 
   recordTelemetryEvent(type, object, args) {
+    if (args) {
+      for (let key of Object.keys(args)) {
+        args[key] = args[key].toString();
+      }
+    }
     Services.telemetry.recordEvent("screenshots", type, object, null, args);
   },
 };

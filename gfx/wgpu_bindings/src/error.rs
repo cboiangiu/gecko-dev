@@ -94,9 +94,10 @@ impl ErrorBuffer {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub(crate) enum ErrorBufferType {
     None = 0,
-    Internal = 1,
-    OutOfMemory = 2,
-    Validation = 3,
+    DeviceLost = 1,
+    Internal = 2,
+    OutOfMemory = 3,
+    Validation = 4,
 }
 
 /// A trait for querying the [`ErrorBufferType`] classification of an error. Used by
@@ -150,7 +151,7 @@ mod foreign {
         },
         resource::{
             BufferAccessError, CreateBufferError, CreateSamplerError, CreateTextureError,
-            CreateTextureViewError,
+            CreateTextureViewError, DestroyError,
         },
     };
 
@@ -174,7 +175,7 @@ mod foreign {
             match self {
                 RequestDeviceError::OutOfMemory => ErrorBufferType::OutOfMemory,
 
-                RequestDeviceError::DeviceLost => ErrorBufferType::None,
+                RequestDeviceError::DeviceLost => ErrorBufferType::DeviceLost,
 
                 RequestDeviceError::Internal
                 | RequestDeviceError::InvalidAdapter
@@ -248,7 +249,7 @@ mod foreign {
                 | CreateTextureError::InvalidDimensionUsages(_, _)
                 | CreateTextureError::InvalidMultisampledStorageBinding
                 | CreateTextureError::InvalidMultisampledFormat(_)
-                | CreateTextureError::InvalidSampleCount(_, _)
+                | CreateTextureError::InvalidSampleCount(..)
                 | CreateTextureError::MultisampledNotRenderAttachment
                 | CreateTextureError::MissingFeatures(_, _)
                 | CreateTextureError::MissingDownlevelFlags(_) => ErrorBufferType::Validation,
@@ -437,9 +438,11 @@ mod foreign {
         fn error_type(&self) -> ErrorBufferType {
             match self {
                 DeviceError::Invalid | DeviceError::WrongDevice => ErrorBufferType::Validation,
-                DeviceError::Lost => ErrorBufferType::None,
+                DeviceError::InvalidQueueId => ErrorBufferType::Validation,
+                DeviceError::Lost => ErrorBufferType::DeviceLost,
                 DeviceError::OutOfMemory => ErrorBufferType::OutOfMemory,
                 DeviceError::ResourceCreationFailed => ErrorBufferType::Internal,
+                _ => ErrorBufferType::Internal,
             }
         }
     }
@@ -647,6 +650,12 @@ mod foreign {
             // We can't classify this ourselves, because inner error classification is private. We
             // may need some upstream work to do this properly. For now, we trust that this opaque
             // type only ever represents `Validation`.
+            ErrorBufferType::Validation
+        }
+    }
+
+    impl HasErrorBufferType for DestroyError {
+        fn error_type(&self) -> ErrorBufferType {
             ErrorBufferType::Validation
         }
     }

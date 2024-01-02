@@ -28,9 +28,9 @@ import {
 import { ValidationTest } from '../../validation_test.js';
 
 const kComputeCmds = ['dispatch', 'dispatchIndirect'] as const;
-type ComputeCmd = typeof kComputeCmds[number];
+type ComputeCmd = (typeof kComputeCmds)[number];
 const kRenderCmds = ['draw', 'drawIndexed', 'drawIndirect', 'drawIndexedIndirect'] as const;
-type RenderCmd = typeof kRenderCmds[number];
+type RenderCmd = (typeof kRenderCmds)[number];
 
 // Test resource type compatibility in pipeline and bind group
 // [1]: Need to add externalTexture
@@ -365,7 +365,7 @@ g.test('buffer_binding,render_pipeline')
   `
   )
   .params(u => u.combine('type', kBufferBindingTypes))
-  .fn(async t => {
+  .fn(t => {
     const { type } = t.params;
 
     // Create fixed bindGroup
@@ -426,7 +426,7 @@ g.test('sampler_binding,render_pipeline')
       .combine('bglType', kSamplerBindingTypes)
       .combine('bgType', kSamplerBindingTypes)
   )
-  .fn(async t => {
+  .fn(t => {
     const { bglType, bgType } = t.params;
     const bindGroup = t.device.createBindGroup({
       entries: [
@@ -488,15 +488,8 @@ g.test('bgl_binding_mismatch')
       .combine('useU32Array', [false, true])
   )
   .fn(t => {
-    const {
-      encoderType,
-      call,
-      callWithZero,
-      bgBindings,
-      plBindings,
-      _success,
-      useU32Array,
-    } = t.params;
+    const { encoderType, call, callWithZero, bgBindings, plBindings, _success, useU32Array } =
+      t.params;
     const visibility =
       encoderType === 'compute pass' ? GPUShaderStage.COMPUTE : GPUShaderStage.VERTEX;
 
@@ -607,14 +600,8 @@ g.test('bgl_resource_type_mismatch')
       .expand('useU32Array', p => (p.bgResourceType === 'uniformBuf' ? [true, false] : [false]))
   )
   .fn(t => {
-    const {
-      encoderType,
-      call,
-      callWithZero,
-      bgResourceType,
-      plResourceType,
-      useU32Array,
-    } = t.params;
+    const { encoderType, call, callWithZero, bgResourceType, plResourceType, useU32Array } =
+      t.params;
 
     const bglEntries: Array<GPUBindGroupLayoutEntry> = [
       t.createBindGroupLayoutEntry(encoderType, bgResourceType, useU32Array),
@@ -657,7 +644,7 @@ g.test('empty_bind_group_layouts_requires_empty_bind_groups,compute_pass')
       .combine('bindGroupLayoutEntryCount', [3, 4])
       .combine('computeCommand', ['dispatchIndirect', 'dispatch'] as const)
   )
-  .fn(async t => {
+  .fn(t => {
     const { bindGroupLayoutEntryCount, computeCommand } = t.params;
 
     const emptyBGLCount = 4;
@@ -719,7 +706,7 @@ g.test('empty_bind_group_layouts_requires_empty_bind_groups,render_pass')
         'drawIndexedIndirect',
       ] as const)
   )
-  .fn(async t => {
+  .fn(t => {
     const { bindGroupLayoutEntryCount, renderCommand } = t.params;
 
     const emptyBGLCount = 4;

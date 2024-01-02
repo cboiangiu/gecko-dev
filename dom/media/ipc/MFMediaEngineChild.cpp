@@ -102,7 +102,7 @@ RefPtr<GenericNonExclusivePromise> MFMediaEngineChild::Init(
           },
           [self, this](nsresult aResult) {
             CLOG("SendInitMediaEngine Failed");
-            self->mInitPromiseHolder.Reject(NS_ERROR_FAILURE, __func__);
+            self->mInitPromiseHolder.RejectIfExists(NS_ERROR_FAILURE, __func__);
           });
   return mInitPromiseHolder.Ensure(__func__);
 }
@@ -193,6 +193,12 @@ mozilla::ipc::IPCResult MFMediaEngineChild::RecvUpdateStatisticData(
        currentDroppedSinkFrames, mFrameStats->GetDroppedSinkFrames());
   MOZ_ASSERT(mFrameStats->GetPresentedFrames() >= currentRenderedFrames);
   MOZ_ASSERT(mFrameStats->GetDroppedSinkFrames() >= currentDroppedSinkFrames);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult MFMediaEngineChild::RecvNotifyResizing(
+    uint32_t aWidth, uint32_t aHeight) {
+  mOwner->NotifyResizing(aWidth, aHeight);
   return IPC_OK();
 }
 
@@ -383,5 +389,14 @@ void MFMediaEngineWrapper::NotifyError(const MediaResult& aError) {
   WLOG("Received error: %s", aError.Description().get());
   mOwner->NotifyError(aError);
 }
+
+void MFMediaEngineWrapper::NotifyResizing(uint32_t aWidth, uint32_t aHeight) {
+  WLOG("Video resizing, new size [%u,%u]", aWidth, aHeight);
+  mOwner->NotifyResizing(aWidth, aHeight);
+}
+
+#undef CLOG
+#undef WLOG
+#undef WLOGV
 
 }  // namespace mozilla

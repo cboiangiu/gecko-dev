@@ -18,6 +18,8 @@ class BackgroundParentImpl : public PBackgroundParent {
   BackgroundParentImpl();
   virtual ~BackgroundParentImpl();
 
+  void ProcessingError(Result aCode, const char* aReason) override;
+
   void ActorDestroy(ActorDestroyReason aWhy) override;
 
   PBackgroundTestParent* AllocPBackgroundTestParent(
@@ -351,6 +353,7 @@ class BackgroundParentImpl : public PBackgroundParent {
       EnsureUtilityProcessAndCreateBridgeResolver&& aResolver) override;
 
   mozilla::ipc::IPCResult RecvRequestCameraAccess(
+      const bool& aAllowPermissionRequest,
       RequestCameraAccessResolver&& aResolver) override;
 
   bool DeallocPEndpointForReportParent(

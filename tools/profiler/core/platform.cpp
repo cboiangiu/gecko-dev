@@ -45,6 +45,7 @@
 #include "mozilla/MozPromise.h"
 #include "shared-libraries.h"
 #include "VTuneProfiler.h"
+#include "ETWTools.h"
 
 #include "js/ProfilingFrameIterator.h"
 #include "memory_hooks.h"
@@ -4046,7 +4047,7 @@ static SamplerThread* NewSamplerThread(PSLockRef aLock, uint32_t aGeneration,
 // This function is the sampler thread.  This implementation is used for all
 // targets.
 void SamplerThread::Run() {
-  PR_SetCurrentThreadName("SamplerThread");
+  NS_SetCurrentThreadName("SamplerThread");
 
   // Features won't change during this SamplerThread's lifetime, so we can read
   // them once and store them locally.
@@ -4236,10 +4237,6 @@ void SamplerThread::Run() {
                   ActivePS::ControlledChunkManager(lock).TotalSize());
             }
 #endif
-            // In the future, we may support keyed counters - for example,
-            // counters with a key which is a thread ID. For "simple" counters
-            // we'll just use a key of 0.
-            buffer.AddEntry(ProfileBufferEntry::CounterKey(0));
             buffer.AddEntry(ProfileBufferEntry::Count(sample.count));
             if (sample.number) {
               buffer.AddEntry(ProfileBufferEntry::Number(sample.number));
@@ -5213,6 +5210,7 @@ void profiler_init(void* aStackTop) {
   profiler_init_main_thread_id();
 
   VTUNE_INIT();
+  ETW::Init();
 
   MOZ_RELEASE_ASSERT(!CorePS::Exists());
 
@@ -5447,6 +5445,7 @@ void profiler_shutdown(IsFastShutdown aIsFastShutdown) {
   LOG("profiler_shutdown");
 
   VTUNE_SHUTDOWN();
+  ETW::Shutdown();
 
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   MOZ_RELEASE_ASSERT(CorePS::Exists());
@@ -5807,7 +5806,7 @@ static void TriggerPollJSSamplingOnMainThread() {
     nsCOMPtr<nsIRunnable> task =
         NS_NewRunnableFunction("TriggerPollJSSamplingOnMainThread",
                                []() { PollJSSamplingForCurrentThread(); });
-    SchedulerGroup::Dispatch(TaskCategory::Other, task.forget());
+    SchedulerGroup::Dispatch(task.forget());
   }
 }
 

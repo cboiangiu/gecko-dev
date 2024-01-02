@@ -2103,14 +2103,6 @@ static void ResetEnteredCounts(const ICEntry* icEntry) {
   }
 }
 
-static ICStubSpace* StubSpaceForStub(bool makesGCCalls, JSScript* script,
-                                     ICScript* icScript) {
-  if (makesGCCalls) {
-    return icScript->jitScriptStubSpace();
-  }
-  return script->zone()->jitZone()->optimizedStubSpace();
-}
-
 static const uint32_t MaxFoldedShapes = 16;
 
 const JSClass ShapeListObject::class_ = {"JIT ShapeList", 0, &classOps_};
@@ -2351,7 +2343,7 @@ bool js::jit::TryFoldingStubs(JSContext* cx, ICFallbackStub* fallback,
   }
 
   // Replace the existing stubs with the new folded stub.
-  fallback->discardStubs(cx, icEntry);
+  fallback->discardStubs(cx->zone(), icEntry);
 
   ICAttachResult result = AttachBaselineCacheIRStub(
       cx, writer, cacheKind, script, icScript, fallback, "StubFold");
@@ -2516,8 +2508,10 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
   CacheIRStubInfo* stubInfo;
   CacheIRStubKey::Lookup lookup(kind, ICStubEngine::Baseline,
                                 writer.codeStart(), writer.codeLength());
+
   JitCode* code = jitZone->getBaselineCacheIRStubCode(lookup, &stubInfo);
-  if (!code) {
+
+  if (!code && !IsPortableBaselineInterpreterEnabled()) {
     // We have to generate stub code.
     TempAllocator temp(&cx->tempLifoAlloc());
     JitContext jctx(cx);
@@ -2549,9 +2543,30 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
     if (!jitZone->putBaselineCacheIRStubCode(lookup, key, code)) {
       return ICAttachResult::OOM;
     }
-  }
+  } else if (!stubInfo) {
+    MOZ_ASSERT(IsPortableBaselineInterpreterEnabled());
 
-  MOZ_ASSERT(code);
+    // Portable baseline interpreter case. We want to generate the
+    // CacheIR bytecode but not compile it to native code.
+    //
+    // We lie that all stubs make GC calls; this is simpler than
+    // iterating over ops to determine if it is actually the base, and
+    // we don't invoke the BaselineCacheIRCompiler so we otherwise
+    // don't know for sure.
+    stubInfo = CacheIRStubInfo::New(kind, ICStubEngine::Baseline,
+                                    /* makes GC calls = */ true, stubDataOffset,
+                                    writer);
+    if (!stubInfo) {
+      return ICAttachResult::OOM;
+    }
+
+    CacheIRStubKey key(stubInfo);
+    if (!jitZone->putBaselineCacheIRStubCode(lookup, key,
+                                             /* stubCode = */ nullptr)) {
+      return ICAttachResult::OOM;
+    }
+  }
+  MOZ_ASSERT_IF(IsBaselineInterpreterEnabled(), code);
   MOZ_ASSERT(stubInfo);
   MOZ_ASSERT(stubInfo->stubDataSize() == writer.stubDataSize());
 
@@ -2576,7 +2591,7 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
     JitSpew(JitSpew_BaselineICFallback,
             "Tried attaching identical stub for (%s:%u:%u)",
             outerScript->filename(), outerScript->lineno(),
-            outerScript->column().zeroOriginValue());
+            outerScript->column().oneOriginValue());
     return ICAttachResult::DuplicateStub;
   }
 
@@ -2601,6 +2616,9 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
     cx->zone()->jitZone()->clearStubFoldingBailoutData();
     if (stub->usedByTranspiler() && owningScript->hasIonScript()) {
       owningScript->ionScript()->resetNumFixableBailouts();
+    } else {
+      // Update the last IC counter if this is not a bailout from Ion.
+      owningScript->updateLastICStubCounter();
     }
     return ICAttachResult::Attached;
   }
@@ -2609,9 +2627,7 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
 
   size_t bytesNeeded = stubInfo->stubDataOffset() + stubInfo->stubDataSize();
 
-  ICStubSpace* stubSpace =
-      StubSpaceForStub(stubInfo->makesGCCalls(), outerScript, icScript);
-  void* newStubMem = stubSpace->alloc(bytesNeeded);
+  void* newStubMem = jitZone->stubSpace()->alloc(bytesNeeded);
   if (!newStubMem) {
     return ICAttachResult::OOM;
   }
@@ -2626,8 +2642,11 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
       stub->setTrialInliningState(writer.trialInliningState());
       break;
     case TrialInliningState::MonomorphicInlined:
+      stub->setTrialInliningState(TrialInliningState::Failure);
+      break;
     case TrialInliningState::Inlined:
       stub->setTrialInliningState(TrialInliningState::Failure);
+      icScript->removeInlinedChild(stub->pcOffset());
       break;
     case TrialInliningState::Failure:
       break;
@@ -2637,6 +2656,11 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
   writer.copyStubData(newStub->stubDataStart());
   newStub->setTypeData(writer.typeData());
   stub->addNewStub(icEntry, newStub);
+
+  JSScript* owningScript = icScript->isInlined()
+                               ? icScript->inliningRoot()->owningScript()
+                               : outerScript;
+  owningScript->updateLastICStubCounter();
   return ICAttachResult::Attached;
 }
 

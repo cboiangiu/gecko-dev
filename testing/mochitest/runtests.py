@@ -151,6 +151,8 @@ class MessageLogger(object):
         [
             "suite_start",
             "suite_end",
+            "group_start",
+            "group_end",
             "test_start",
             "test_end",
             "test_status",
@@ -1393,7 +1395,11 @@ class MochitestDesktop(object):
         serverOptions["isWin"] = mozinfo.isWin
         serverOptions["proxyPort"] = options.http3ServerPort
         env = test_environment(xrePath=options.xrePath, log=self.log)
-        self.http3Server = Http3Server(serverOptions, env, self.log)
+        serverEnv = env.copy()
+        serverLog = env.get("MOZHTTP3_SERVER_LOG")
+        if serverLog is not None:
+            serverEnv["RUST_LOG"] = serverLog
+        self.http3Server = Http3Server(serverOptions, serverEnv, self.log)
         self.http3Server.start()
 
         port = self.http3Server.ports().get("MOZHTTP3_PORT_PROXY")
@@ -2861,6 +2867,7 @@ toolbar#nav-bar {
 
             # create mozrunner instance and start the system under test process
             self.lastTestSeen = self.test_name
+            self.lastManifest = currentManifest
             startTime = datetime.now()
 
             runner_cls = mozrunner.runners.get(
@@ -3425,6 +3432,7 @@ toolbar#nav-bar {
 
         origPrefs = self.extraPrefs.copy()
         for m in sorted(manifests):
+            self.log.group_start(name=m)
             self.log.info("Running manifest: {}".format(m))
 
             args = list(self.args_by_manifest[m])[0]
@@ -3475,6 +3483,7 @@ toolbar#nav-bar {
 
             # Dump the logging buffer
             self.message_logger.dump_buffered()
+            self.log.group_end(name=m)
 
             if res == -1:
                 break
@@ -4081,7 +4090,10 @@ toolbar#nav-bar {
                     if message["action"] == "log"
                     else message["data"]
                 )
-                self.lsanLeaks.log(line)
+                if "(finished)" in self.harness.lastTestSeen:
+                    self.lsanLeaks.log(line, self.harness.lastManifest)
+                else:
+                    self.lsanLeaks.log(line, self.harness.lastTestSeen)
             return message
 
         def trackShutdownLeaks(self, message):

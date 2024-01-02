@@ -88,6 +88,45 @@
 #  endif
 #endif
 
+#if defined(__GNUC__) || \
+    (defined(__clang__) && __has_attribute(no_profile_instrument_function))
+#  define MOZ_NOPROFILE __attribute__((no_profile_instrument_function))
+#else
+#  define MOZ_NOPROFILE
+#endif
+
+#if defined(__GNUC__) || \
+    (defined(__clang__) && __has_attribute(no_instrument_function))
+#  define MOZ_NOINSTRUMENT __attribute__((no_instrument_function))
+#else
+#  define MOZ_NOINSTRUMENT
+#endif
+
+/*
+ * MOZ_NAKED tells the compiler that the function only contains assembly and
+ * that it should not try to inject code that may mess with the assembly in it.
+ *
+ * See https://github.com/llvm/llvm-project/issues/74573 for the interaction
+ * between naked and no_profile_instrument_function.
+ */
+#define MOZ_NAKED __attribute__((naked)) MOZ_NOPROFILE MOZ_NOINSTRUMENT
+
+/**
+ * Per clang's documentation:
+ *
+ * If a statement is marked nomerge and contains call expressions, those call
+ * expressions inside the statement will not be merged during optimization. This
+ * attribute can be used to prevent the optimizer from obscuring the source
+ * location of certain calls.
+ *
+ * This is useful to have clearer information on assertion failures.
+ */
+#if defined(__clang__) && __has_attribute(nomerge)
+#  define MOZ_NOMERGE __attribute__((nomerge))
+#else
+#  define MOZ_NOMERGE
+#endif
+
 /*
  * MOZ_NEVER_INLINE is a macro which expands to tell the compiler that the
  * method decorated with it must never be inlined, even if the compiler would

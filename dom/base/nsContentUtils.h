@@ -35,7 +35,6 @@
 #include "mozilla/CallState.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/TaskCategory.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BindingDeclarations.h"
@@ -95,7 +94,6 @@ class nsIInterfaceRequestor;
 class nsILoadGroup;
 class nsILoadInfo;
 class nsIObserver;
-class nsIPluginTag;
 class nsIPrincipal;
 class nsIReferrerInfo;
 class nsIRequest;
@@ -178,6 +176,7 @@ class DOMArena;
 class Element;
 class Event;
 class EventTarget;
+class FragmentOrElement;
 class HTMLElement;
 class HTMLInputElement;
 class IPCTransferable;
@@ -189,6 +188,7 @@ class MessageBroadcaster;
 class NodeInfo;
 class OwningFileOrUSVStringOrFormData;
 class Selection;
+enum class ShadowRootMode : uint8_t;
 struct StructuredSerializeOptions;
 class WorkerPrivate;
 enum class ElementCallbackType;
@@ -350,7 +350,8 @@ class nsContentUtils {
 
   // Check whether we should avoid leaking distinguishing information to JS/CSS.
   // This function can be called both in the main thread and worker threads.
-  static bool ShouldResistFingerprinting(RFPTarget aTarget);
+  static bool ShouldResistFingerprinting(bool aIsPrivateMode,
+                                         RFPTarget aTarget);
   static bool ShouldResistFingerprinting(nsIGlobalObject* aGlobalObject,
                                          RFPTarget aTarget);
   // Similar to the function above, but always allows CallerType::System
@@ -1088,7 +1089,7 @@ class nsContentUtils {
   /**
    * Returns true if this document is in a Private Browsing window.
    */
-  static bool IsInPrivateBrowsing(Document* aDoc);
+  static bool IsInPrivateBrowsing(const Document* aDoc);
 
   /**
    * Returns true if this loadGroup uses Private Browsing.
@@ -1179,7 +1180,7 @@ class nsContentUtils {
               contains the error (may be empty).
    *   @param [aLineNumber=0] (Optional) Line number within resource
               containing error.
-   *   @param [aColumnNumber=0] (Optional) Column number within resource
+   *   @param [aColumnNumber=1] (Optional) Column number within resource
               containing error.
               If aURI is null, then aDocument->GetDocumentURI() is used.
    *   @param [aLocationMode] (Optional) Specifies the behavior if
@@ -1189,7 +1190,7 @@ class nsContentUtils {
       const nsAString& aErrorText, uint32_t aErrorFlags,
       const nsACString& aCategory, uint64_t aInnerWindowID,
       nsIURI* aURI = nullptr, const nsString& aSourceLine = u""_ns,
-      uint32_t aLineNumber = 0, uint32_t aColumnNumber = 0,
+      uint32_t aLineNumber = 0, uint32_t aColumnNumber = 1,
       MissingErrorLocationMode aLocationMode = eUSE_CALLING_LOCATION);
 
   /**
@@ -1804,6 +1805,9 @@ class nsContentUtils {
                            bool aPreventScriptExecution,
                            mozilla::ErrorResult& aRv);
 
+  MOZ_CAN_RUN_SCRIPT
+  static void SetHTMLUnsafe(mozilla::dom::FragmentOrElement* aTarget,
+                            Element* aContext, const nsAString& aSource);
   /**
    * Invoke the fragment parsing algorithm (innerHTML) using the HTML parser.
    *
@@ -2316,12 +2320,6 @@ class nsContentUtils {
     return WrapNative(cx, native, cache, nullptr, vp, aAllowWrapping);
   }
 
-  /**
-   * Creates an arraybuffer from a binary string.
-   */
-  static nsresult CreateArrayBuffer(JSContext* aCx, const nsACString& aData,
-                                    JSObject** aResult);
-
   static void StripNullChars(const nsAString& aInStr, nsAString& aOutStr);
 
   /**
@@ -2524,15 +2522,15 @@ class nsContentUtils {
    */
   static bool IsSWFPlayerEnabled();
 
-  enum ContentViewerType {
+  enum DocumentViewerType {
     TYPE_UNSUPPORTED,
     TYPE_CONTENT,
     TYPE_FALLBACK,
     TYPE_UNKNOWN
   };
 
-  static already_AddRefed<nsIDocumentLoaderFactory> FindInternalContentViewer(
-      const nsACString& aType, ContentViewerType* aLoaderType = nullptr);
+  static already_AddRefed<nsIDocumentLoaderFactory> FindInternalDocumentViewer(
+      const nsACString& aType, DocumentViewerType* aLoaderType = nullptr);
 
   /**
    * This helper method returns true if the aPattern pattern matches aValue.
@@ -2657,6 +2655,23 @@ class nsContentUtils {
 
   static void SplitMimeType(const nsAString& aValue, nsString& aType,
                             nsString& aParams);
+
+  /**
+   * Check whether aContent and aOffsetInContent points in a selection range of
+   * one of ranges in aSelection.  If aSelection is collapsed, this always
+   * return false even if aContent and aOffsetInContent is same as the collapsed
+   * position.
+   *
+   * @param aSelection  The selection you want to check whether point is in a
+   *                    range of it.
+   * @param aNode       The container node of the point which you want to check.
+   * @param aOffset     The offset in aNode of the point which you want to
+   *                    check.  aNode and aOffset can be computed with
+   *                    UIEvent::GetRangeParentContentAndOffset() if you want to
+   *                    check the click point.
+   */
+  static bool IsPointInSelection(const mozilla::dom::Selection& aSelection,
+                                 const nsINode& aNode, const uint32_t aOffset);
 
   /**
    * Takes a selection, and a text control element (<input> or <textarea>), and
@@ -2882,12 +2897,6 @@ class nsContentUtils {
       const mozilla::dom::IPCTransferableData& aTransferableData,
       bool aAddDataFlavor, nsITransferable* aTransferable,
       const bool aFilterUnknownFlavors);
-
-  static nsresult IPCTransferableDataToTransferable(
-      const mozilla::dom::IPCTransferableData& aTransferableData,
-      const bool& aIsPrivateData, nsIPrincipal* aRequestingPrincipal,
-      const nsContentPolicyType& aContentPolicyType, bool aAddDataFlavor,
-      nsITransferable* aTransferable, const bool aFilterUnknownFlavors);
 
   static nsresult IPCTransferableToTransferable(
       const mozilla::dom::IPCTransferable& aIPCTransferable,
@@ -3156,16 +3165,6 @@ class nsContentUtils {
   static bool ShouldBlockReservedKeys(mozilla::WidgetKeyboardEvent* aKeyEvent);
 
   /**
-   * Returns the nsIPluginTag for the plugin we should try to use for a given
-   * MIME type.
-   *
-   * @param aMIMEType  The MIME type of the document being loaded.
-   * @param aNoFakePlugin  If false then this method should consider JS plugins.
-   */
-  static already_AddRefed<nsIPluginTag> PluginTagForType(
-      const nsCString& aMIMEType, bool aNoFakePlugin);
-
-  /**
    * Returns one of the nsIObjectLoadingContent::TYPE_ values describing the
    * content type which will be used for the given MIME type when loaded within
    * an nsObjectLoadingContent.
@@ -3178,9 +3177,6 @@ class nsContentUtils {
    */
   static uint32_t HtmlObjectContentTypeForMIMEType(const nsCString& aMIMEType,
                                                    bool aNoFakePlugin);
-
-  static already_AddRefed<nsISerialEventTarget> GetEventTargetByLoadInfo(
-      nsILoadInfo* aLoadInfo, mozilla::TaskCategory aCategory);
 
   /**
    * Detect whether a string is a local-url.
@@ -3461,6 +3457,11 @@ class nsContentUtils {
                                      nsIContent* aContent2,
                                      const nsIContent* aCommonAncestor);
 
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  static nsIContent* AttachDeclarativeShadowRoot(
+      nsIContent* aHost, mozilla::dom::ShadowRootMode aMode,
+      bool aDelegatesFocus);
+
  private:
   static bool InitializeEventTable();
 
@@ -3679,12 +3680,16 @@ class TreeOrderComparator {
 }  // namespace mozilla::dom
 
 #define NS_INTERFACE_MAP_ENTRY_TEAROFF(_interface, _allocator) \
-  if (aIID.Equals(NS_GET_IID(_interface))) {                   \
-    foundInterface = static_cast<_interface*>(_allocator);     \
-    if (!foundInterface) {                                     \
-      *aInstancePtr = nullptr;                                 \
-      return NS_ERROR_OUT_OF_MEMORY;                           \
-    }                                                          \
+  NS_INTERFACE_MAP_ENTRY_TEAROFF_AMBIGUOUS(_interface, _interface, _allocator)
+
+#define NS_INTERFACE_MAP_ENTRY_TEAROFF_AMBIGUOUS(_interface, _implClass, \
+                                                 _allocator)             \
+  if (aIID.Equals(NS_GET_IID(_interface))) {                             \
+    foundInterface = static_cast<_implClass*>(_allocator);               \
+    if (!foundInterface) {                                               \
+      *aInstancePtr = nullptr;                                           \
+      return NS_ERROR_OUT_OF_MEMORY;                                     \
+    }                                                                    \
   } else
 
 /*

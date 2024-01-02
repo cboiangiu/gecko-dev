@@ -44,6 +44,8 @@ var gExceptionPaths = [
   // Exclude the form autofill path that has been moved out of the extensions to
   // toolkit, see bug 1691821.
   "resource://gre-resources/autofill/",
+  // Localization file added programatically in FormAutofillUtils.sys.mjs
+  "resource://gre/localization/en-US/toolkit/formautofill",
 
   // Exclude all search-extensions because they aren't referenced by filename
   "resource://search-extensions/",
@@ -102,10 +104,6 @@ if (AppConstants.NIGHTLY_BUILD) {
 // referencing the listed file in a way that the test can't detect, or a
 // bug number to remove or use the file if it is indeed currently unreferenced.
 var allowlist = [
-  // toolkit/components/pdfjs/content/PdfStreamConverter.sys.mjs
-  { file: "chrome://pdf.js/locale/chrome.properties" },
-  { file: "chrome://pdf.js/locale/viewer.properties" },
-
   // security/manager/pki/resources/content/device_manager.js
   { file: "chrome://pippki/content/load_device.xhtml" },
 
@@ -201,7 +199,7 @@ var allowlist = [
   },
 
   // Files from upstream library
-  { file: "resource://pdf.js/web/debugger.js" },
+  { file: "resource://pdf.js/web/debugger.mjs" },
   { file: "resource://pdf.js/web/debugger.css" },
 
   // Starting from here, files in the allowlist are bugs that need fixing.
@@ -255,10 +253,16 @@ var allowlist = [
   {
     file: "resource://gre/localization/en-US/toolkit/updates/backgroundupdate.ftl",
   },
+
   // Bug 1713242 - referenced by aboutThirdParty.html which is only for Windows
   {
     file: "resource://gre/localization/en-US/toolkit/about/aboutThirdParty.ftl",
     platforms: ["linux", "macosx"],
+  },
+  // Bug 1854618 - referenced by aboutWebauthn.html which is only for Linux and Mac
+  {
+    file: "resource://gre/localization/en-US/toolkit/about/aboutWebauthn.ftl",
+    platforms: ["win", "android"],
   },
   // Bug 1973834 - referenced by aboutWindowsMessages.html which is only for Windows
   {
@@ -280,12 +284,22 @@ var allowlist = [
   { file: "chrome://browser/content/screenshots/download-white.svg" },
 ];
 
-if (AppConstants.NIGHTLY_BUILD && AppConstants.platform != "win") {
-  // This path is refereneced in nsFxrCommandLineHandler.cpp, which is only
-  // compiled in Windows. This path is allowed so that non-Windows builds
-  // can access the FxR UI via --chrome rather than --fxr (which includes VR-
-  // specific functionality)
-  allowlist.push({ file: "chrome://fxr/content/fxrui.html" });
+if (AppConstants.platform != "win") {
+  // toolkit/mozapps/defaultagent/Notification.cpp
+  // toolkit/mozapps/defaultagent/ScheduledTask.cpp
+  // toolkit/mozapps/defaultagent/BackgroundTask_defaultagent.sys.mjs
+  // Bug 1854425 - referenced by default browser agent which is not detected
+  allowlist.push({
+    file: "resource://app/localization/en-US/browser/backgroundtasks/defaultagent.ftl",
+  });
+
+  if (AppConstants.NIGHTLY_BUILD) {
+    // This path is refereneced in nsFxrCommandLineHandler.cpp, which is only
+    // compiled in Windows. This path is allowed so that non-Windows builds
+    // can access the FxR UI via --chrome rather than --fxr (which includes VR-
+    // specific functionality)
+    allowlist.push({ file: "chrome://fxr/content/fxrui.html" });
+  }
 }
 
 if (AppConstants.platform == "android") {
@@ -359,7 +373,6 @@ if (AppConstants.MOZ_CODE_COVERAGE) {
 }
 
 const gInterestingCategories = new Set([
-  "agent-style-sheets",
   "addon-provider-module",
   "webextension-modules",
   "webextension-scripts",

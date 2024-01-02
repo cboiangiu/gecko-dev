@@ -41,8 +41,7 @@ InterceptedHttpChannel::InterceptedHttpChannel(
       mProgressReported(0),
       mSynthesizedStreamLength(-1),
       mResumeStartPos(0),
-      mCallingStatusAndProgress(false),
-      mTimeStamps() {
+      mCallingStatusAndProgress(false) {
   // Pre-set the creation and AsyncOpen times based on the original channel
   // we are intercepting.  We don't want our extra internal redirect to mask
   // any time spent processing the channel.
@@ -418,8 +417,7 @@ void InterceptedHttpChannel::MaybeCallStatusAndProgress() {
     nsCOMPtr<nsIRunnable> r = NewRunnableMethod(
         "InterceptedHttpChannel::MaybeCallStatusAndProgress", this,
         &InterceptedHttpChannel::MaybeCallStatusAndProgress);
-    MOZ_ALWAYS_SUCCEEDS(
-        SchedulerGroup::Dispatch(TaskCategory::Other, r.forget()));
+    MOZ_ALWAYS_SUCCEEDS(SchedulerGroup::Dispatch(r.forget()));
 
     return;
   }
@@ -1021,6 +1019,76 @@ InterceptedHttpChannel::SetFetchHandlerFinish(TimeStamp aTimeStamp) {
 }
 
 NS_IMETHODIMP
+InterceptedHttpChannel::SetRemoteWorkerLaunchStart(TimeStamp aTimeStamp) {
+  mServiceWorkerLaunchStart = aTimeStamp > mTimeStamps.mInterceptionStart
+                                  ? aTimeStamp
+                                  : mTimeStamps.mInterceptionStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::SetRemoteWorkerLaunchEnd(TimeStamp aTimeStamp) {
+  mServiceWorkerLaunchEnd = aTimeStamp > mTimeStamps.mInterceptionStart
+                                ? aTimeStamp
+                                : mTimeStamps.mInterceptionStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::SetLaunchServiceWorkerStart(TimeStamp aTimeStamp) {
+  mServiceWorkerLaunchStart = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::GetLaunchServiceWorkerStart(TimeStamp* aRetVal) {
+  MOZ_ASSERT(aRetVal);
+  *aRetVal = mServiceWorkerLaunchStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::SetLaunchServiceWorkerEnd(TimeStamp aTimeStamp) {
+  mServiceWorkerLaunchEnd = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::GetLaunchServiceWorkerEnd(TimeStamp* aRetVal) {
+  MOZ_ASSERT(aRetVal);
+  *aRetVal = mServiceWorkerLaunchEnd;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::GetDispatchFetchEventStart(TimeStamp* aRetVal) {
+  MOZ_ASSERT(aRetVal);
+  *aRetVal = mTimeStamps.mInterceptionStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::GetDispatchFetchEventEnd(TimeStamp* aRetVal) {
+  MOZ_ASSERT(aRetVal);
+  *aRetVal = mTimeStamps.mFetchHandlerStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::GetHandleFetchEventStart(TimeStamp* aRetVal) {
+  MOZ_ASSERT(aRetVal);
+  *aRetVal = mTimeStamps.mFetchHandlerStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::GetHandleFetchEventEnd(TimeStamp* aRetVal) {
+  MOZ_ASSERT(aRetVal);
+  *aRetVal = mTimeStamps.mFetchHandlerFinish;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 InterceptedHttpChannel::GetIsReset(bool* aResult) {
   *aResult = mInterceptionReset;
   return NS_OK;
@@ -1194,6 +1262,20 @@ InterceptedHttpChannel::OnDataAvailable(nsIRequest* aRequest,
   }
 
   return mListener->OnDataAvailable(this, aInputStream, aOffset, aCount);
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::OnDataFinished(nsresult aStatus) {
+  if (mCanceled || !mListener) {
+    return aStatus;
+  }
+  nsCOMPtr<nsIThreadRetargetableStreamListener> retargetableListener =
+      do_QueryInterface(mListener);
+  if (retargetableListener) {
+    return retargetableListener->OnDataFinished(aStatus);
+  }
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP

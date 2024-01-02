@@ -83,7 +83,9 @@ bool EventQueue::PushNameOrDescriptionChange(AccEvent* aOrigEvent) {
         nsAutoString name;
         ENameValueFlag nameFlag = parent->Name(name);
         // If name is obtained from subtree, fire name change event.
-        if (nameFlag == eNameFromSubtree) {
+        // HTML file inputs always get part of their name from the subtree, even
+        // if the author provided a name.
+        if (nameFlag == eNameFromSubtree || parent->IsHTMLFileInput()) {
           RefPtr<AccEvent> nameChangeEvent =
               new AccEvent(nsIAccessibleEvent::EVENT_NAME_CHANGE, parent);
           pushed |= PushEvent(nameChangeEvent);
@@ -351,7 +353,9 @@ void EventQueue::ProcessEventQueue() {
     AccEvent* event = events[idx];
     uint32_t eventType = event->mEventType;
     LocalAccessible* target = event->GetAccessible();
-    if (!target || target->IsDefunct()) continue;
+    if (!target || target->IsDefunct()) {
+      continue;
+    }
 
     // Collect select changes
     if (IPCAccessibilityActive()) {
@@ -416,7 +420,9 @@ void EventQueue::ProcessEventQueue() {
 
     nsEventShell::FireEvent(event);
 
-    if (!mDocument) return;
+    if (!mDocument) {
+      return;
+    }
   }
 
   if (mDocument && IPCAccessibilityActive() &&

@@ -15,7 +15,6 @@ ChromeUtils.defineLazyGetter(this, "QuickSuggestTestUtils", () => {
   return module;
 });
 
-const GROUP_ID = "searchbarGroup";
 const CHECKBOX_ID = "searchShowSearchTermCheckbox";
 const PREF_SEARCHTERMS = "browser.urlbar.showSearchTerms.enabled";
 const PREF_FEATUREGATE = "browser.urlbar.showSearchTerms.featureGate";
@@ -95,7 +94,6 @@ add_task(async function showSearchTerms_checkbox() {
   });
   await openPreferencesViaOpenPreferencesAPI("search", { leaveOpen: true });
   let doc = gBrowser.selectedBrowser.contentDocument;
-  doc.getElementById(GROUP_ID).scrollIntoView();
 
   let option = doc.getElementById(CHECKBOX_ID);
 
@@ -141,7 +139,7 @@ add_task(async function showSearchTerms_checkbox() {
 
 /*
   When loading the search preferences panel, the
-  showSearchTerms checkbox should be disabled if
+  showSearchTerms checkbox should be hidden if
   the search bar is enabled.
 */
 add_task(async function showSearchTerms_and_searchBar_preference_load() {
@@ -158,8 +156,8 @@ add_task(async function showSearchTerms_and_searchBar_preference_load() {
 
   let checkbox = doc.getElementById(CHECKBOX_ID);
   Assert.ok(
-    checkbox.disabled,
-    "showSearchTerms checkbox should be disabled when search bar is enabled."
+    checkbox.hidden,
+    "showSearchTerms checkbox should be hidden when search bar is enabled."
   );
 
   // Clean-up.
@@ -182,19 +180,19 @@ add_task(async function showSearchTerms_and_searchBar_preference_change() {
   let doc = gBrowser.selectedBrowser.contentDocument;
 
   let checkbox = doc.getElementById(CHECKBOX_ID);
-  Assert.ok(!checkbox.disabled, "showSearchTerms checkbox should be enabled.");
+  Assert.ok(!checkbox.hidden, "showSearchTerms checkbox should be shown.");
 
   await SpecialPowers.pushPrefEnv({
     set: [["browser.search.widget.inNavBar", true]],
   });
   Assert.ok(
-    checkbox.disabled,
-    "showSearchTerms checkbox should be disabled when search bar is enabled."
+    checkbox.hidden,
+    "showSearchTerms checkbox should be hidden when search bar is enabled."
   );
 
   // Clean-up.
   await SpecialPowers.popPrefEnv();
-  Assert.ok(!checkbox.disabled, "showSearchTerms checkbox should be enabled.");
+  Assert.ok(!checkbox.hidden, "showSearchTerms checkbox should be shown.");
 
   gBrowser.removeCurrentTab();
   await SpecialPowers.popPrefEnv();

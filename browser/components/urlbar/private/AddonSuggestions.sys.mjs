@@ -47,11 +47,16 @@ export class AddonSuggestions extends BaseFeature {
     return "amo";
   }
 
+  get rustSuggestionTypes() {
+    return ["Amo"];
+  }
+
   enable(enabled) {
     if (enabled) {
       lazy.QuickSuggest.jsBackend.register(this);
     } else {
       lazy.QuickSuggest.jsBackend.unregister(this);
+      this.#suggestionsMap?.clear();
     }
   }
 
@@ -120,14 +125,19 @@ export class AddonSuggestions extends BaseFeature {
     }
 
     const { guid } =
-      suggestion.source === "remote-settings"
-        ? suggestion
-        : suggestion.custom_details.amo;
+      suggestion.source === "merino"
+        ? suggestion.custom_details.amo
+        : suggestion;
 
     const addon = await lazy.AddonManager.getAddonByID(guid);
     if (addon) {
       // Addon suggested is already installed.
       return null;
+    }
+
+    if (suggestion.source == "rust") {
+      suggestion.icon = suggestion.iconUrl;
+      delete suggestion.iconUrl;
     }
 
     // Set UTM params unless they're already defined. This allows remote
@@ -159,9 +169,6 @@ export class AddonSuggestions extends BaseFeature {
         )
       ),
       {
-        // UrlbarProviderQuickSuggest will make the result a best match only if
-        // `bestMatch.enabled` is true. Addon suggestions should always be best
-        // matches, so override the provider by setting the related properties.
         isBestMatch: true,
         suggestedIndex: 1,
         isRichSuggestion: true,

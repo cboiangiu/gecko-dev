@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import sys
+import tarfile
 
 import mozpack.path as mozpath
 from mach.decorators import Command, CommandArgument, SubCommand
@@ -176,6 +177,28 @@ def android_gradle_dependencies(command_context, args):
     return 0
 
 
+def get_maven_archive_paths(maven_folder):
+    for subdir, _, files in os.walk(maven_folder):
+        for file in files:
+            yield os.path.join(subdir, file)
+
+
+def create_maven_archive(topobjdir):
+    gradle_folder = os.path.join(topobjdir, "gradle")
+    maven_folder = os.path.join(gradle_folder, "maven")
+
+    with tarfile.open(
+        os.path.join(gradle_folder, "target.maven.tar.xz"), "w|xz"
+    ) as tar:
+        for abs_path in get_maven_archive_paths(maven_folder):
+            tar.add(
+                abs_path,
+                arcname=os.path.join(
+                    "geckoview", os.path.relpath(abs_path, maven_folder)
+                ),
+            )
+
+
 @SubCommand(
     "android",
     "archive-geckoview",
@@ -190,7 +213,11 @@ def android_archive_geckoview(command_context, args):
         verbose=True,
     )
 
-    return ret
+    if ret != 0:
+        return ret
+    create_maven_archive(command_context.topobjdir)
+
+    return 0
 
 
 @SubCommand("android", "build-geckoview_example", """Build geckoview_example """)
@@ -205,6 +232,18 @@ def android_build_geckoview_example(command_context, args):
     print(
         "Execute `mach android install-geckoview_example` "
         "to push the geckoview_example and test APKs to a device."
+    )
+
+    return 0
+
+
+@SubCommand("android", "compile-all", """Build all source files""")
+@CommandArgument("args", nargs=argparse.REMAINDER)
+def android_compile_all(command_context, args):
+    gradle(
+        command_context,
+        command_context.substs["GRADLE_ANDROID_COMPILE_ALL_TASKS"] + args,
+        verbose=True,
     )
 
     return 0

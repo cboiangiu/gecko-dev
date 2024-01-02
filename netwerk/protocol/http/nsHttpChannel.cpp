@@ -62,6 +62,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/PerfStats.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/Components.h"
@@ -315,13 +316,15 @@ void AutoRedirectVetoNotifier::ReportRedirectResult(nsresult aRv) {
 //-----------------------------------------------------------------------------
 
 nsHttpChannel::nsHttpChannel() : HttpAsyncAborter<nsHttpChannel>(this) {
-  LOG(("Creating nsHttpChannel [this=%p]\n", this));
+  LOG(("Creating nsHttpChannel [this=%p, nsIChannel=%p]\n", this,
+       static_cast<nsIChannel*>(this)));
   mChannelCreationTime = PR_Now();
   mChannelCreationTimestamp = TimeStamp::Now();
 }
 
 nsHttpChannel::~nsHttpChannel() {
-  LOG(("Destroying nsHttpChannel [this=%p]\n", this));
+  LOG(("Destroying nsHttpChannel [this=%p, nsIChannel=%p]\n", this,
+       static_cast<nsIChannel*>(this)));
 
   if (LOG_ENABLED()) {
     nsCString webExtension;
@@ -1373,6 +1376,10 @@ nsresult nsHttpChannel::SetupTransaction() {
     if (NS_WARN_IF(!gIOService->SocketProcessReady())) {
       return NS_ERROR_NOT_AVAILABLE;
     }
+    SocketProcessParent* socketProcess = SocketProcessParent::GetSingleton();
+    if (!socketProcess->CanSend()) {
+      return NS_ERROR_NOT_AVAILABLE;
+    }
 
     nsCOMPtr<nsIParentChannel> parentChannel;
     NS_QueryNotificationCallbacks(this, parentChannel);
@@ -1394,11 +1401,10 @@ nsresult nsHttpChannel::SetupTransaction() {
     transParent->SetRedirectTimestamp(mRedirectStartTimeStamp,
                                       mRedirectEndTimeStamp);
 
-    SocketProcessParent* socketProcess = SocketProcessParent::GetSingleton();
     if (socketProcess) {
-      Unused << socketProcess->SendPHttpTransactionConstructor(transParent);
+      MOZ_ALWAYS_TRUE(
+          socketProcess->SendPHttpTransactionConstructor(transParent));
     }
-
     mTransaction = transParent;
   } else {
     mTransaction = new nsHttpTransaction();
@@ -2289,6 +2295,7 @@ nsresult nsHttpChannel::ContinueProcessResponse1() {
     if (!mAuthRetryPending) {
       rv = mAuthProvider->CheckForSuperfluousAuth();
       if (NS_FAILED(rv)) {
+        mStatus = rv;
         LOG(("  CheckForSuperfluousAuth failed (%08x)",
              static_cast<uint32_t>(rv)));
       }
@@ -2501,6 +2508,7 @@ nsresult nsHttpChannel::ContinueProcessResponse3(nsresult rv) {
         if (!mAuthRetryPending) {
           rv = mAuthProvider->CheckForSuperfluousAuth();
           if (NS_FAILED(rv)) {
+            mStatus = rv;
             LOG(("CheckForSuperfluousAuth failed [rv=%x]\n",
                  static_cast<uint32_t>(rv)));
           }
@@ -5554,6 +5562,7 @@ NS_IMETHODIMP nsHttpChannel::OnAuthAvailable() {
 
 NS_IMETHODIMP nsHttpChannel::OnAuthCancelled(bool userCancel) {
   LOG(("nsHttpChannel::OnAuthCancelled [this=%p]", this));
+  MOZ_ASSERT(mAuthRetryPending, "OnAuthCancelled should not be called twice");
 
   if (mTransactionPump) {
     // If the channel is trying to authenticate to a proxy and
@@ -7117,16 +7126,15 @@ nsHttpChannel::GetRequestMethod(nsACString& aMethod) {
 // nsHttpChannel::nsIRequestObserver
 //-----------------------------------------------------------------------------
 
-static void RecordOnStartTelemetry(nsresult aStatus,
-                                   HttpTransactionShell* aTransaction,
-                                   bool aIsNavigation) {
+void nsHttpChannel::RecordOnStartTelemetry(nsresult aStatus,
+                                           bool aIsNavigation) {
   Telemetry::Accumulate(Telemetry::HTTP_CHANNEL_ONSTART_SUCCESS,
                         NS_SUCCEEDED(aStatus));
 
-  if (aTransaction) {
+  if (mTransaction) {
     Telemetry::Accumulate(
         Telemetry::HTTP3_CHANNEL_ONSTART_SUCCESS,
-        (aTransaction->IsHttp3Used()) ? "http3"_ns : "no_http3"_ns,
+        (mTransaction->IsHttp3Used()) ? "http3"_ns : "no_http3"_ns,
         NS_SUCCEEDED(aStatus));
   }
 
@@ -7156,6 +7164,24 @@ static void RecordOnStartTelemetry(nsresult aStatus,
                             TRRService::ProviderKey(),
                             static_cast<uint32_t>(state));
     }
+  }
+
+  if (nsIOService::UseSocketProcess() && mTransaction) {
+    const TimeStamp now = TimeStamp::Now();
+    TimeStamp responseEnd = mTransaction->GetResponseEnd();
+    if (!responseEnd.IsNull()) {
+      PerfStats::RecordMeasurement(PerfStats::Metric::ResponseEndSocketToParent,
+                                   now - responseEnd);
+    }
+
+    mOnStartRequestStartTime = mTransaction->GetOnStartRequestStartTime();
+    if (!mOnStartRequestStartTime.IsNull()) {
+      PerfStats::RecordMeasurement(
+          PerfStats::Metric::OnStartRequestSocketToParent,
+          now - mOnStartRequestStartTime);
+    }
+  } else {
+    mOnStartRequestStartTime = TimeStamp::Now();
   }
 }
 
@@ -7191,7 +7217,7 @@ nsHttpChannel::OnStartRequest(nsIRequest* request) {
        "]\n",
        this, request, static_cast<uint32_t>(static_cast<nsresult>(mStatus))));
 
-  RecordOnStartTelemetry(mStatus, mTransaction, IsNavigation());
+  RecordOnStartTelemetry(mStatus, IsNavigation());
 
   if (mRaceCacheWithNetwork) {
     LOG(
@@ -7287,6 +7313,8 @@ nsHttpChannel::OnStartRequest(nsIRequest* request) {
     mTransaction->GetNetworkAddresses(mSelfAddr, mPeerAddr, isTrr,
                                       mEffectiveTRRMode, mTRRSkipReason,
                                       echConfigUsed);
+    StoreResolvedByTRR(isTrr);
+    StoreEchConfigUsed(echConfigUsed);
   }
 
   // don't enter this block if we're reading from the cache...
@@ -7412,6 +7440,7 @@ nsresult nsHttpChannel::ContinueOnStartRequest4(nsresult result) {
     if (httpStatus != 401 && httpStatus != 407) {
       nsresult rv = mAuthProvider->CheckForSuperfluousAuth();
       if (NS_FAILED(rv)) {
+        mStatus = rv;
         LOG(("  CheckForSuperfluousAuth failed (%08x)",
              static_cast<uint32_t>(rv)));
       }
@@ -7734,6 +7763,17 @@ nsHttpChannel::OnStopRequest(nsIRequest* request, nsresult status) {
 
     mResponseTrailers = mTransaction->TakeResponseTrailers();
 
+    if (nsIOService::UseSocketProcess() && mTransaction) {
+      mOnStopRequestStartTime = mTransaction->GetOnStopRequestStartTime();
+      if (!mOnStopRequestStartTime.IsNull()) {
+        PerfStats::RecordMeasurement(
+            PerfStats::Metric::OnStopRequestSocketToParent,
+            TimeStamp::Now() - mOnStopRequestStartTime);
+      }
+    } else {
+      mOnStopRequestStartTime = TimeStamp::Now();
+    }
+
     // at this point, we're done with the transaction
     mTransactionTimings = mTransaction->Timings();
     mTransaction = nullptr;
@@ -7799,13 +7839,16 @@ nsresult nsHttpChannel::ContinueOnStopRequestAfterAuthRetry(
     if (mListener) {
       MOZ_ASSERT(!LoadOnStartRequestCalled(),
                  "We should not call OnStartRequest twice.");
-      nsCOMPtr<nsIStreamListener> listener(mListener);
-      StoreOnStartRequestCalled(true);
-      listener->OnStartRequest(this);
+      if (!LoadOnStartRequestCalled()) {
+        nsCOMPtr<nsIStreamListener> listener(mListener);
+        StoreOnStartRequestCalled(true);
+        listener->OnStartRequest(this);
+      }
     } else {
       StoreOnStartRequestCalled(true);
       NS_WARNING("OnStartRequest skipped because of null listener");
     }
+    mAuthRetryPending = false;
   }
 
   // if this transaction has been replaced, then bail.
@@ -7837,6 +7880,7 @@ nsresult nsHttpChannel::ContinueOnStopRequestAfterAuthRetry(
 
     nsresult rv = gHttpHandler->CompleteUpgrade(aTransWithStickyConn,
                                                 mUpgradeProtocolCallback);
+    mUpgradeProtocolCallback = nullptr;
     if (NS_FAILED(rv)) {
       LOG(("  CompleteUpgrade failed with %" PRIx32,
            static_cast<uint32_t>(rv)));
@@ -8083,13 +8127,25 @@ nsresult nsHttpChannel::ContinueOnStopRequest(nsresult aStatus, bool aIsFromNet,
 
   if (mAuthRetryPending &&
       StaticPrefs::network_auth_use_redirect_for_retries()) {
-    MOZ_ASSERT(mRedirectChannel);
     nsresult rv = OpenRedirectChannel(aStatus);
     LOG(("Opening redirect channel for auth retry %x",
          static_cast<uint32_t>(rv)));
-    mRedirectChannel = nullptr;
+    if (NS_FAILED(rv)) {
+      if (mListener) {
+        MOZ_ASSERT(!LoadOnStartRequestCalled(),
+                   "We should not call OnStartRequest twice.");
+        if (!LoadOnStartRequestCalled()) {
+          nsCOMPtr<nsIStreamListener> listener(mListener);
+          StoreOnStartRequestCalled(true);
+          listener->OnStartRequest(this);
+        }
+      } else {
+        StoreOnStartRequestCalled(true);
+        NS_WARNING("OnStartRequest skipped because of null listener");
+      }
+    }
+    mAuthRetryPending = false;
   }
-
   if (mListener) {
     LOG(("nsHttpChannel %p calling OnStopRequest\n", this));
     MOZ_ASSERT(LoadOnStartRequestCalled(),
@@ -8105,6 +8161,8 @@ nsresult nsHttpChannel::ContinueOnStopRequest(nsresult aStatus, bool aIsFromNet,
   mDNSPrefetch = nullptr;
 
   mTransactionSticky = nullptr;
+
+  mRedirectChannel = nullptr;
 
   // notify "http-on-stop-connect" observers
   gHttpHandler->OnStopRequest(this);
@@ -8258,6 +8316,16 @@ nsHttpChannel::OnDataAvailable(nsIRequest* request, nsIInputStream* input,
       seekable = nullptr;
     }
 
+    if (nsIOService::UseSocketProcess() && mTransaction) {
+      mOnDataAvailableStartTime = mTransaction->GetDataAvailableStartTime();
+      if (!mOnDataAvailableStartTime.IsNull()) {
+        PerfStats::RecordMeasurement(
+            PerfStats::Metric::OnDataAvailableSocketToParent,
+            TimeStamp::Now() - mOnDataAvailableStartTime);
+      }
+    } else {
+      mOnDataAvailableStartTime = TimeStamp::Now();
+    }
     nsresult rv =
         mListener->OnDataAvailable(this, input, mLogicalOffset, count);
     if (NS_SUCCEEDED(rv)) {
@@ -8363,6 +8431,18 @@ nsHttpChannel::CheckListenerChain() {
     rv = retargetableListener->CheckListenerChain();
   }
   return rv;
+}
+
+NS_IMETHODIMP
+nsHttpChannel::OnDataFinished(nsresult aStatus) {
+  nsCOMPtr<nsIThreadRetargetableStreamListener> listener =
+      do_QueryInterface(mListener);
+
+  if (listener) {
+    return listener->OnDataFinished(aStatus);
+  }
+
+  return NS_OK;
 }
 
 //-----------------------------------------------------------------------------
@@ -9419,8 +9499,10 @@ void nsHttpChannel::SetDoNotTrack() {
 void nsHttpChannel::SetGlobalPrivacyControl() {
   MOZ_ASSERT(NS_IsMainThread(), "Must be called on the main thread");
 
-  if (StaticPrefs::privacy_globalprivacycontrol_enabled() &&
-      StaticPrefs::privacy_globalprivacycontrol_functionality_enabled()) {
+  if (StaticPrefs::privacy_globalprivacycontrol_functionality_enabled() &&
+      (StaticPrefs::privacy_globalprivacycontrol_enabled() ||
+       (StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled() &&
+        NS_UsePrivateBrowsing(this)))) {
     // Send the header with a value of 1 to indicate opting-out
     DebugOnly<nsresult> rv =
         mRequestHead.SetHeader(nsHttp::GlobalPrivacyControl, "1"_ns, false);

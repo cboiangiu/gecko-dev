@@ -4,33 +4,24 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "base/basictypes.h"
-
 #include "BrowserChild.h"
 
 #ifdef ACCESSIBILITY
 #  include "mozilla/a11y/DocAccessibleChild.h"
 #endif
-#include <algorithm>
 #include <utility>
 
 #include "BrowserParent.h"
 #include "ContentChild.h"
-#include "DocumentInlines.h"
 #include "EventStateManager.h"
 #include "MMPrinter.h"
-#include "PermissionMessageUtils.h"
 #include "PuppetWidget.h"
 #include "StructuredCloneData.h"
 #include "UnitTransforms.h"
 #include "Units.h"
 #include "VRManagerChild.h"
-#include "ipc/nsGUIEventIPC.h"
-#include "js/JSON.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/BasePrincipal.h"
-#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/HoldDropJSObjects.h"
@@ -39,36 +30,29 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/NativeKeyBindingsType.h"
 #include "mozilla/NullPrincipal.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ProcessHangMonitor.h"
 #include "mozilla/ProfilerLabels.h"
-#include "mozilla/ResultExtensions.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_dom.h"
-#include "mozilla/StaticPrefs_fission.h"
-#include "mozilla/StaticPtr.h"
-#include "mozilla/Telemetry.h"
 #include "mozilla/TextEvents.h"
-#include "mozilla/TouchEvents.h"
 #include "mozilla/ToString.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/AutoPrintEventDispatcher.h"
 #include "mozilla/dom/BrowserBridgeChild.h"
 #include "mozilla/dom/DataTransfer.h"
-#include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/JSWindowActorChild.h"
 #include "mozilla/dom/ImageDocument.h"
 #include "mozilla/dom/LoadURIOptionsBinding.h"
-#include "mozilla/dom/MediaDocument.h"
 #include "mozilla/dom/MessageManagerBinding.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/Nullable.h"
-#include "mozilla/dom/PBrowser.h"
 #include "mozilla/dom/PaymentRequestChild.h"
+#include "mozilla/dom/PBrowser.h"
 #include "mozilla/dom/PointerEventHandler.h"
 #include "mozilla/dom/SessionStoreUtils.h"
 #include "mozilla/dom/SessionStoreChild.h"
@@ -76,11 +60,9 @@
 #include "mozilla/dom/WindowProxyHolder.h"
 #include "mozilla/gfx/CrossProcessPaint.h"
 #include "mozilla/gfx/Matrix.h"
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/PBackgroundChild.h"
-#include "mozilla/ipc/URIUtils.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/TouchActionHelper.h"
 #include "mozilla/layers/APZCTreeManagerChild.h"
@@ -94,14 +76,12 @@
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "nsBrowserStatusFilter.h"
-#include "nsColorPickerProxy.h"
 #include "nsCommandParams.h"
 #include "nsContentPermissionHelper.h"
 #include "nsContentUtils.h"
 #include "nsDeviceContext.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
-#include "nsEmbedCID.h"
 #include "nsExceptionHandler.h"
 #include "nsFilePickerProxy.h"
 #include "nsFocusManager.h"
@@ -116,7 +96,6 @@
 #include "nsISHistory.h"
 #include "nsIScreenManager.h"
 #include "nsIScriptError.h"
-#include "nsISecureBrowserUI.h"
 #include "nsIURI.h"
 #include "nsIURIMutator.h"
 #include "nsIWeakReferenceUtils.h"
@@ -127,18 +106,11 @@
 #include "nsIOpenWindowInfo.h"
 #include "nsPIDOMWindow.h"
 #include "nsPIWindowRoot.h"
-#include "nsPointerHashKeys.h"
 #include "nsPrintfCString.h"
-#include "nsQueryActor.h"
-#include "nsQueryObject.h"
 #include "nsRefreshDriver.h"
-#include "nsSandboxFlags.h"
-#include "nsString.h"
-#include "nsTHashtable.h"
 #include "nsThreadManager.h"
 #include "nsThreadUtils.h"
 #include "nsViewManager.h"
-#include "nsViewportInfo.h"
 #include "nsWebBrowser.h"
 #include "nsWindowWatcher.h"
 #include "nsIXULRuntime.h"
@@ -319,9 +291,6 @@ BrowserChild::BrowserChild(ContentChild* aManager, const TabId& aTabId,
       mIsPreservingLayers(false),
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
       mNativeWindowHandle(0),
-#endif
-#if defined(ACCESSIBILITY)
-      mTopLevelDocAccessibleChild(nullptr),
 #endif
       mCancelContentJSEpoch(0) {
   mozilla::HoldJSObjects(this);
@@ -846,7 +815,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvLoadURL(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankContentViewer(
+mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankDocumentViewer(
     nsIPrincipal* aPrincipal, nsIPrincipal* aPartitionedPrincipal) {
   if (aPrincipal->GetIsExpandedPrincipal() ||
       aPartitionedPrincipal->GetIsExpandedPrincipal()) {
@@ -855,7 +824,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankContentViewer(
   if (aPrincipal->IsSystemPrincipal() ||
       aPartitionedPrincipal->IsSystemPrincipal()) {
     MOZ_ASSERT_UNREACHABLE(
-        "Cannot use CreateAboutBlankContentViewer to create system principal "
+        "Cannot use CreateAboutBlankDocumentViewer to create system principal "
         "document in content");
     return IPC_OK();
   }
@@ -874,8 +843,8 @@ mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankContentViewer(
     return IPC_OK();
   }
 
-  docShell->CreateAboutBlankContentViewer(aPrincipal, aPartitionedPrincipal,
-                                          nullptr);
+  docShell->CreateAboutBlankDocumentViewer(aPrincipal, aPartitionedPrincipal,
+                                           nullptr);
   return IPC_OK();
 }
 
@@ -915,9 +884,9 @@ nsresult BrowserChild::CloneDocumentTreeIntoSelf(
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIContentViewer> cv;
-  ourDocShell->GetContentViewer(getter_AddRefs(cv));
-  if (NS_WARN_IF(!cv)) {
+  nsCOMPtr<nsIDocumentViewer> viewer;
+  ourDocShell->GetDocViewer(getter_AddRefs(viewer));
+  if (NS_WARN_IF(!viewer)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -941,8 +910,8 @@ nsresult BrowserChild::CloneDocumentTreeIntoSelf(
     AutoPrintEventDispatcher dispatcher(*sourceDocument);
     nsAutoScriptBlocker scriptBlocker;
     bool hasInProcessCallbacks = false;
-    clone = sourceDocument->CreateStaticClone(ourDocShell, cv, printSettings,
-                                              &hasInProcessCallbacks);
+    clone = sourceDocument->CreateStaticClone(
+        ourDocShell, viewer, printSettings, &hasInProcessCallbacks);
     if (NS_WARN_IF(!clone)) {
       return NS_ERROR_FAILURE;
     }
@@ -1006,9 +975,9 @@ nsresult BrowserChild::UpdateRemotePrintSettings(
 
   bc->PreOrderWalk([&](BrowsingContext* aBc) {
     if (nsCOMPtr<nsIDocShell> inProcess = aBc->GetDocShell()) {
-      nsCOMPtr<nsIContentViewer> cv;
-      inProcess->GetContentViewer(getter_AddRefs(cv));
-      if (NS_WARN_IF(!cv)) {
+      nsCOMPtr<nsIDocumentViewer> viewer;
+      inProcess->GetDocViewer(getter_AddRefs(viewer));
+      if (NS_WARN_IF(!viewer)) {
         return BrowsingContext::WalkFlag::Skip;
       }
       // The CanRunScript analysis is not smart enough to see across
@@ -1020,7 +989,7 @@ nsresult BrowserChild::UpdateRemotePrintSettings(
         RefPtr<RemotePrintJobChild> printJob =
             static_cast<RemotePrintJobChild*>(
                 aPrintData.remotePrintJob().AsChild());
-        cv->SetPrintSettingsForSubdocument(printSettings, printJob);
+        viewer->SetPrintSettingsForSubdocument(printSettings, printJob);
       }());
     } else if (RefPtr<BrowserBridgeChild> remoteChild =
                    BrowserBridgeChild::GetFrom(aBc->GetEmbedderElement())) {
@@ -1284,7 +1253,8 @@ mozilla::ipc::IPCResult BrowserChild::RecvSuppressDisplayport(
 
 void BrowserChild::HandleDoubleTap(const CSSPoint& aPoint,
                                    const Modifiers& aModifiers,
-                                   const ScrollableLayerGuid& aGuid) {
+                                   const ScrollableLayerGuid& aGuid,
+                                   const DoubleTapToZoomMetrics& aMetrics) {
   MOZ_LOG(
       sApzChildLog, LogLevel::Debug,
       ("Handling double tap at %s with %p %p\n", ToString(aPoint).c_str(),
@@ -1299,7 +1269,7 @@ void BrowserChild::HandleDoubleTap(const CSSPoint& aPoint,
   // Note: there is nothing to do with the modifiers here, as we are not
   // synthesizing any sort of mouse event.
   RefPtr<Document> document = GetTopLevelDocument();
-  ZoomTarget zoomTarget = CalculateRectToZoomTo(document, aPoint);
+  ZoomTarget zoomTarget = CalculateRectToZoomTo(document, aPoint, aMetrics);
   // The double-tap can be dispatched by any scroll frame (so |aGuid| could be
   // the guid of any scroll frame), but the zoom-to-rect operation must be
   // performed by the root content scroll frame, so query its identifiers
@@ -1319,7 +1289,8 @@ void BrowserChild::HandleDoubleTap(const CSSPoint& aPoint,
 mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
     const GeckoContentController::TapType& aType,
     const LayoutDevicePoint& aPoint, const Modifiers& aModifiers,
-    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId) {
+    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId,
+    const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics) {
   // IPDL doesn't hold a strong reference to protocols as they're not required
   // to be refcounted. This function can run script, which may trigger a nested
   // event loop, which may release this, so we hold a strong reference here.
@@ -1347,7 +1318,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
       }
       break;
     case GeckoContentController::TapType::eDoubleTap:
-      HandleDoubleTap(point, aModifiers, aGuid);
+      HandleDoubleTap(point, aModifiers, aGuid, *aDoubleTapToZoomMetrics);
       break;
     case GeckoContentController::TapType::eSecondTap:
       if (mBrowserChildMessageManager) {
@@ -1376,12 +1347,14 @@ mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
 mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityHandleTap(
     const GeckoContentController::TapType& aType,
     const LayoutDevicePoint& aPoint, const Modifiers& aModifiers,
-    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId) {
+    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId,
+    const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics) {
   // IPDL doesn't hold a strong reference to protocols as they're not required
   // to be refcounted. This function can run script, which may trigger a nested
   // event loop, which may release this, so we hold a strong reference here.
   RefPtr<BrowserChild> kungFuDeathGrip(this);
-  return RecvHandleTap(aType, aPoint, aModifiers, aGuid, aInputBlockId);
+  return RecvHandleTap(aType, aPoint, aModifiers, aGuid, aInputBlockId,
+                       aDoubleTapToZoomMetrics);
 }
 
 void BrowserChild::NotifyAPZStateChange(
@@ -2133,18 +2106,15 @@ mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityInsertText(
 }
 
 mozilla::ipc::IPCResult BrowserChild::RecvPasteTransferable(
-    const IPCTransferableData& aTransferableData, const bool& aIsPrivateData,
-    nsIPrincipal* aRequestingPrincipal,
-    const nsContentPolicyType& aContentPolicyType) {
+    const IPCTransferable& aTransferable) {
   nsresult rv;
   nsCOMPtr<nsITransferable> trans =
       do_CreateInstance("@mozilla.org/widget/transferable;1", &rv);
   NS_ENSURE_SUCCESS(rv, IPC_OK());
   trans->Init(nullptr);
 
-  rv = nsContentUtils::IPCTransferableDataToTransferable(
-      aTransferableData, aIsPrivateData, aRequestingPrincipal,
-      aContentPolicyType, true /* aAddDataFlavor */, trans,
+  rv = nsContentUtils::IPCTransferableToTransferable(
+      aTransferable, true /* aAddDataFlavor */, trans,
       false /* aFilterUnknownFlavors */);
   NS_ENSURE_SUCCESS(rv, IPC_OK());
 
@@ -2942,29 +2912,6 @@ void BrowserChild::DidComposite(mozilla::layers::TransactionId aTransactionId,
   }
 }
 
-void BrowserChild::DidRequestComposite(const TimeStamp& aCompositeReqStart,
-                                       const TimeStamp& aCompositeReqEnd) {
-  nsCOMPtr<nsIDocShell> docShellComPtr = do_GetInterface(WebNavigation());
-  if (!docShellComPtr) {
-    return;
-  }
-
-  nsDocShell* docShell = static_cast<nsDocShell*>(docShellComPtr.get());
-
-  if (TimelineConsumers::HasConsumer(docShell)) {
-    // Since we're assuming that it's impossible for content JS to directly
-    // trigger a synchronous paint, we can avoid capturing a stack trace here,
-    // which means we won't run into JS engine reentrancy issues like bug
-    // 1310014.
-    TimelineConsumers::AddMarkerForDocShell(
-        docShell, "CompositeForwardTransaction", aCompositeReqStart,
-        MarkerTracingType::START, MarkerStackRequest::NO_STACK);
-    TimelineConsumers::AddMarkerForDocShell(
-        docShell, "CompositeForwardTransaction", aCompositeReqEnd,
-        MarkerTracingType::END, MarkerStackRequest::NO_STACK);
-  }
-}
-
 void BrowserChild::ClearCachedResources() {
   MOZ_ASSERT(mPuppetWidget);
   RefPtr<WebRenderLayerManager> lm =
@@ -3704,7 +3651,10 @@ void BrowserChild::NotifyContentBlockingEvent(
     const nsTArray<nsCString>& aTrackingFullHashes,
     const Maybe<
         mozilla::ContentBlockingNotifier::StorageAccessPermissionGrantedReason>&
-        aReason) {
+        aReason,
+    const Maybe<ContentBlockingNotifier::CanvasFingerprinter>&
+        aCanvasFingerprinter,
+    const Maybe<bool> aCanvasFingerprinterKnownText) {
   if (!IPCOpen()) {
     return;
   }
@@ -3713,7 +3663,8 @@ void BrowserChild::NotifyContentBlockingEvent(
   if (NS_SUCCEEDED(PrepareRequestData(aChannel, requestData))) {
     Unused << SendNotifyContentBlockingEvent(
         aEvent, requestData, aBlocked, PromiseFlatCString(aTrackingOrigin),
-        aTrackingFullHashes, aReason);
+        aTrackingFullHashes, aReason, aCanvasFingerprinter,
+        aCanvasFingerprinterKnownText);
   }
 }
 
@@ -3763,7 +3714,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(BrowserChildMessageManager)
   NS_INTERFACE_MAP_ENTRY(nsIMessageSender)
-  NS_INTERFACE_MAP_ENTRY(ContentFrameMessageManager)
+  NS_INTERFACE_MAP_ENTRY_CONCRETE(ContentFrameMessageManager)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -3808,21 +3759,10 @@ already_AddRefed<nsIDocShell> BrowserChildMessageManager::GetDocShell(
 
 already_AddRefed<nsIEventTarget>
 BrowserChildMessageManager::GetTabEventTarget() {
-  nsCOMPtr<nsIEventTarget> target = EventTargetFor(TaskCategory::Other);
-  return target.forget();
+  return do_AddRef(GetMainThreadSerialEventTarget());
 }
 
 nsresult BrowserChildMessageManager::Dispatch(
-    TaskCategory aCategory, already_AddRefed<nsIRunnable>&& aRunnable) {
-  return DispatcherTrait::Dispatch(aCategory, std::move(aRunnable));
-}
-
-nsISerialEventTarget* BrowserChildMessageManager::EventTargetFor(
-    TaskCategory aCategory) const {
-  return DispatcherTrait::EventTargetFor(aCategory);
-}
-
-AbstractThread* BrowserChildMessageManager::AbstractMainThreadFor(
-    TaskCategory aCategory) {
-  return DispatcherTrait::AbstractMainThreadFor(aCategory);
+    already_AddRefed<nsIRunnable>&& aRunnable) const {
+  return SchedulerGroup::Dispatch(std::move(aRunnable));
 }

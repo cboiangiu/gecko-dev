@@ -3,6 +3,7 @@ support-files = [
   "head.js",
   "shared-head.js",
   "translations-test.mjs",
+  "translations-tester-empty-pdf-file.pdf",
   "translations-tester-en.html",
   "translations-tester-es.html",
   "translations-tester-es-2.html",
@@ -35,11 +36,15 @@ skip-if = ["os == 'linux'"]  # Bug 1821461
 
 ["browser_translations_actor_sync_models.js"]
 
+["browser_translations_actor_versioning.js"]
+
 ["browser_translations_full_page.js"]
 
 ["browser_translations_lang_tags.js"]
 
 ["browser_translations_remote_settings.js"]
+
+["browser_translations_pdf_is_disabled.js"]
 
 ["browser_translations_shadow_dom.js"]
 

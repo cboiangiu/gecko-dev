@@ -98,10 +98,6 @@ bool Gecko_MediaFeatures_IsResourceDocument(const Document* aDocument) {
   return aDocument->IsResourceDoc();
 }
 
-bool Gecko_MediaFeatures_ShouldAvoidNativeTheme(const Document* aDocument) {
-  return aDocument->ShouldAvoidNativeTheme();
-}
-
 bool Gecko_MediaFeatures_UseOverlayScrollbars(const Document* aDocument) {
   nsPresContext* pc = aDocument->GetPresContext();
   return pc && pc->UseOverlayScrollbars();
@@ -279,7 +275,7 @@ bool Gecko_MediaFeatures_PrefersReducedTransparency(const Document* aDocument) {
 
 StylePrefersColorScheme Gecko_MediaFeatures_PrefersColorScheme(
     const Document* aDocument, bool aUseContent) {
-  auto scheme = aUseContent ? LookAndFeel::PreferredColorSchemeForContent()
+  auto scheme = aUseContent ? PreferenceSheet::ContentPrefs().mColorScheme
                             : aDocument->PreferredColorScheme();
   return scheme == ColorScheme::Dark ? StylePrefersColorScheme::Dark
                                      : StylePrefersColorScheme::Light;
@@ -402,4 +398,10 @@ PointerCapabilities Gecko_MediaFeatures_AllPointerCapabilities(
     const Document* aDocument) {
   return GetPointerCapabilities(aDocument,
                                 LookAndFeel::IntID::AllPointerCapabilities);
+}
+
+StyleGtkThemeFamily Gecko_MediaFeatures_GtkThemeFamily() {
+  static_assert(int32_t(StyleGtkThemeFamily::Unknown) == 0);
+  return StyleGtkThemeFamily(
+      LookAndFeel::GetInt(LookAndFeel::IntID::GTKThemeFamily));
 }

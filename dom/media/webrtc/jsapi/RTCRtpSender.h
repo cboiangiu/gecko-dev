@@ -95,6 +95,7 @@ class RTCRtpSender : public nsISupports,
   void SetTrack(const RefPtr<MediaStreamTrack>& aTrack);
   void Shutdown();
   void BreakCycles();
+  void Unlink();
   // Terminal state, reached through stopping RTCRtpTransceiver.
   void Stop();
   bool HasTrack(const dom::MediaStreamTrack* aTrack) const;
@@ -198,6 +199,12 @@ class RTCRtpSender : public nsISupports,
   bool mHaveFailedBecauseStaleTransactionId = false;
   bool mHaveFailedBecauseNoEncodings = false;
   bool mHaveFailedBecauseOtherError = false;
+
+  // Limits logging of codec information
+  bool mHaveLoggedUlpfecInfo = false;
+  bool mHaveLoggedOtherFec = false;
+  bool mHaveLoggedVideoPreferredCodec = false;
+  bool mHaveLoggedAudioPreferredCodec = false;
 
   RefPtr<dom::RTCDTMFSender> mDtmf;
 

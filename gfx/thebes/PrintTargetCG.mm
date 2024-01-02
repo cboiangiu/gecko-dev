@@ -8,7 +8,7 @@
 #include "cairo.h"
 #include "cairo-quartz.h"
 #include "mozilla/gfx/HelpersCairo.h"
-#include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPrefs_print.h"
 #include "nsObjCExceptions.h"
 #include "nsString.h"
 #include "nsIOutputStream.h"
@@ -227,18 +227,44 @@ nsresult PrintTargetCG::AbortPrinting() {
 nsresult PrintTargetCG::BeginPage(const IntSize& aSizeInPoints) {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
+  unsigned int width;
+  unsigned int height;
+  if (StaticPrefs::
+          print_save_as_pdf_use_page_rule_size_as_paper_size_enabled()) {
+    width = static_cast<unsigned int>(aSizeInPoints.width);
+    height = static_cast<unsigned int>(aSizeInPoints.height);
+  } else {
+    width = static_cast<unsigned int>(mSize.width);
+    height = static_cast<unsigned int>(mSize.height);
+  }
+
   CGContextRef context;
   if (mPrintToStreamContext) {
-    CGContextBeginPage(mPrintToStreamContext, nullptr);
+    CGRect bounds = CGRectMake(0, 0, width, height);
+    CGContextBeginPage(mPrintToStreamContext, &bounds);
     context = mPrintToStreamContext;
   } else {
     // XXX Why are we calling this if we don't check the return value?
     PMSessionError(mPrintSession);
 
-    if (StaticPrefs::layout_css_page_orientation_enabled()) {
+    // XXX For mixed sheet sizes that aren't simply an orientation switch, we
+    // will want to be able to pass a sheet size here, using something like:
+    //   PMRect bounds = { 0, 0, double(height), double(width) };
+    // But the docs for PMSessionBeginPageNoDialog's `pageFrame` parameter say:
+    //   "You should pass NULL, as this parameter is currentlyunsupported."
+    // https://developer.apple.com/documentation/applicationservices/1463416-pmsessionbeginpagenodialog?language=objc
+    // And indeed, it doesn't appear to do anything.
+    // (It seems weird that CGContextBeginPage (above) supports passing a rect,
+    // and that that works for setting sheet sizes in PDF output, but the Core
+    // Printing API does not.)
+    // We can always switch to PrintTargetPDF - we use that for Windows/Linux
+    // anyway. But Core Graphics output is better than Cairo's in some cases.
+    //
+    // For now, we support switching sheet orientation only:
+    if (StaticPrefs::
+            print_save_as_pdf_use_page_rule_size_as_paper_size_enabled()) {
       ::PMOrientation pageOrientation =
-          aSizeInPoints.width < aSizeInPoints.height ? kPMPortrait
-                                                     : kPMLandscape;
+          width < height ? kPMPortrait : kPMLandscape;
       ::PMSetOrientation(mPageFormat, pageOrientation, kPMUnlocked);
       // We don't need to reset the orientation, since we set it for every page.
     }
@@ -255,16 +281,6 @@ nsresult PrintTargetCG::BeginPage(const IntSize& aSizeInPoints) {
     if (!context) {
       return NS_ERROR_FAILURE;
     }
-  }
-
-  unsigned int width;
-  unsigned int height;
-  if (StaticPrefs::layout_css_page_orientation_enabled()) {
-    width = static_cast<unsigned int>(aSizeInPoints.width);
-    height = static_cast<unsigned int>(aSizeInPoints.height);
-  } else {
-    width = static_cast<unsigned int>(mSize.width);
-    height = static_cast<unsigned int>(mSize.height);
   }
 
   // Initially, origin is at bottom-left corner of the paper.

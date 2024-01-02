@@ -9,7 +9,7 @@
  * separators.  Multiple bookmarks for the same URL are allowed.
  *
  * Note that if you are handling bookmarks operations in the UI, you should
- * not use this API directly, but rather use PlacesTransactions.jsm, so that
+ * not use this API directly, but rather use PlacesTransactions, so that
  * any operation is undo/redo-able.
  *
  * Each bookmark-item is represented by an object having the following
@@ -305,6 +305,9 @@ export var Bookmarks = Object.freeze({
           hidden: itemDetail.hidden,
           visitCount: itemDetail.visitCount,
           lastVisitDate: itemDetail.lastVisitDate,
+          targetFolderGuid: itemDetail.targetFolderGuid,
+          targetFolderItemId: itemDetail.targetFolderItemId,
+          targetFolderTitle: itemDetail.targetFolderTitle,
         }),
       ];
 
@@ -624,6 +627,9 @@ export var Bookmarks = Object.freeze({
             hidden: itemDetail.hidden,
             visitCount: itemDetail.visitCount,
             lastVisitDate: itemDetail.lastVisitDate,
+            targetFolderGuid: itemDetail.targetFolderGuid,
+            targetFolderItemId: itemDetail.targetFolderItemId,
+            targetFolderTitle: itemDetail.targetFolderTitle,
           })
         );
 
@@ -957,6 +963,7 @@ export var Bookmarks = Object.freeze({
                 frecency: details.frecency,
                 hidden: details.hidden,
                 visitCount: details.visitCount,
+                dateAdded: updatedItem.dateAdded ?? Date.now(),
                 lastVisitDate: details.lastVisitDate,
               })
             );
@@ -1202,6 +1209,7 @@ export var Bookmarks = Object.freeze({
               frecency: details.frecency,
               hidden: details.hidden,
               visitCount: details.visitCount,
+              dateAdded: updatedItem.dateAdded,
               lastVisitDate: details.lastVisitDate,
             })
           );
@@ -1800,6 +1808,7 @@ export var Bookmarks = Object.freeze({
             frecency: details.frecency,
             hidden: details.hidden,
             visitCount: details.visitCount,
+            dateAdded: child.dateAdded,
             lastVisitDate: details.lastVisitDate,
           })
         );
@@ -2460,30 +2469,31 @@ async function fetchBookmarksByTags(info, options = {}) {
               h.url AS url, b.id AS _id, b.parent AS _parentId,
               NULL AS _childCount,
               p.parent AS _grandParentId, b.syncStatus AS _syncStatus,
-              (SELECT group_concat(pp.title)
+              (SELECT group_concat(pp.title ORDER BY pp.title)
                FROM moz_bookmarks bb
-               JOIN moz_bookmarks pp ON bb.parent = pp.id
-               JOIN moz_bookmarks gg ON pp.parent = gg.id AND gg.guid = ?
-               WHERE bb.fk = h.id) AS _tags
+               JOIN moz_bookmarks pp ON pp.id = bb.parent
+               JOIN moz_bookmarks gg ON gg.id = pp.parent
+               WHERE bb.fk = h.id
+               AND gg.guid = '${Bookmarks.tagsGuid}'
+              ) AS _tags
        FROM moz_bookmarks b
        JOIN moz_bookmarks p ON p.id = b.parent
        JOIN moz_bookmarks g ON g.id = p.parent
        JOIN moz_places h ON h.id = b.fk
-       WHERE g.guid <> ? AND b.fk IN (
+       WHERE g.guid <> '${Bookmarks.tagsGuid}'
+       AND b.fk IN (
           SELECT b2.fk FROM moz_bookmarks b2
           JOIN moz_bookmarks p2 ON p2.id = b2.parent
           JOIN moz_bookmarks g2 ON g2.id = p2.parent
-          WHERE g2.guid = ?
-                AND lower(p2.title) IN (
-                  ${new Array(info.tags.length).fill("?").join(",")}
-                )
+          WHERE g2.guid = '${Bookmarks.tagsGuid}'
+          AND lower(p2.title) IN (
+            ${new Array(info.tags.length).fill("?").join(",")}
+          )
           GROUP BY b2.fk HAVING count(*) = ${info.tags.length}
        )
        ORDER BY b.lastModified DESC
       `,
-      [Bookmarks.tagsGuid, Bookmarks.tagsGuid, Bookmarks.tagsGuid].concat(
-        info.tags.map(t => t.toLowerCase())
-      )
+      info.tags.map(t => t.toLowerCase())
     );
 
     return rows.length ? rowsToItemsArray(rows) : null;
@@ -2538,11 +2548,13 @@ async function fetchBookmarksByURL(info, options = {}) {
               h.url AS url, b.id AS _id, b.parent AS _parentId,
               NULL AS _childCount, /* Unused for now */
               p.parent AS _grandParentId, b.syncStatus AS _syncStatus,
-              (SELECT group_concat(pp.title)
+              (SELECT group_concat(pp.title ORDER BY pp.title)
                FROM moz_bookmarks bb
                JOIN moz_bookmarks pp ON bb.parent = pp.id
-               JOIN moz_bookmarks gg ON pp.parent = gg.id AND gg.guid = :tagsGuid
-               WHERE bb.fk = h.id) AS _tags
+               JOIN moz_bookmarks gg ON pp.parent = gg.id
+               WHERE bb.fk = h.id
+               AND gg.guid = '${Bookmarks.tagsGuid}'
+              ) AS _tags
       FROM moz_bookmarks b
       JOIN moz_bookmarks p ON p.id = b.parent
       JOIN moz_places h ON h.id = b.fk
@@ -2553,7 +2565,6 @@ async function fetchBookmarksByURL(info, options = {}) {
       {
         url: info.url.href,
         tagsFolderId: lazy.PlacesUtils.tagsFolderId,
-        tagsGuid: Bookmarks.tagsGuid,
       }
     );
 
@@ -3332,17 +3343,17 @@ async function getBookmarkDetailMap(aGuids) {
             IFNULL(h.visit_count, 0),
             h.last_visit_date,
             (
-              SELECT GROUP_CONCAT(t.title, ',')
-              FROM moz_bookmarks t
-              LEFT JOIN moz_bookmarks ref ON ref.fk = h.id
-              WHERE t.id = +ref.parent
-                AND t.parent = (
-                  SELECT id FROM moz_bookmarks
-                  WHERE guid = '${Bookmarks.tagsGuid}'
-                )
-            )
+              SELECT group_concat(pp.title ORDER BY pp.title)
+              FROM moz_bookmarks bb
+              JOIN moz_bookmarks pp ON pp.id = bb.parent
+              JOIN moz_bookmarks gg ON gg.id = pp.parent
+              WHERE bb.fk = h.id
+              AND gg.guid = '${Bookmarks.tagsGuid}'
+            ),
+            t.guid, t.id, t.title
           FROM moz_bookmarks b
           LEFT JOIN moz_places h ON h.id = b.fk
+          LEFT JOIN moz_bookmarks t ON t.guid = target_folder_guid(h.url)
           WHERE b.guid IN (${lazy.PlacesUtils.sqlBindPlaceholders(aGuids)})
           `,
         aGuids
@@ -3363,7 +3374,10 @@ async function getBookmarkDetailMap(aGuids) {
               lastVisitDate: lastVisitDate
                 ? lazy.PlacesUtils.toDate(lastVisitDate).getTime()
                 : null,
-              tags: row.getResultByIndex(7) ?? "",
+              tags: row.getResultByIndex(7),
+              targetFolderGuid: row.getResultByIndex(8),
+              targetFolderItemId: row.getResultByIndex(9),
+              targetFolderTitle: row.getResultByIndex(10),
             },
           ];
         })

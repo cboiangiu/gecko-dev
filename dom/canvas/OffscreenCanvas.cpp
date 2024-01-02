@@ -66,11 +66,15 @@ OffscreenCanvas::OffscreenCanvas(
       mDisplay(aDisplay) {}
 
 OffscreenCanvas::~OffscreenCanvas() {
+  Destroy();
+  NS_ReleaseOnMainThread("OffscreenCanvas::mExpandedReader",
+                         mExpandedReader.forget());
+}
+
+void OffscreenCanvas::Destroy() {
   if (mDisplay) {
     mDisplay->DestroyCanvas();
   }
-  NS_ReleaseOnMainThread("OffscreenCanvas::mExpandedReader",
-                         mExpandedReader.forget());
 }
 
 JSObject* OffscreenCanvas::WrapObject(JSContext* aCx,
@@ -144,6 +148,23 @@ void OffscreenCanvas::SetHeight(uint32_t aHeight, ErrorResult& aRv) {
   }
 
   mHeight = aHeight;
+  CanvasAttrChanged();
+}
+
+void OffscreenCanvas::SetSize(const nsIntSize& aSize, ErrorResult& aRv) {
+  if (mNeutered) {
+    aRv.ThrowInvalidStateError(
+        "Cannot set dimensions of placeholder canvas transferred to worker.");
+    return;
+  }
+
+  if (NS_WARN_IF(aSize.IsEmpty())) {
+    aRv.ThrowRangeError("OffscreenCanvas size is empty, must be non-empty.");
+    return;
+  }
+
+  mWidth = aSize.width;
+  mHeight = aSize.height;
   CanvasAttrChanged();
 }
 
@@ -253,6 +274,9 @@ already_AddRefed<nsICanvasRenderingContextInternal>
 OffscreenCanvas::CreateContext(CanvasContextType aContextType) {
   RefPtr<nsICanvasRenderingContextInternal> ret =
       CanvasRenderingContextHelper::CreateContext(aContextType);
+  if (NS_WARN_IF(!ret)) {
+    return nullptr;
+  }
 
   ret->SetOffscreenCanvas(this);
   return ret.forget();
@@ -570,7 +594,7 @@ NS_IMPL_ADDREF_INHERITED(OffscreenCanvas, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(OffscreenCanvas, DOMEventTargetHelper)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(OffscreenCanvas)
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, EventTarget)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 }  // namespace mozilla::dom

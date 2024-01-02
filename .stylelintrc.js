@@ -47,16 +47,15 @@ module.exports = {
       {
         ignoreFunctions: [
           "light-dark" /* Used for color-scheme dependent colors */,
-          "-moz-image-rect" /* Used for cropping images */,
           "add" /* Used in mathml.css */,
         ],
       },
     ],
 
     "max-nesting-depth": [
-      8,
+      3,
       {
-        ignore: ["blockless-at-rules", "pseudo-classes"],
+        ignore: ["blockless-at-rules"],
       },
     ],
 
@@ -244,6 +243,12 @@ module.exports = {
         ignorePseudoClasses: ["popover-open"],
       },
     ],
+    "selector-pseudo-element-no-unknown": [
+      true,
+      {
+        ignorePseudoElements: ["slider-track", "slider-fill", "slider-thumb"],
+      },
+    ],
   },
 
   overrides: [
@@ -253,7 +258,11 @@ module.exports = {
       extends: "stylelint-config-recommended-scss",
     },
     {
-      files: "browser/components/newtab/**",
+      files: [
+        "browser/components/aboutwelcome/**",
+        "browser/components/asrouter/**",
+        "browser/components/newtab/**",
+      ],
       customSyntax: "postcss-scss",
       extends: "stylelint-config-standard-scss",
       rules: {

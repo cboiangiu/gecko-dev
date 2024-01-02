@@ -33,11 +33,18 @@ const listeners = new Set();
 // Worker codepath in DevTools will pass a custom Debugger instance.
 const customLazy = {
   get Debugger() {
-    // When this code runs in the worker thread, this module runs within
-    // the WorkerDebuggerGlobalScope and have immediate access to Debugger class.
-    // (while we can't use ChromeUtils.importESModule)
+    // When this code runs in the worker thread, loaded via `loadSubScript`
+    // (ex: browser_worker_tracer.js and WorkerDebugger.tracer.js),
+    // this module runs within the WorkerDebuggerGlobalScope and have immediate access to Debugger class.
     if (globalThis.Debugger) {
       return globalThis.Debugger;
+    }
+    // When this code runs in the worker thread, loaded via `require`
+    // (ex: from tracer actor module),
+    // this module no longer has WorkerDebuggerGlobalScope as global,
+    // but has to use require() to pull Debugger.
+    if (typeof isWorker == "boolean") {
+      return require("Debugger");
     }
     const { addDebuggerToGlobal } = ChromeUtils.importESModule(
       "resource://gre/modules/jsdebugger.sys.mjs"
@@ -83,6 +90,18 @@ const customLazy = {
  *        Optional spidermonkey's Debugger instance.
  *        This allows devtools to pass a custom instance and ease worker support
  *        where we can't load jsdebugger.sys.mjs.
+ * @param {Boolean} options.loggingMethod
+ *        Optional setting to use something else than `dump()` to log traces to stdout.
+ *        This is mostly used by tests.
+ * @param {Boolean} options.traceDOMEvents
+ *        Optional setting to enable tracing all the DOM events being going through
+ *        dom/events/EventListenerManager.cpp's `EventListenerManager`.
+ * @param {Boolean} options.traceValues
+ *        Optional setting to enable tracing all function call values as well,
+ *        as returned values (when we do log returned frames).
+ * @param {Boolean} options.traceOnNextInteraction
+ *        Optional setting to enable when the tracing should only start when the
+ *        use starts interacting with the page. i.e. on next keydown or mousedown.
  */
 class JavaScriptTracer {
   constructor(options) {
@@ -91,18 +110,117 @@ class JavaScriptTracer {
     // By default, we would trace only JavaScript related to caller's global.
     // As there is no way to compute the caller's global default to the global of the
     // mandatory options argument.
-    const global = options.global || Cu.getGlobalForObject(options);
+    this.tracedGlobal = options.global || Cu.getGlobalForObject(options);
 
     // Instantiate a brand new Debugger API so that we can trace independently
     // of all other DevTools operations. i.e. we can pause while tracing without any interference.
-    this.dbg = this.makeDebugger(global);
+    this.dbg = this.makeDebugger();
 
     this.depth = 0;
     this.prefix = options.prefix ? `${options.prefix}: ` : "";
 
+    this.loggingMethod = options.loggingMethod;
+    if (!this.loggingMethod) {
+      // On workers, `dump` can't be called with JavaScript on another object,
+      // so bind it.
+      this.loggingMethod =
+        globalThis.constructor.name == "WorkerDebuggerGlobalScope"
+          ? // eslint-disable-next-line mozilla/reject-globalThis-modification
+            dump.bind(globalThis)
+          : dump;
+    }
+
+    this.traceDOMEvents = !!options.traceDOMEvents;
+    this.traceValues = !!options.traceValues;
+
+    // This feature isn't supported on Workers as they aren't involving user events
+    if (options.traceOnNextInteraction && typeof isWorker !== "boolean") {
+      this.abortController = new AbortController();
+      const listener = () => {
+        this.abortController.abort();
+        // Avoid tracing if the users asked to stop tracing.
+        if (this.dbg) {
+          this.#startTracing();
+        }
+      };
+      const eventOptions = {
+        signal: this.abortController.signal,
+        capture: true,
+      };
+      // Register the event listener on the Chrome Event Handler in order to receive the event first.
+      const eventHandler = this.tracedGlobal.docShell.chromeEventHandler;
+      eventHandler.addEventListener("mousedown", listener, eventOptions);
+      eventHandler.addEventListener("keydown", listener, eventOptions);
+    } else {
+      this.#startTracing();
+    }
+
+    // In any case, we consider the tracing as started
+    this.notifyToggle(true);
+  }
+
+  #startTracing() {
     this.dbg.onEnterFrame = this.onEnterFrame;
 
-    this.notifyToggle(true);
+    if (this.traceDOMEvents) {
+      this.startTracingDOMEvents();
+    }
+  }
+
+  startTracingDOMEvents() {
+    this.debuggerNotificationObserver = new DebuggerNotificationObserver();
+    this.eventListener = this.eventListener.bind(this);
+    this.debuggerNotificationObserver.addListener(this.eventListener);
+    this.debuggerNotificationObserver.connect(this.tracedGlobal);
+
+    this.currentDOMEvent = null;
+  }
+
+  stopTracingDOMEvents() {
+    if (this.debuggerNotificationObserver) {
+      this.debuggerNotificationObserver.removeListener(this.eventListener);
+      this.debuggerNotificationObserver.disconnect(this.tracedGlobal);
+      this.debuggerNotificationObserver = null;
+    }
+    this.currentDOMEvent = null;
+  }
+
+  /**
+   * Called by DebuggerNotificationObserver interface when a DOM event start being notified
+   * and after it has been notified.
+   *
+   * @param {DebuggerNotification} notification
+   *        Info about the DOM event. See the related idl file.
+   */
+  eventListener(notification) {
+    // For each event we get two notifications.
+    // One just before firing the listeners and another one just after.
+    //
+    // Update `this.currentDOMEvent` to be refering to the event name
+    // while the DOM event is being notified. It will be null the rest of the time.
+    //
+    // We don't need to maintain a stack of events as that's only consumed by onEnterFrame
+    // which only cares about the very lastest event being currently trigerring some code.
+    if (notification.phase == "pre") {
+      // We get notified about "real" DOM event, but also when some particular callbacks are called like setTimeout.
+      if (notification.type == "domEvent") {
+        let { type } = notification.event;
+        if (!type) {
+          // In the Worker thread, `notification.event` is an opaque wrapper.
+          // In other threads it is a Xray wrapper.
+          // Because of this difference, we have to fallback to use the Debugger.Object API.
+          type = this.dbg
+            .makeGlobalObjectReference(notification.global)
+            .makeDebuggeeValue(notification.event)
+            .getProperty("type").return;
+        }
+        this.currentDOMEvent = `DOM(${type})`;
+      } else {
+        this.currentDOMEvent = notification.type;
+      }
+    } else {
+      this.currentDOMEvent = null;
+    }
   }
 
   stopTracing() {
@@ -116,6 +234,16 @@ class JavaScriptTracer {
     this.dbg = null;
     this.depth = 0;
     this.options = null;
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+
+    if (this.traceDOMEvents) {
+      this.stopTracingDOMEvents();
+    }
+
+    this.tracedGlobal = null;
 
     this.notifyToggle(false);
   }
@@ -128,15 +256,12 @@ class JavaScriptTracer {
    * Instantiate a Debugger API instance dedicated to each Tracer instance.
    * It will notably be different from the instance used in DevTools.
    * This allows to implement tracing independently of DevTools.
-   *
-   * @param {Object} global
-   *        The global to trace.
    */
-  makeDebugger(global) {
+  makeDebugger() {
     // When this code runs in the worker thread, Cu isn't available
     // and we don't have system principal anyway in this context.
     const { isSystemPrincipal } =
-      typeof Cu == "object" ? Cu.getObjectPrincipal(global) : {};
+      typeof Cu == "object" ? Cu.getObjectPrincipal(this.tracedGlobal) : {};
 
     // When debugging the system modules, we have to use a special instance
     // of Debugger loaded in a distinct system global.
@@ -144,8 +269,9 @@ class JavaScriptTracer {
       ? new customLazy.DistinctCompartmentDebugger()
       : new customLazy.Debugger();
 
-    // By default, only track the global passed as argument
-    dbg.addDebuggee(global);
+    // For now, we only trace calls for one particular global at a time.
+    // See the constructor for its definition.
+    dbg.addDebuggee(this.tracedGlobal);
 
     return dbg;
   }
@@ -166,9 +292,9 @@ class JavaScriptTracer {
     }
     if (shouldLogToStdout) {
       if (state) {
-        dump(this.prefix + "Start tracing JavaScript\n");
+        this.loggingMethod(this.prefix + "Start tracing JavaScript\n");
       } else {
-        dump(this.prefix + "Stop tracing JavaScript\n");
+        this.loggingMethod(this.prefix + "Stop tracing JavaScript\n");
       }
     }
   }
@@ -185,7 +311,7 @@ class JavaScriptTracer {
       }
     }
     if (shouldLogToStdout) {
-      dump(
+      this.loggingMethod(
         this.prefix +
           "Looks like an infinite recursion? We stopped the JavaScript tracer, but code may still be running!\n"
       );
@@ -225,6 +351,7 @@ class JavaScriptTracer {
               depth: this.depth,
               formatedDisplayName,
               prefix: this.prefix,
+              currentDOMEvent: this.currentDOMEvent,
             });
           }
         }
@@ -238,6 +365,16 @@ class JavaScriptTracer {
           frame.offset
         );
         const padding = "—".repeat(this.depth + 1);
+
+        // If we are tracing DOM events and we are in middle of an event,
+        // and are logging the topmost frame,
+        // then log a preliminary dedicated line to mention that event type.
+        if (this.currentDOMEvent && this.depth == 0) {
+          this.loggingMethod(
+            this.prefix + padding + this.currentDOMEvent + "\n"
+          );
+        }
+
         // Use a special URL, including line and column numbers which Firefox
         // interprets as to be opened in the already opened DevTool's debugger
         const href = `${script.source.url}:${lineNumber}:${columnNumber}`;
@@ -246,11 +383,38 @@ class JavaScriptTracer {
         // See https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
         const urlLink = `\x1B]8;;${href}\x1B\\${href}\x1B]8;;\x1B\\`;
 
-        const message = `${padding}[${
+        let message = `${padding}[${
           frame.implementation
         }]—> ${urlLink} - ${formatDisplayName(frame)}`;
 
-        dump(this.prefix + message + "\n");
+        // Log arguments, but only when this feature is enabled as it introduces
+        // some significant performance and visual overhead.
+        // Also prevent trying to log function call arguments if we aren't logging a frame
+        // with arguments (e.g. Debugger evaluation frames, when executing from the console)
+        if (this.traceValues && frame.arguments) {
+          message += "(";
+          for (let i = 0, l = frame.arguments.length; i < l; i++) {
+            const arg = frame.arguments[i];
+            // Debugger.Frame.arguments contains either a Debugger.Object or primitive object
+            if (arg?.unsafeDereference) {
+              // Special case classes as they can't be easily differentiated in pure JavaScript
+              if (arg.isClassConstructor) {
+                message += "class " + arg.name;
+              } else {
+                message += objectToString(arg.unsafeDereference());
+              }
+            } else {
+              message += primitiveToString(arg);
+            }
+
+            if (i < l - 1) {
+              message += ", ";
+            }
+          }
+          message += ")";
+        }
+
+        this.loggingMethod(this.prefix + message + "\n");
       }
 
       this.depth++;
@@ -261,6 +425,55 @@ class JavaScriptTracer {
       console.error("Exception while tracing javascript", e);
     }
   }
+}
+
+/**
+ * Return a string description for any arbitrary JS value.
+ * Used when logging to stdout.
+ *
+ * @param {Object} obj
+ *        Any JavaScript object to describe.
+ * @return String
+ *         User meaningful descriptor for the object.
+ */
+function objectToString(obj) {
+  if (Element.isInstance(obj)) {
+    let message = `<${obj.tagName}`;
+    if (obj.id) {
+      message += ` #${obj.id}`;
+    }
+    if (obj.className) {
+      message += ` .${obj.className}`;
+    }
+    message += ">";
+    return message;
+  } else if (Array.isArray(obj)) {
+    return `Array(${obj.length})`;
+  } else if (Event.isInstance(obj)) {
+    return `Event(${obj.type}) target=${objectToString(obj.target)}`;
+  } else if (typeof obj === "function") {
+    return `function ${obj.name || "anonymous"}()`;
+  }
+  return obj;
+}
+
+function primitiveToString(value) {
+  const type = typeof value;
+  if (type === "string") {
+    // Use stringify to escape special characters and display in enclosing quotes.
+    return JSON.stringify(value);
+  } else if (value === 0 && 1 / value === -Infinity) {
+    // -0 is very special and need special threatment.
+    return "-0";
+  } else if (type === "bigint") {
+    return `BigInt(${value})`;
+  } else if (value && typeof value.toString === "function") {
+    // Use toString as it allows to stringify Symbols. Converting them to string throws.
+    return value.toString();
+  }
+
+  // For all other types/cases, rely on native convertion to string
+  return value;
 }
 
 /**

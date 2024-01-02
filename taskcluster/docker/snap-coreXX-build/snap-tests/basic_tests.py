@@ -52,8 +52,13 @@ class SnapTests:
             for m in object_methods:
                 if m.startswith("test_"):
                     print("Running: {}".format(m))
+                    self._driver.save_screenshot("screenshot_{}_pre.png".format(m))
                     getattr(self, m)(self._expectations[m])
+                    self._driver.save_screenshot("screenshot_{}_post.png".format(m))
+        except TimeoutException:
+            self._driver.save_screenshot("screenshot_timeout.png")
         finally:
+            self._driver.save_screenshot("screenshot_final.png")
             self._driver.quit()
 
     def get_timeout(self):
@@ -85,6 +90,23 @@ class SnapTests:
         self._wait.until(lambda d: len(distributionid_box.text) > 0)
         print("about:support distribution ID: {}".format(distributionid_box.text))
         assert distributionid_box.text == exp["distribution_id"]
+
+    def test_about_buildconfig(self, exp):
+        self.open_tab("about:buildconfig")
+
+        source_link = self._wait.until(
+            EC.visibility_of_element_located((By.CSS_SELECTOR, "a"))
+        )
+        self._wait.until(lambda d: len(source_link.text) > 0)
+        print("about:buildconfig source: {}".format(source_link.text))
+        assert source_link.text.startswith(exp["source_repo"])
+
+        build_flags_box = self._wait.until(
+            EC.visibility_of_element_located((By.CSS_SELECTOR, "p:last-child"))
+        )
+        self._wait.until(lambda d: len(build_flags_box.text) > 0)
+        print("about:support distribution ID: {}".format(build_flags_box.text))
+        assert build_flags_box.text.find(exp["official"]) >= 0
 
     def test_youtube(self, exp):
         self.open_tab("https://www.youtube.com")

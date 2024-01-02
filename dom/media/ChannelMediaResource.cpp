@@ -58,14 +58,14 @@ NS_IMPL_ISUPPORTS(ChannelMediaResource::Listener, nsIRequestObserver,
                   nsIThreadRetargetableStreamListener)
 
 nsresult ChannelMediaResource::Listener::OnStartRequest(nsIRequest* aRequest) {
-  MOZ_ASSERT(NS_IsMainThread());
+  mMutex.AssertOnWritingThread();  // Writing thread is MainThread
   if (!mResource) return NS_OK;
   return mResource->OnStartRequest(aRequest, mOffset);
 }
 
 nsresult ChannelMediaResource::Listener::OnStopRequest(nsIRequest* aRequest,
                                                        nsresult aStatus) {
-  MOZ_ASSERT(NS_IsMainThread());
+  mMutex.AssertOnWritingThread();
   if (!mResource) return NS_OK;
   return mResource->OnStopRequest(aRequest, aStatus);
 }
@@ -76,7 +76,7 @@ nsresult ChannelMediaResource::Listener::OnDataAvailable(
   // This might happen off the main thread.
   RefPtr<ChannelMediaResource> res;
   {
-    MutexAutoLock lock(mMutex);
+    MutexSingleWriterAutoLock lock(mMutex);
     res = mResource;
   }
   // Note Rekove() might happen at the same time to reset mResource. We check
@@ -87,7 +87,7 @@ nsresult ChannelMediaResource::Listener::OnDataAvailable(
 nsresult ChannelMediaResource::Listener::AsyncOnChannelRedirect(
     nsIChannel* aOld, nsIChannel* aNew, uint32_t aFlags,
     nsIAsyncVerifyRedirectCallback* cb) {
-  MOZ_ASSERT(NS_IsMainThread());
+  mMutex.AssertOnWritingThread();
 
   nsresult rv = NS_OK;
   if (mResource) {
@@ -104,6 +104,9 @@ nsresult ChannelMediaResource::Listener::AsyncOnChannelRedirect(
 
 nsresult ChannelMediaResource::Listener::CheckListenerChain() { return NS_OK; }
 
+NS_IMETHODIMP
+ChannelMediaResource::Listener::OnDataFinished(nsresult) { return NS_OK; }
+
 nsresult ChannelMediaResource::Listener::GetInterface(const nsIID& aIID,
                                                       void** aResult) {
   return QueryInterface(aIID, aResult);
@@ -111,7 +114,7 @@ nsresult ChannelMediaResource::Listener::GetInterface(const nsIID& aIID,
 
 void ChannelMediaResource::Listener::Revoke() {
   MOZ_ASSERT(NS_IsMainThread());
-  MutexAutoLock lock(mMutex);
+  MutexSingleWriterAutoLock lock(mMutex);
   mResource = nullptr;
 }
 
@@ -1050,3 +1053,5 @@ bool ChannelSuspendAgent::IsSuspended() {
 }
 
 }  // namespace mozilla
+
+#undef LOG

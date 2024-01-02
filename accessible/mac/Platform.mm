@@ -121,7 +121,8 @@ void PlatformFocusEvent(Accessible* aTarget,
 
 void PlatformCaretMoveEvent(Accessible* aTarget, int32_t aOffset,
                             bool aIsSelectionCollapsed, int32_t aGranularity,
-                            const LayoutDeviceIntRect& aCaretRect) {
+                            const LayoutDeviceIntRect& aCaretRect,
+                            bool aFromUser) {
   mozAccessible* wrapper = GetNativeFromGeckoAccessible(aTarget);
   MOXTextMarkerDelegate* delegate = [MOXTextMarkerDelegate
       getOrCreateForDoc:nsAccUtils::DocumentFor(aTarget)];
@@ -203,6 +204,16 @@ void PlatformRoleChangedEvent(Accessible* aTarget, const a11y::role& aRole,
 
 @implementation GeckoNSApplication (a11y)
 
+- (NSAccessibilityRole)accessibilityRole {
+  // For ATs that don't request `AXEnhancedUserInterface` we need to enable
+  // accessibility when a role is fetched. Not ideal, but this is needed
+  // for such services as Voice Control.
+  if (!mozilla::a11y::sA11yShouldBeEnabled) {
+    [self accessibilitySetValue:@YES forAttribute:@"AXEnhancedUserInterface"];
+  }
+  return [super accessibilityRole];
+}
+
 - (void)accessibilitySetValue:(id)value forAttribute:(NSString*)attribute {
   if ([attribute isEqualToString:@"AXEnhancedUserInterface"]) {
     mozilla::a11y::sA11yShouldBeEnabled = ([value intValue] == 1);
@@ -230,7 +241,14 @@ void PlatformRoleChangedEvent(Accessible* aTarget, const a11y::role& aRole,
         if (exists && val == 1) {
           client.Assign(u"FullKeyboardAccess"_ns);
         } else {
-          client.Assign(u"Unknown"_ns);
+          val = CFPreferencesGetAppIntegerValue(
+              CFSTR("CommandAndControlEnabled"),
+              CFSTR("com.apple.Accessibility"), &exists);
+          if (exists && val == 1) {
+            client.Assign(u"VoiceControl"_ns);
+          } else {
+            client.Assign(u"Unknown"_ns);
+          }
         }
       }
 

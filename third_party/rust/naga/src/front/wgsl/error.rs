@@ -1,5 +1,6 @@
 use crate::front::wgsl::parse::lexer::Token;
-use crate::proc::{Alignment, ResolveError};
+use crate::front::wgsl::Scalar;
+use crate::proc::{Alignment, ConstantEvaluatorError, ResolveError};
 use crate::{SourceLocation, Span};
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFile;
@@ -33,9 +34,9 @@ impl ParseError {
             .with_labels(
                 self.labels
                     .iter()
-                    .map(|label| {
-                        Label::primary((), label.0.to_range().unwrap())
-                            .with_message(label.1.to_string())
+                    .filter_map(|label| label.0.to_range().map(|range| (label, range)))
+                    .map(|(label, range)| {
+                        Label::primary((), range).with_message(label.1.to_string())
                     })
                     .collect(),
             )
@@ -54,7 +55,11 @@ impl ParseError {
     }
 
     /// Emits a summary of the error to standard error stream.
-    pub fn emit_to_stderr_with_path(&self, source: &str, path: &str) {
+    pub fn emit_to_stderr_with_path<P>(&self, source: &str, path: P)
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let path = path.as_ref().display().to_string();
         let files = SimpleFile::new(path, source);
         let config = codespan_reporting::term::Config::default();
         let writer = StandardStream::stderr(ColorChoice::Auto);
@@ -68,7 +73,11 @@ impl ParseError {
     }
 
     /// Emits a summary of the error to a string.
-    pub fn emit_to_string_with_path(&self, source: &str, path: &str) -> String {
+    pub fn emit_to_string_with_path<P>(&self, source: &str, path: P) -> String
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let path = path.as_ref().display().to_string();
         let files = SimpleFile::new(path, source);
         let config = codespan_reporting::term::Config::default();
         let mut writer = NoColor::new(Vec::new());
@@ -98,8 +107,6 @@ impl std::error::Error for ParseError {
 pub enum ExpectedToken<'a> {
     Token(Token<'a>),
     Identifier,
-    Number,
-    Integer,
     /// Expected: constant, parenthesized expression, identifier
     PrimaryExpression,
     /// Expected: assignment, increment/decrement expression
@@ -141,11 +148,7 @@ pub enum Error<'a> {
     UnexpectedComponents(Span),
     UnexpectedOperationInConstContext(Span),
     BadNumber(Span, NumberError),
-    /// A negative signed integer literal where both signed and unsigned,
-    /// but only non-negative literals are allowed.
-    NegativeInt(Span),
-    BadU32Constant(Span),
-    BadMatrixScalarKind(Span, crate::ScalarKind, u8),
+    BadMatrixScalarKind(Span, Scalar),
     BadAccessor(Span),
     BadTexture(Span),
     BadTypeCast {
@@ -155,8 +158,7 @@ pub enum Error<'a> {
     },
     BadTextureSampleType {
         span: Span,
-        kind: crate::ScalarKind,
-        width: u8,
+        scalar: Scalar,
     },
     BadIncrDecrReferenceType(Span),
     InvalidResolve(ResolveError),
@@ -183,7 +185,11 @@ pub enum Error<'a> {
     InconsistentBinding(Span),
     TypeNotConstructible(Span),
     TypeNotInferrable(Span),
-    InitializationTypeMismatch(Span, String, String),
+    InitializationTypeMismatch {
+        name: Span,
+        expected: String,
+        got: String,
+    },
     MissingType(Span),
     MissingAttribute(&'static str, Span),
     InvalidAtomicPointer(Span),
@@ -239,10 +245,24 @@ pub enum Error<'a> {
     },
     FunctionReturnsVoid(Span),
     InvalidWorkGroupUniformLoad(Span),
-    Other,
-    ExpectedArraySize(Span),
-    NonPositiveArrayLength(Span),
+    Internal(&'static str),
+    ExpectedConstExprConcreteIntegerScalar(Span),
+    ExpectedNonNegative(Span),
+    ExpectedPositiveArrayLength(Span),
     MissingWorkgroupSize(Span),
+    ConstantEvaluatorError(ConstantEvaluatorError, Span),
+    AutoConversion {
+        dest_span: Span,
+        dest_type: String,
+        source_span: Span,
+        source_type: String,
+    },
+    ConcretizationFailed {
+        expr_span: Span,
+        expr_type: String,
+        scalar: String,
+        inner: ConstantEvaluatorError,
+    },
 }
 
 impl<'a> Error<'a> {
@@ -271,8 +291,6 @@ impl<'a> Error<'a> {
                         }
                     }
                     ExpectedToken::Identifier => "identifier".to_string(),
-                    ExpectedToken::Number => "32-bit signed integer literal".to_string(),
-                    ExpectedToken::Integer => "unsigned/signed integer literal".to_string(),
                     ExpectedToken::PrimaryExpression => "expression".to_string(),
                     ExpectedToken::Assignment => "assignment or increment/decrement".to_string(),
                     ExpectedToken::SwitchItem => "switch item ('case' or 'default') or a closing curly bracket to signify the end of the switch statement ('}')".to_string(),
@@ -306,26 +324,10 @@ impl<'a> Error<'a> {
                 labels: vec![(bad_span, err.to_string().into())],
                 notes: vec![],
             },
-            Error::NegativeInt(bad_span) => ParseError {
-                message: format!(
-                    "expected non-negative integer literal, found `{}`",
-                    &source[bad_span],
-                ),
-                labels: vec![(bad_span, "expected non-negative integer".into())],
-                notes: vec![],
-            },
-            Error::BadU32Constant(bad_span) => ParseError {
-                message: format!(
-                    "expected unsigned integer constant expression, found `{}`",
-                    &source[bad_span],
-                ),
-                labels: vec![(bad_span, "expected unsigned integer".into())],
-                notes: vec![],
-            },
-            Error::BadMatrixScalarKind(span, kind, width) => ParseError {
+            Error::BadMatrixScalarKind(span, scalar) => ParseError {
                 message: format!(
                     "matrix scalar type must be floating-point, but found `{}`",
-                    kind.to_wgsl(width)
+                    scalar.to_wgsl()
                 ),
                 labels: vec![(span, "must be floating-point (e.g. `f32`)".into())],
                 notes: vec![],
@@ -345,10 +347,10 @@ impl<'a> Error<'a> {
                 labels: vec![(bad_span, "unknown scalar type".into())],
                 notes: vec!["Valid scalar types are f32, f64, i32, u32, bool".into()],
             },
-            Error::BadTextureSampleType { span, kind, width } => ParseError {
+            Error::BadTextureSampleType { span, scalar } => ParseError {
                 message: format!(
                     "texture sample type must be one of f32, i32 or u32, but found {}",
-                    kind.to_wgsl(width)
+                    scalar.to_wgsl()
                 ),
                 labels: vec![(span, "must be one of f32, i32 or u32".into())],
                 notes: vec![],
@@ -497,15 +499,15 @@ impl<'a> Error<'a> {
                 labels: vec![(span, "type can't be inferred".into())],
                 notes: vec![],
             },
-            Error::InitializationTypeMismatch(name_span, ref expected_ty, ref got_ty) => {
+            Error::InitializationTypeMismatch { name, ref expected, ref got } => {
                 ParseError {
                     message: format!(
                         "the type of `{}` is expected to be `{}`, but got `{}`",
-                        &source[name_span], expected_ty, got_ty,
+                        &source[name], expected, got,
                     ),
                     labels: vec![(
-                        name_span,
-                        format!("definition of `{}`", &source[name_span]).into(),
+                        name,
+                        format!("definition of `{}`", &source[name]).into(),
                     )],
                     notes: vec![],
                 }
@@ -689,20 +691,29 @@ impl<'a> Error<'a> {
                 labels: vec![(span, "".into())],
                 notes: vec!["passed type must be a workgroup pointer".into()],
             },
-            Error::Other => ParseError {
-                message: "other error".to_string(),
+            Error::Internal(message) => ParseError {
+                message: "internal WGSL front end error".to_string(),
                 labels: vec![],
+                notes: vec![message.into()],
+            },
+            Error::ExpectedConstExprConcreteIntegerScalar(span) => ParseError {
+                message: "must be a const-expression that resolves to a concrete integer scalar (u32 or i32)".to_string(),
+                labels: vec![(span, "must resolve to u32 or i32".into())],
                 notes: vec![],
             },
-            Error::ExpectedArraySize(span) => ParseError {
-                message: "array element count must resolve to an integer scalar (u32 or i32)"
-                    .to_string(),
-                labels: vec![(span, "must resolve to u32/i32".into())],
+            Error::ExpectedNonNegative(span) => ParseError {
+                message: "must be non-negative (>= 0)".to_string(),
+                labels: vec![(span, "must be non-negative".into())],
                 notes: vec![],
             },
-            Error::NonPositiveArrayLength(span) => ParseError {
-                message: "array element count must be greater than zero".to_string(),
-                labels: vec![(span, "must be greater than zero".into())],
+            Error::ExpectedPositiveArrayLength(span) => ParseError {
+                message: "array element count must be positive (> 0)".to_string(),
+                labels: vec![(span, "must be positive".into())],
+                notes: vec![],
+            },
+            Error::ConstantEvaluatorError(ref e, span) => ParseError {
+                message: e.to_string(),
+                labels: vec![(span, "see msg".into())],
                 notes: vec![],
             },
             Error::MissingWorkgroupSize(span) => ParseError {
@@ -712,6 +723,32 @@ impl<'a> Error<'a> {
                     "must be paired with a @workgroup_size attribute".into(),
                 )],
                 notes: vec![],
+            },
+            Error::AutoConversion { dest_span, ref dest_type, source_span, ref source_type } => ParseError {
+                message: format!("automatic conversions cannot convert `{source_type}` to `{dest_type}`"),
+                labels: vec![
+                    (
+                        dest_span,
+                        format!("a value of type {dest_type} is required here").into(),
+                    ),
+                    (
+                        source_span,
+                        format!("this expression has type {source_type}").into(),
+                    )
+                ],
+                notes: vec![],
+            },
+            Error::ConcretizationFailed { expr_span, ref expr_type, ref scalar, ref inner } => ParseError {
+                message: format!("failed to convert expression to a concrete type: {}", inner),
+                labels: vec![
+                    (
+                        expr_span,
+                        format!("this expression has type {}", expr_type).into(),
+                    )
+                ],
+                notes: vec![
+                    format!("the expression should have been converted to have {} scalar type", scalar),
+                ]
             },
         }
     }

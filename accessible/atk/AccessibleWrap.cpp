@@ -1069,7 +1069,8 @@ void a11y::PlatformFocusEvent(Accessible* aTarget,
 void a11y::PlatformCaretMoveEvent(Accessible* aTarget, int32_t aOffset,
                                   bool aIsSelectionCollapsed,
                                   int32_t aGranularity,
-                                  const LayoutDeviceIntRect& aCaretRect) {
+                                  const LayoutDeviceIntRect& aCaretRect,
+                                  bool aFromUser) {
   AtkObject* wrapper = GetWrapperFor(aTarget);
   g_signal_emit_by_name(wrapper, "text_caret_moved", aOffset);
 }
@@ -1171,6 +1172,14 @@ static const char* kMutationStrings[2][2] = {
 
 void MaiAtkObject::FireAtkShowHideEvent(AtkObject* aParent, bool aIsAdded,
                                         bool aFromUser) {
+  if (!aParent) {
+    // XXX ATK needs a parent for these events. However, we might have already
+    // unbound from the parent by the time we fire a hide event. Ideally, we
+    // need to find a way to keep the parent around, but ATK clients don't seem
+    // to care about these missing events.
+    MOZ_ASSERT(!aIsAdded);
+    return;
+  }
   int32_t indexInParent = getIndexInParentCB(&this->parent);
   const char* signal_name = kMutationStrings[aFromUser][aIsAdded];
   g_signal_emit_by_name(aParent, signal_name, indexInParent, this, nullptr);

@@ -463,7 +463,8 @@ class StyleSheetsManager extends EventEmitter {
     const importedStyleSheets = [];
 
     for (const rule of await this._getCSSRules(styleSheet)) {
-      if (rule.type == CSSRule.IMPORT_RULE) {
+      const ruleClassName = ChromeUtils.getClassName(rule);
+      if (ruleClassName == "CSSImportRule") {
         // With the Gecko style system, the associated styleSheet may be null
         // if it has already been seen because an import cycle for the same
         // URL.  With Stylo, the styleSheet will exist (which is correct per
@@ -485,7 +486,7 @@ class StyleSheetsManager extends EventEmitter {
           rule.styleSheet
         );
         importedStyleSheets.push(...children);
-      } else if (rule.type != CSSRule.CHARSET_RULE) {
+      } else if (ruleClassName != "CSSCharsetRule") {
         // @import rules must precede all others except @charset
         break;
       }
@@ -503,7 +504,6 @@ class StyleSheetsManager extends EventEmitter {
    *          - {Integer} ruleCount: The total number of rules in the stylesheet
    *          - {Array<Object>} atRules: An array of object of the following shape:
    *            - type {String}
-   *            - mediaText {String}
    *            - conditionText {String}
    *            - matches {Boolean}: true if the media rule matches the current state of the document
    *            - layerName {String}
@@ -555,7 +555,6 @@ class StyleSheetsManager extends EventEmitter {
 
         atRules.push({
           type: "media",
-          mediaText: rule.media.mediaText,
           conditionText: rule.conditionText,
           matches,
           line: InspectorUtils.getRelativeRuleLine(rule),
@@ -863,13 +862,7 @@ class StyleSheetsManager extends EventEmitter {
    * @returns {Boolean}
    */
   _shouldListSheet(styleSheet) {
-    // Special case about:PreferenceStyleSheet, as it is generated on the fly
-    // and the URI is not registered with the about: handler.
-    // https://bugzilla.mozilla.org/show_bug.cgi?id=935803#c37
     const href = styleSheet.href?.toLowerCase();
-    if (href === "about:preferencestylesheet") {
-      return false;
-    }
     // FIXME(bug 1826538): Make accessiblecaret.css and similar UA-widget
     // sheets system sheets, then remove this special-case.
     if (

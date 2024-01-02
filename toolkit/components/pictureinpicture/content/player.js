@@ -27,6 +27,8 @@ const TEXT_TRACK_FONT_SIZE_PREF =
   "media.videocontrols.picture-in-picture.display-text-tracks.size";
 const IMPROVED_CONTROLS_ENABLED_PREF =
   "media.videocontrols.picture-in-picture.improved-video-controls.enabled";
+const SEETHROUGH_MODE_ENABLED_PREF =
+  "media.videocontrols.picture-in-picture.seethrough-mode.enabled";
 
 // Time to fade the Picture-in-Picture video controls after first opening.
 const CONTROLS_FADE_TIMEOUT_MS = 3000;
@@ -124,6 +126,7 @@ function setVolume(volume) {
  * events for updating state.
  */
 let Player = {
+  _isInitialized: false,
   WINDOW_EVENTS: [
     "click",
     "contextmenu",
@@ -334,6 +337,13 @@ let Player = {
     } else {
       document.querySelector("#medium").checked = "true";
     }
+
+    // In see-through mode the PiP window is made semi-transparent on hover.
+    if (Services.prefs.getBoolPref(SEETHROUGH_MODE_ENABLED_PREF, false)) {
+      document.documentElement.classList.add("seethrough-mode");
+    }
+
+    this._isInitialized = true;
   },
 
   uninit() {
@@ -734,11 +744,7 @@ let Player = {
         return;
       }
 
-      this.actor.sendAsyncMessage("PictureInPicture:HideVideoControls", {
-        isFullscreen: this.isFullscreen,
-        isVideoControlsShowing: false,
-        playerBottomControlsDOMRect: null,
-      });
+      this.hideVideoControls();
     } else {
       this.settingsPanel.classList.remove("hide");
       this.closedCaptionButton.setAttribute("aria-expanded", true);
@@ -1090,11 +1096,7 @@ let Player = {
         !this.controls.getAttribute("keying") &&
         !this.controls.getAttribute("donthide")
       ) {
-        this.actor.sendAsyncMessage("PictureInPicture:HideVideoControls", {
-          isFullscreen: this.isFullscreen,
-          isVideoControlsShowing: false,
-          playerBottomControlsDOMRect: null,
-        });
+        this.hideVideoControls();
       }
     }
   },
@@ -1220,6 +1222,20 @@ let Player = {
       ? `pictureinpicture-pause-btn`
       : `pictureinpicture-play-btn`;
     this.setupTooltip("playpause", strId);
+
+    if (
+      !this._isInitialized ||
+      this.isCurrentHover ||
+      this.controls.getAttribute("keying")
+    ) {
+      return;
+    }
+
+    if (!isPlaying) {
+      this.revealControls(true);
+    } else {
+      this.revealControls(false);
+    }
   },
 
   _isMuted: false,
@@ -1279,6 +1295,7 @@ let Player = {
 
   /**
    * Send a message to PiPChild to adjust the subtitles position
+   * so that subtitles are visible when showing video controls.
    */
   showVideoControls() {
     // offsetParent returns null when the element or any ancestor has display: none
@@ -1288,6 +1305,18 @@ let Player = {
       isVideoControlsShowing: true,
       playerBottomControlsDOMRect: this.controlsBottom.getBoundingClientRect(),
       isScrubberShowing: !!this.scrubber.offsetParent,
+    });
+  },
+
+  /**
+   * Send a message to PiPChild to adjust the subtitles position
+   * so that subtitles take up remaining space when hiding video controls.
+   */
+  hideVideoControls() {
+    this.actor.sendAsyncMessage("PictureInPicture:HideVideoControls", {
+      isFullscreen: this.isFullscreen,
+      isVideoControlsShowing: false,
+      playerBottomControlsDOMRect: null,
     });
   },
 
@@ -1328,11 +1357,7 @@ let Player = {
           !this.controls.getAttribute("keying") &&
           !this.controls.getAttribute("donthide")
         ) {
-          this.actor.sendAsyncMessage("PictureInPicture:HideVideoControls", {
-            isFullscreen: false,
-            isVideoControlsShowing: false,
-            playerBottomControlsDOMRect: null,
-          });
+          this.hideVideoControls();
         }
       }, CONTROLS_FADE_TIMEOUT_MS);
     }

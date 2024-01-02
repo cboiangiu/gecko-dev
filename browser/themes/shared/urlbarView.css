@@ -7,11 +7,15 @@
 @namespace html url("http://www.w3.org/1999/xhtml");
 
 :root {
-  --autocomplete-popup-highlight-background: SelectedItem;
-  --autocomplete-popup-highlight-color: SelectedItemText;
+  --urlbarView-hover-background: var(--arrowpanel-dimmed);
+  --urlbarView-separator-color: color-mix(in srgb, currentColor 14%, transparent);
+
+  --urlbarView-highlight-background: SelectedItem;
+  --urlbarView-highlight-color: SelectedItemText;
 
   --urlbarView-secondary-text-color: color-mix(in srgb, currentColor 73%, transparent);
 
+  --urlbarView-action-color: LinkText;
   --urlbarView-action-slide-in-distance: 200px;
 
   --urlbarView-row-gutter: 2px;
@@ -19,6 +23,7 @@
   --urlbarView-small-font-size: 0.85em;
 
   --urlbarView-item-inline-padding: var(--urlbar-icon-padding);
+  --urlbarView-item-block-padding: 6px;
   --urlbarView-favicon-width: 16px;
   --urlbarView-icon-margin-start: 0px;
   --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline));
@@ -37,24 +42,16 @@
   }
 
   &:-moz-lwtheme {
-    --urlbar-popup-action-color: light-dark(rgb(91, 91, 102), rgb(191, 191, 201));
-    /* Fallback colors for when themes don't specify popup_highlight / popup_highlight_text. */
-    --autocomplete-popup-highlight-background: light-dark(rgb(0, 99, 255), rgb(0, 99, 225));
-    --autocomplete-popup-highlight-color: white;
+    --urlbarView-action-color: light-dark(rgb(91, 91, 102), rgb(191, 191, 201));
+    --urlbarView-highlight-background: light-dark(rgb(0, 99, 255), rgb(0, 99, 225));
+    --urlbarView-highlight-color: white;
   }
 
   @media (prefers-contrast) {
+    --urlbarView-separator-color: color-mix(in srgb, currentColor 86%, transparent);
     --urlbarView-result-button-background-opacity: 100%;
     --urlbarView-secondary-text-color: currentColor;
   }
-}
-
-/* Align the favicons and titles of rows with standard 16px icons with those
-   of rich suggestions. */
-#urlbar[richSuggestionsEnabled] .urlbarView-row:not([rich-suggestion]),
-#urlbar[richSuggestionsEnabled] .urlbarView-row[rich-suggestion][icon-size="16"] {
-  --urlbarView-icon-margin-start: calc((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2);
-  --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline) + ((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2));
 }
 
 .urlbarView {
@@ -75,7 +72,7 @@
   margin-inline: calc(-1 * var(--urlbarView-row-gutter));
 
   #urlbar[open] > .urlbarView > .urlbarView-body-outer > & {
-    border-top: 1px solid var(--autocomplete-popup-separator-color);
+    border-top: 1px solid var(--urlbarView-separator-color);
   }
 }
 
@@ -92,6 +89,17 @@
 .urlbarView-row {
   --urlbarView-second-line-indent: calc(var(--urlbarView-icon-margin-start) + var(--urlbarView-icon-margin-end) + var(--urlbarView-favicon-width));
 
+  /* Align the favicons and titles of rows with standard 16px icons with those
+     of rich suggestions. */
+  /* stylelint-disable-next-line media-query-no-invalid */
+  @media (-moz-bool-pref: "browser.urlbar.richSuggestions.featureGate") {
+    &:not([rich-suggestion]),
+    &[rich-suggestion][icon-size="16"] {
+      --urlbarView-icon-margin-start: calc((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2);
+      --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline) + ((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2));
+    }
+  }
+
   display: flex;
   align-items: center;
   fill: currentColor;
@@ -105,12 +113,12 @@
   background-clip: padding-box;
 
   &[row-selectable]:not([selected]):hover {
-    background-color: var(--autocomplete-popup-hover-background);
+    background-color: var(--urlbarView-hover-background);
   }
 
   &[selected] {
-    background-color: var(--autocomplete-popup-highlight-background);
-    color: var(--autocomplete-popup-highlight-color);
+    background-color: var(--urlbarView-highlight-background);
+    color: var(--urlbarView-highlight-color);
   }
 
   :root:not([uidensity=compact]) &:not([type=tip], [type=dynamic]) {
@@ -134,7 +142,7 @@
   flex: 1 1;
   overflow: hidden;
   padding-inline: var(--urlbarView-item-inline-padding);
-  padding-block: 6px;
+  padding-block: var(--urlbarView-item-block-padding);
 
   :root:not([uidensity=compact]) & {
     min-height: 20px; /* row min-height 32px - (2 * padding-block 6px) */
@@ -213,6 +221,16 @@
         margin-top: 2px;
       }
     }
+  }
+}
+
+/* Display userContext icon instead of text, when window is too narrow. */
+.urlbarView-results[wrap] > .urlbarView-row[type=switchtab] {
+  .urlbarView-userContext-label {
+    display: none;
+  }
+  .urlbarView-userContext-icons {
+    display: inline-block;
   }
 }
 
@@ -307,9 +325,16 @@
   -moz-context-properties: fill, fill-opacity;
   border-radius: 100%;
 
+  &:not(:hover, [selected], [primary], [open]) {
+    @media (prefers-contrast) {
+      outline: 1px solid currentColor;
+      outline-offset: -1px;
+    }
+  }
+
   &[selected] {
     outline: var(--focus-outline);
-    outline-color: var(--autocomplete-popup-highlight-color);
+    outline-color: var(--urlbarView-highlight-color);
     outline-offset: 1px;
   }
 
@@ -326,14 +351,6 @@
   & + & {
     margin-inline-start: 0;
   }
-}
-
-.urlbarView-button-block {
-  background-image: url("chrome://browser/skin/thumb-down.svg");
-}
-
-.urlbarView-button-help {
-  background-image: url("chrome://global/skin/icons/help.svg");
 }
 
 /* Result menu button */
@@ -371,46 +388,36 @@
 
 /* Button with label, e.g. tip button */
 
-.urlbarView-button:not(:empty) {
-  &:not(.urlbarView-button-menu) {
-    border-radius: var(--toolbarbutton-border-radius);
-    padding: 7px;
-    font-size: 0.93em;
-    font-weight: 600;
-    background-clip: padding-box;
-    min-height: 16px;
-    min-width: 8.75em;
-    text-align: center;
-    flex-basis: initial;
-    flex-shrink: 0;
+.urlbarView-button:not(:empty):not(.urlbarView-button-menu) {
+  border-radius: var(--toolbarbutton-border-radius);
+  padding: .5em 1em;
+  margin-inline-end: 1.4em;
+  font-size: 0.93em;
+  font-weight: var(--font-weight-bold);
+  background-clip: padding-box;
+  min-height: 16px;
+  min-width: 6em;
+  text-align: center;
+  flex-basis: initial;
+  flex-shrink: 0;
 
-    &:not(:hover) {
-      background-color: var(--button-bgcolor);
-    }
+  &:not(:hover) {
+    background-color: var(--button-bgcolor);
+  }
 
-    &[selected] {
-      color: var(--button-primary-color);
-      background-color: var(--button-primary-bgcolor);
-      outline-offset: var(--focus-outline-offset);
-    }
+  &:is([selected], [primary]) {
+    color: var(--button-primary-color);
+    background-color: var(--button-primary-bgcolor);
+    outline-color: var(--button-primary-bgcolor);
+    outline-offset: var(--focus-outline-offset);
 
-    &[selected]:hover {
+    &:hover {
       background-color: var(--button-primary-hover-bgcolor);
     }
 
-    &[selected]:hover:active {
+    &:hover:active {
       background-color: var(--button-primary-active-bgcolor);
     }
-
-    &:last-child {
-      /* Add space between a labeled button and the trailing edge of the panel. */
-      margin-inline-end: 1.8em;
-    }
-  }
-
-  + .urlbarView-button:empty {
-    /* Add space between a labeled button followed by an unlabeled button. */
-    margin-inline-start: 1.8em;
   }
 }
 
@@ -421,12 +428,12 @@
   border-radius: 0;
 
   &:not(:last-child) {
-    border-bottom: 1px solid var(--autocomplete-popup-separator-color);
+    border-bottom: 1px solid var(--urlbarView-separator-color);
     margin-bottom: 4px;
   }
 
   &:not(:first-child) {
-    border-top: 1px solid var(--autocomplete-popup-separator-color);
+    border-top: 1px solid var(--urlbarView-separator-color);
     margin-top: 4px;
   }
 
@@ -486,7 +493,7 @@
     pointer-events: none;
   }
 
-  :root[lwt-toolbar-field-focus-brighttext] &::before {
+  :root[lwt-toolbar-field-focus="dark"] &::before {
     /* Same as `.search-panel-header > label` in searchbar.css */
     opacity: 1;
   }
@@ -523,6 +530,28 @@
      fallback fonts with extreme metrics. */
   line-height: 1.4;
 }
+
+/* user context box */
+.urlbarView-userContext-indicator {
+  align-items: center;
+}
+
+.urlbarView-userContext-label {
+  color: var(--identity-tab-color);
+}
+
+.urlbarView-userContext-icons {
+  height: var(--urlbarView-favicon-width);
+  vertical-align: middle;
+  background-image: var(--identity-icon);
+  -moz-context-properties: fill;
+  fill: var(--identity-icon-color);
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center center;
+  display: none;
+}
+
 
 /* Tail suggestions */
 
@@ -569,7 +598,7 @@
 
     /* This targets both rich and non-rich results, so not using the child selector here. */
     .urlbarView-row:not(:hover, [selected], [sponsored]) & {
-      color: var(--urlbar-popup-action-color);
+      color: var(--urlbarView-action-color);
     }
 
     &[slide-in] {
@@ -608,8 +637,8 @@
   }
 }
 
-/* Switch-to-tab action text is styled as a chiclet. */
-.urlbarView-row:is([type=switchtab], [type=remotetab]) {
+/* Switch-to-tab and Clipboard action text is styled as a chiclet. */
+.urlbarView-row:is([type=switchtab], [type=remotetab], [type=clipboard]) {
   > .urlbarView-row-inner > .urlbarView-no-wrap > .urlbarView-action {
     color: var(--urlbar-box-text-color);
     background-color: var(--urlbar-box-focus-bgcolor);
@@ -630,8 +659,9 @@
   }
 }
 
+.urlbarView:not([action-override]) .urlbarView-row[type=switchtab],
 .urlbarView-row[type=remotetab]:not([selected], :hover),
-.urlbarView:not([action-override]) .urlbarView-row[type=switchtab] {
+.urlbarView-row[type=clipboard] {
   > .urlbarView-row-inner > .urlbarView-no-wrap > .urlbarView-title-separator::before {
     /* We make the title separator transparent so it stays in the accessibility
        tree. We want screen readers to pause between the result title and the
@@ -806,7 +836,7 @@
 }
 
 .urlbarView:not([noresults]) > .search-one-offs:not([hidden]) {
-  border-top: 1px solid var(--autocomplete-popup-separator-color);
+  border-top: 1px solid var(--urlbarView-separator-color);
 }
 
 :root[uidensity=touch] #urlbar .search-one-offs:not([hidden]) {
@@ -916,6 +946,6 @@
 }
 
 #PopupSearchAutoComplete .autocomplete-richlistitem[selected] {
-  background: var(--autocomplete-popup-highlight-background);
-  color: var(--autocomplete-popup-highlight-color);
+  background: var(--urlbarView-highlight-background);
+  color: var(--urlbarView-highlight-color);
 }

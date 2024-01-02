@@ -89,6 +89,7 @@ nsDocShellLoadState::nsDocShellLoadState(
   mTriggeringWindowId = aLoadState.TriggeringWindowId();
   mTriggeringStorageAccess = aLoadState.TriggeringStorageAccess();
   mTriggeringRemoteType = aLoadState.TriggeringRemoteType();
+  mWasSchemelessInput = aLoadState.WasSchemelessInput();
   mCsp = aLoadState.Csp();
   mOriginalURIString = aLoadState.OriginalURIString();
   mCancelContentJSEpoch = aLoadState.CancelContentJSEpoch();
@@ -192,7 +193,8 @@ nsDocShellLoadState::nsDocShellLoadState(const nsDocShellLoadState& aOther)
       mWasCreatedRemotely(aOther.mWasCreatedRemotely),
       mUnstrippedURI(aOther.mUnstrippedURI),
       mRemoteTypeOverride(aOther.mRemoteTypeOverride),
-      mTriggeringRemoteType(aOther.mTriggeringRemoteType) {
+      mTriggeringRemoteType(aOther.mTriggeringRemoteType),
+      mWasSchemelessInput(aOther.mWasSchemelessInput) {
   MOZ_DIAGNOSTIC_ASSERT(
       XRE_IsParentProcess(),
       "Cloning a nsDocShellLoadState with the same load identifier is only "
@@ -220,7 +222,6 @@ nsDocShellLoadState::nsDocShellLoadState(nsIURI* aURI, uint64_t aLoadIdentifier)
       mOriginalFrameSrc(false),
       mIsFormSubmission(false),
       mLoadType(LOAD_NORMAL),
-      mTarget(),
       mSrcdocData(VoidString()),
       mLoadFlags(0),
       mInternalLoadFlags(0),
@@ -236,7 +237,8 @@ nsDocShellLoadState::nsDocShellLoadState(nsIURI* aURI, uint64_t aLoadIdentifier)
       mWasCreatedRemotely(false),
       mTriggeringRemoteType(XRE_IsContentProcess()
                                 ? ContentChild::GetSingleton()->GetRemoteType()
-                                : NOT_REMOTE_TYPE) {
+                                : NOT_REMOTE_TYPE),
+      mWasSchemelessInput(false) {
   MOZ_ASSERT(aURI, "Cannot create a LoadState with a null URI!");
 }
 
@@ -477,6 +479,8 @@ nsresult nsDocShellLoadState::CreateFromLoadURIOptions(
     loadState->SetRemoteTypeOverride(
         aLoadURIOptions.mRemoteTypeOverride.Value());
   }
+
+  loadState->SetWasSchemelessInput(aLoadURIOptions.mWasSchemelessInput);
 
   loadState.forget(aResult);
   return NS_OK;
@@ -1088,7 +1092,7 @@ void nsDocShellLoadState::CalculateLoadURIFlags() {
 
 nsLoadFlags nsDocShellLoadState::CalculateChannelLoadFlags(
     BrowsingContext* aBrowsingContext, Maybe<bool> aUriModified,
-    Maybe<bool> aIsXFOError) {
+    Maybe<bool> aIsEmbeddingBlockedError) {
   MOZ_ASSERT(aBrowsingContext);
 
   nsLoadFlags loadFlags = aBrowsingContext->GetDefaultLoadFlags();
@@ -1102,13 +1106,13 @@ nsLoadFlags nsDocShellLoadState::CalculateChannelLoadFlags(
 
   // These values aren't available for loads initiated in the Parent process.
   MOZ_ASSERT_IF(loadType == LOAD_HISTORY, aUriModified.isSome());
-  MOZ_ASSERT_IF(loadType == LOAD_ERROR_PAGE, aIsXFOError.isSome());
+  MOZ_ASSERT_IF(loadType == LOAD_ERROR_PAGE, aIsEmbeddingBlockedError.isSome());
 
   if (loadType == LOAD_ERROR_PAGE) {
     // Error pages are LOAD_BACKGROUND, unless it's an
-    // XFO error for which we want an error page to load
+    // XFO / frame-ancestors error for which we want an error page to load
     // but additionally want the onload() event to fire.
-    if (!*aIsXFOError) {
+    if (!*aIsEmbeddingBlockedError) {
       loadFlags |= nsIChannel::LOAD_BACKGROUND;
     }
   }
@@ -1282,6 +1286,7 @@ DocShellLoadStateInit nsDocShellLoadState::Serialize(
   loadState.TriggeringWindowId() = mTriggeringWindowId;
   loadState.TriggeringStorageAccess() = mTriggeringStorageAccess;
   loadState.TriggeringRemoteType() = mTriggeringRemoteType;
+  loadState.WasSchemelessInput() = mWasSchemelessInput;
   loadState.Csp() = mCsp;
   loadState.OriginalURIString() = mOriginalURIString;
   loadState.CancelContentJSEpoch() = mCancelContentJSEpoch;

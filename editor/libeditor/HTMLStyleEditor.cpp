@@ -857,8 +857,7 @@ HTMLEditor::AutoInlineStyleSetter::SplitTextNodeAndApplyStyleToMiddleNode(
       [&]() MOZ_CAN_RUN_SCRIPT -> Result<SplitNodeResult, nsresult> {
     EditorDOMPoint atEnd(&aText, aEndOffset);
     if (atEnd.IsEndOfContainer()) {
-      return SplitNodeResult::NotHandled(atEnd,
-                                         aHTMLEditor.GetSplitNodeDirection());
+      return SplitNodeResult::NotHandled(atEnd);
     }
     // We need to split off back of text node
     Result<SplitNodeResult, nsresult> splitNodeResult =
@@ -887,8 +886,7 @@ HTMLEditor::AutoInlineStyleSetter::SplitTextNodeAndApplyStyleToMiddleNode(
                                : &aText,
                            aStartOffset);
     if (atStart.IsStartOfContainer()) {
-      return SplitNodeResult::NotHandled(atStart,
-                                         aHTMLEditor.GetSplitNodeDirection());
+      return SplitNodeResult::NotHandled(atStart);
     }
     // We need to split off front of text node
     Result<SplitNodeResult, nsresult> splitNodeResult =
@@ -2129,7 +2127,7 @@ HTMLEditor::SplitAncestorStyledInlineElementsAt(
   // If the point is in a non-content node, e.g., in the document node, we
   // should split nothing.
   if (MOZ_UNLIKELY(!aPointToSplit.IsInContentNode())) {
-    return SplitNodeResult::NotHandled(aPointToSplit, GetSplitNodeDirection());
+    return SplitNodeResult::NotHandled(aPointToSplit);
   }
 
   // We assume that this method is called only when we're removing style(s).
@@ -2149,6 +2147,7 @@ HTMLEditor::SplitAncestorStyledInlineElementsAt(
   AutoTArray<OwningNonNull<Element>, 24> arrayOfParents;
   for (Element* element :
        aPointToSplit.GetContainer()->InclusiveAncestorsOfType<Element>()) {
+    // XXX Cannot we stop if we meet a non-splittable element like <button>?
     if (HTMLEditUtils::IsBlockElement(
             *element, BlockInlineCheck::UseComputedDisplayOutsideStyle) ||
         !element->GetParent() ||
@@ -2160,8 +2159,7 @@ HTMLEditor::SplitAncestorStyledInlineElementsAt(
   }
 
   // Split any matching style nodes above the point.
-  SplitNodeResult result =
-      SplitNodeResult::NotHandled(aPointToSplit, GetSplitNodeDirection());
+  SplitNodeResult result = SplitNodeResult::NotHandled(aPointToSplit);
   MOZ_ASSERT(!result.Handled());
   EditorDOMPoint pointToPutCaret;
   for (OwningNonNull<Element>& element : arrayOfParents) {
@@ -2288,8 +2286,10 @@ HTMLEditor::SplitAncestorStyledInlineElementsAt(
     if (!unwrappedSplitNodeResult.Handled()) {
       continue;
     }
-    // Mark the final result as handled forcibly.
-    result = unwrappedSplitNodeResult.ToHandledResult();
+    // Respect the last split result which actually did it.
+    if (!result.DidSplit() || unwrappedSplitNodeResult.DidSplit()) {
+      result = unwrappedSplitNodeResult.ToHandledResult();
+    }
     MOZ_ASSERT(result.Handled());
   }
 

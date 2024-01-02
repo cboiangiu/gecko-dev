@@ -50,9 +50,10 @@ already_AddRefed<ModuleLoadRequest> WorkerModuleLoader::CreateStaticImport(
   // See Discussion in https://github.com/w3c/webappsec-csp/issues/336
   Maybe<ClientInfo> clientInfo = GetGlobalObject()->GetClientInfo();
 
-  RefPtr<WorkerLoadContext> loadContext =
-      new WorkerLoadContext(WorkerLoadContext::Kind::StaticImport, clientInfo,
-                            aParent->GetWorkerLoadContext()->mScriptLoader);
+  RefPtr<WorkerLoadContext> loadContext = new WorkerLoadContext(
+      WorkerLoadContext::Kind::StaticImport, clientInfo,
+      aParent->GetWorkerLoadContext()->mScriptLoader,
+      aParent->GetWorkerLoadContext()->mOnlyExistingCachedResourcesAllowed);
   RefPtr<ModuleLoadRequest> request = new ModuleLoadRequest(
       aURI, aParent->ReferrerPolicy(), aParent->mFetchOptions, SRIMetadata(),
       aParent->mURI, loadContext, false, /* is top level */
@@ -68,7 +69,7 @@ bool WorkerModuleLoader::CreateDynamicImportLoader() {
   workerPrivate->AssertIsOnWorkerThread();
 
   IgnoredErrorResult rv;
-  RefPtr<WorkerScriptLoader> loader = new loader::WorkerScriptLoader(
+  RefPtr<WorkerScriptLoader> loader = loader::WorkerScriptLoader::Create(
       workerPrivate, nullptr, nullptr,
       GetCurrentScriptLoader()->GetWorkerScriptType(), rv);
   if (NS_WARN_IF(rv.Failed())) {
@@ -82,8 +83,7 @@ bool WorkerModuleLoader::CreateDynamicImportLoader() {
 
 already_AddRefed<ModuleLoadRequest> WorkerModuleLoader::CreateDynamicImport(
     JSContext* aCx, nsIURI* aURI, LoadedScript* aMaybeActiveScript,
-    JS::Handle<JS::Value> aReferencingPrivate, JS::Handle<JSString*> aSpecifier,
-    JS::Handle<JSObject*> aPromise) {
+    JS::Handle<JSString*> aSpecifier, JS::Handle<JSObject*> aPromise) {
   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
 
   if (!CreateDynamicImportLoader()) {
@@ -91,6 +91,8 @@ already_AddRefed<ModuleLoadRequest> WorkerModuleLoader::CreateDynamicImport(
   }
 
   // Not supported for Service Workers.
+  // https://github.com/w3c/ServiceWorker/issues/1585 covers existing discussion
+  // about potentially supporting use of import().
   if (workerPrivate->IsServiceWorker()) {
     return nullptr;
   }
@@ -123,9 +125,16 @@ already_AddRefed<ModuleLoadRequest> WorkerModuleLoader::CreateDynamicImport(
 
   Maybe<ClientInfo> clientInfo = GetGlobalObject()->GetClientInfo();
 
-  RefPtr<WorkerLoadContext> context =
-      new WorkerLoadContext(WorkerLoadContext::Kind::DynamicImport, clientInfo,
-                            GetCurrentScriptLoader());
+  RefPtr<WorkerLoadContext> context = new WorkerLoadContext(
+      WorkerLoadContext::Kind::DynamicImport, clientInfo,
+      GetCurrentScriptLoader(),
+      // When dynamic import is supported in ServiceWorkers,
+      // the current plan in onlyExistingCachedResourcesAllowed
+      // is that only existing cached resources will be
+      // allowed.  (`import()` will not be used for caching
+      // side effects, but instead a specific method will be
+      // used during installation.)
+      true);
 
   ReferrerPolicy referrerPolicy = workerPrivate->GetReferrerPolicy();
   RefPtr<ModuleLoadRequest> request = new ModuleLoadRequest(
@@ -133,7 +142,7 @@ already_AddRefed<ModuleLoadRequest> WorkerModuleLoader::CreateDynamicImport(
       /* is top level */ true, /* is dynamic import */
       this, ModuleLoadRequest::NewVisitedSetForTopLevelImport(aURI), nullptr);
 
-  request->mDynamicReferencingPrivate = aReferencingPrivate;
+  request->mDynamicReferencingScript = aMaybeActiveScript;
   request->mDynamicSpecifier = aSpecifier;
   request->mDynamicPromise = aPromise;
 

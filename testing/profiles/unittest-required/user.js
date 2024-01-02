@@ -51,11 +51,6 @@ user_pref("browser.startup.page", 0); // use about:blank, not browser.startup.ho
 user_pref("browser.tabs.delayHidingAudioPlayingIconMS", 0);
 // Don't use auto-enabled e10s
 user_pref("browser.tabs.remote.autostart", false);
-// Make sure Translation won't hit the network.
-user_pref("browser.translation.bing.authURL", "http://{server}/browser/browser/components/translation/test/bing.sjs");
-user_pref("browser.translation.bing.translateArrayURL", "http://{server}/browser/browser/components/translation/test/bing.sjs");
-user_pref("browser.translation.engine", "Bing");
-user_pref("browser.translation.yandex.translateURLOverride", "http://{server}/browser/browser/components/translation/test/yandex.sjs");
 user_pref("browser.ui.layout.tablet", 0); // force tablet UI off
 // Ensure UITour won't hit the network
 user_pref("browser.uitour.pinnedTabUrl", "http://{server}/uitour-dummy/pinnedTab");
@@ -223,6 +218,9 @@ user_pref("toolkit.telemetry.test.pref1", true);
 user_pref("toolkit.telemetry.test.pref2", false);
 // Disable the caret blinking so we get stable snapshot
 user_pref("ui.caretBlinkTime", -1);
+// Disable scrollbar animations. Tests that count paints / refresh driver ticks
+// shouldn't need to account for them.
+user_pref("ui.scrollbarFadeDuration", 0);
 user_pref("webextensions.tests", true);
 // Disable intermittent telemetry collection
 user_pref("toolkit.telemetry.initDelay", 99999999);

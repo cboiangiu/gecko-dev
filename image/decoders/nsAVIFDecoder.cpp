@@ -8,7 +8,7 @@
 
 #include "nsAVIFDecoder.h"
 
-#include "aom/aomdx.h"
+#include <aom/aomdx.h>
 
 #include "DAV1DDecoder.h"
 #include "gfxPlatform.h"
@@ -19,6 +19,7 @@
 
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryComms.h"
+#include "mozilla/UniquePtrExtensions.h"
 
 using namespace mozilla::gfx;
 
@@ -269,7 +270,12 @@ nsAVIFDecoder::DecodeResult AVIFParser::GetImage(AVIFImage& aImage) {
     return AsVariant(status);
   }
 
-  MOZ_ASSERT(image.primary_image.data);
+  // Ideally has_primary_item and no errors would guarantee primary_image.data
+  // exists but it doesn't so we check it too.
+  if (!image.primary_image.data) {
+    return AsVariant(nsAVIFDecoder::NonDecoderResult::NoSamples);
+  }
+
   RefPtr<MediaRawData> colorImage =
       new MediaRawData(image.primary_image.data, image.primary_image.length);
   RefPtr<MediaRawData> alphaImage = nullptr;
@@ -680,7 +686,7 @@ bool OwnedAOMImage::CloneFrom(aom_image_t* aImage, bool aIsAlpha) {
 
   // If aImage is alpha plane. The data is located in Y channel.
   if (aIsAlpha) {
-    mBuffer = MakeUnique<uint8_t[]>(yBufSize);
+    mBuffer = MakeUniqueFallible<uint8_t[]>(yBufSize);
     if (!mBuffer) {
       return false;
     }
@@ -702,7 +708,7 @@ bool OwnedAOMImage::CloneFrom(aom_image_t* aImage, bool aIsAlpha) {
   int crHeight = aom_img_plane_height(aImage, AOM_PLANE_V);
   size_t crBufSize = crStride * crHeight;
 
-  mBuffer = MakeUnique<uint8_t[]>(yBufSize + cbBufSize + crBufSize);
+  mBuffer = MakeUniqueFallible<uint8_t[]>(yBufSize + cbBufSize + crBufSize);
   if (!mBuffer) {
     return false;
   }
@@ -1728,9 +1734,8 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::DoDecodeInternal(
     return AsVariant(NonDecoderResult::SizeOverflow);
   }
 
-  UniquePtr<uint8_t[]> rgbBuf = MakeUnique<uint8_t[]>(rgbBufLength.value());
-  const uint8_t* endOfRgbBuf = {rgbBuf.get() + rgbBufLength.value()};
-
+  UniquePtr<uint8_t[]> rgbBuf =
+      MakeUniqueFallible<uint8_t[]>(rgbBufLength.value());
   if (!rgbBuf) {
     MOZ_LOG(sAVIFLog, LogLevel::Debug,
             ("[this=%p] allocation of %u-byte rgbBuf failed", this,
@@ -1792,6 +1797,7 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::DoDecodeInternal(
   }
 
   MOZ_LOG(sAVIFLog, LogLevel::Debug, ("[this=%p] writing to surface", this));
+  const uint8_t* endOfRgbBuf = {rgbBuf.get() + rgbBufLength.value()};
   WriteState writeBufferResult = WriteState::NEED_MORE_DATA;
   for (uint8_t* rowPtr = rgbBuf.get(); rowPtr < endOfRgbBuf;
        rowPtr += rgbStride.value()) {

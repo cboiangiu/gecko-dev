@@ -207,7 +207,7 @@ Bookmarks.prototype = {
         // They are imported under their own folder, created either under the
         // bookmarks menu (in the case of startup migration).
         let readingListTitle = await MigrationUtils.getLocalizedString(
-          "imported-safari-reading-list"
+          "migration-imported-safari-reading-list"
         );
         folderGuid = (
           await MigrationUtils.insertBookmarkWrapper({
@@ -425,16 +425,20 @@ async function GetHistoryResource() {
 
       let pageInfos = [];
       for (let row of historyRows) {
-        pageInfos.push({
-          title: row.getResultByName("history_title"),
-          url: new URL(row.getResultByName("history_url")),
-          visits: [
-            {
-              transition: lazy.PlacesUtils.history.TRANSITIONS.TYPED,
-              date: parseNSDate(row.getResultByName("history_time")),
-            },
-          ],
-        });
+        try {
+          pageInfos.push({
+            title: row.getResultByName("history_title"),
+            url: new URL(row.getResultByName("history_url")),
+            visits: [
+              {
+                transition: lazy.PlacesUtils.history.TRANSITIONS.TYPED,
+                date: parseNSDate(row.getResultByName("history_time")),
+              },
+            ],
+          });
+        } catch (e) {
+          console.error("Could not create a history row: ", e);
+        }
       }
       await MigrationUtils.insertVisitsWrapper(pageInfos);
 
@@ -642,6 +646,16 @@ export class SafariProfileMigrator extends MigratorBase {
       }
     }
     return true;
+  }
+
+  async canGetPermissions() {
+    if (await MigrationUtils.canGetPermissionsOnPlatform()) {
+      const profileDir = FileUtils.getDir("ULibDir", ["Safari"]);
+      if (await IOUtils.exists(profileDir.path)) {
+        return profileDir.path;
+      }
+    }
+    return false;
   }
 
   get mainPreferencesPropertyList() {

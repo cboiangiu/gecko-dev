@@ -29,8 +29,8 @@ SOURCE_DEST="${WORKSPACE}/source"
 # When updating this, please make sure to keep in sync the script for symbol
 # scraping at
 # https://github.com/mozilla/symbol-scrapers/blob/master/firefox-flatpak/script.sh
-FREEDESKTOP_VERSION="22.08"
-FIREFOX_BASEAPP_CHANNEL="22.08"
+FREEDESKTOP_VERSION="23.08"
+FIREFOX_BASEAPP_CHANNEL="23.08"
 
 
 # XXX: these commands are temporarily, there's an upcoming fix in the upstream Docker image
@@ -75,6 +75,7 @@ cp -v "$SCRIPT_DIRECTORY/org.mozilla.firefox.desktop" "$WORKSPACE"
 cp -v "$SCRIPT_DIRECTORY/policies.json" "$WORKSPACE"
 cp -v "$SCRIPT_DIRECTORY/default-preferences.js" "$WORKSPACE"
 cp -v "$SCRIPT_DIRECTORY/launch-script.sh" "$WORKSPACE"
+cp -v "$SCRIPT_DIRECTORY/firefox-symbolic.svg" "$WORKSPACE"
 cd "${WORKSPACE}"
 
 flatpak remote-add --user --if-not-exists --from flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -125,6 +126,7 @@ install -D -m644 -t "${appdir}/share/applications" org.mozilla.firefox.desktop
 for size in 16 32 48 64 128; do
     install -D -m644 "${appdir}/lib/firefox/browser/chrome/icons/default/default${size}.png" "${appdir}/share/icons/hicolor/${size}x${size}/apps/org.mozilla.firefox.png"
 done
+install -D -m644 firefox-symbolic.svg "${appdir}/share/icons/hicolor/symbolic/apps/org.mozilla.firefox-symbolic.svg"
 mkdir -p "${appdir}/lib/ffmpeg"
 mkdir -p "${appdir}/etc/firefox"
 
@@ -146,9 +148,6 @@ install -D -m644 -t "${appdir}/lib/firefox/distribution" policies.json
 install -D -m644 -t "${appdir}/lib/firefox/browser/defaults/preferences" default-preferences.js
 install -D -m755 launch-script.sh "${appdir}/bin/firefox"
 
-# We need to set GTK_PATH to load cups printing backend which is missing in
-# freedesktop sdk.
-#
 # We use features=devel to enable ptrace, which we need for the crash
 # reporter.  The application is still confined in a pid namespace, so
 # that won't let us escape the flatpak sandbox.  See bug 1653852.
@@ -157,10 +156,9 @@ flatpak build-finish build                                      \
         --allow=devel                                           \
         --share=ipc                                             \
         --share=network                                         \
-        --env=GTK_PATH=/app/lib/gtkmodules                      \
         --socket=pulseaudio                                     \
         --socket=wayland                                        \
-        --socket=x11                                            \
+        --socket=fallback-x11                                   \
         --socket=pcsc                                           \
         --socket=cups                                           \
         --require-version=0.11.1                                \
@@ -171,10 +169,7 @@ flatpak build-finish build                                      \
         --talk-name=org.freedesktop.FileManager1                \
         --system-talk-name=org.freedesktop.NetworkManager       \
         --talk-name=org.a11y.Bus                                \
-        --talk-name=org.gnome.SessionManager                    \
-        --talk-name=org.freedesktop.ScreenSaver                 \
         --talk-name="org.gtk.vfs.*"                             \
-        --talk-name=org.freedesktop.Notifications               \
         --own-name="org.mpris.MediaPlayer2.firefox.*"           \
         --own-name="org.mozilla.firefox.*"                      \
         --own-name="org.mozilla.firefox_beta.*"                 \

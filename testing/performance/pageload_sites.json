@@ -222,7 +222,6 @@
         "media.autoplay.default": 5,
         "media.autoplay.ask-permission": true,
         "media.autoplay.blocking_policy": 1,
-        "media.autoplay.block-webaudio": true,
         "media.allowed-to-play.enabled": false,
         "media.block-autoplay-until-in-foreground": true
       },
@@ -253,6 +252,11 @@
           "/html/body/div[10]/div[2]/div/div/div[3]/button"
         ]
       ]
+    },
+    {
+      "login": false,
+      "name": "example",
+      "test_url": "https://www.example.com"
     },
     {
       "login": false,
@@ -334,7 +338,7 @@
     {
       "login": false,
       "name": "imgur",
-      "test_url": "https://imgur.com/gallery/m5tYJL6",
+      "test_url": "https://imgur.com/gallery/uTI7fKy",
       "inject_deterministic": false,
       "dismiss_cookie_prompt": [
         [
@@ -342,12 +346,11 @@
           "/html/body/div[1]/div/div/div/div[2]/div/button[2]"
         ]
       ],
-      "secondary_url": "https://imgur.com/gallery/rCXZUil",
+      "secondary_url": "https://imgur.com/gallery/WuOobqV",
       "preferences": {
         "media.autoplay.default": 5,
         "media.autoplay.ask-permission": true,
         "media.autoplay.blocking_policy": 1,
-        "media.autoplay.block-webaudio": true,
         "media.allowed-to-play.enabled": false,
         "media.block-autoplay-until-in-foreground": true
       }
@@ -442,7 +445,6 @@
         "media.autoplay.default": 5,
         "media.autoplay.ask-permission": true,
         "media.autoplay.blocking_policy": 1,
-        "media.autoplay.block-webaudio": true,
         "media.allowed-to-play.enabled": false,
         "media.block-autoplay-until-in-foreground": true
       },

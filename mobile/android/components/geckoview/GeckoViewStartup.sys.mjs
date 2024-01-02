@@ -82,24 +82,6 @@ const JSWINDOWACTORS = {
     allFrames: true,
     messageManagerGroups: ["browsers"],
   },
-  GeckoViewClipboardPermission: {
-    parent: {
-      esModuleURI:
-        "resource:///actors/GeckoViewClipboardPermissionParent.sys.mjs",
-    },
-    child: {
-      esModuleURI:
-        "resource:///actors/GeckoViewClipboardPermissionChild.sys.mjs",
-      events: {
-        MozClipboardReadPaste: {},
-        deactivate: { mozSystemGroup: true },
-        mousedown: { capture: true, mozSystemGroup: true },
-        mozvisualscroll: { mozSystemGroup: true },
-        pagehide: { capture: true, mozSystemGroup: true },
-      },
-    },
-    allFrames: true,
-  },
   GeckoViewPdfjs: {
     parent: {
       esModuleURI: "resource://pdf.js/GeckoViewPdfjsParent.sys.mjs",
@@ -216,6 +198,24 @@ export class GeckoViewStartup {
             "GeckoView:StorageDelegate:Attached",
           ]);
         }
+
+        GeckoViewUtils.addLazyGetter(this, "GeckoViewTranslationsSettings", {
+          module: "resource://gre/modules/GeckoViewTranslations.sys.mjs",
+          ged: [
+            "GeckoView:Translations:IsTranslationEngineSupported",
+            "GeckoView:Translations:PreferredLanguages",
+            "GeckoView:Translations:ManageModel",
+            "GeckoView:Translations:TranslationInformation",
+            "GeckoView:Translations:ModelInformation",
+            "GeckoView:Translations:GetLanguageSetting",
+            "GeckoView:Translations:GetLanguageSettings",
+            "GeckoView:Translations:SetLanguageSettings",
+            "GeckoView:Translations:GetNeverTranslateSpecifiedSites",
+            "GeckoView:Translations:SetNeverTranslateSpecifiedSite",
+            "GeckoView:Translations:GetTranslateDownloadSize",
+          ],
+        });
+
         break;
       }
 
@@ -249,6 +249,7 @@ export class GeckoViewStartup {
           "GeckoView:ResetUserPrefs",
           "GeckoView:SetDefaultPrefs",
           "GeckoView:SetLocale",
+          "GeckoView:InitialForeground",
         ]);
 
         Services.obs.addObserver(this, "browser-idle-startup-tasks-finished");
@@ -287,6 +288,16 @@ export class GeckoViewStartup {
     debug`onEvent ${aEvent}`;
 
     switch (aEvent) {
+      case "GeckoView:InitialForeground": {
+        // ExtensionProcessCrashObserver observes this topic to determine when
+        // the app goes into the foreground for the first time. This could be useful
+        // when the app is initially created in the background because, in this case,
+        // the "application-foreground" topic isn't notified when the application is
+        // moved into the foreground later. That is because "application-foreground"
+        // is only going to be notified when the application was first paused.
+        Services.obs.notifyObservers(null, "geckoview-initial-foreground");
+        break;
+      }
       case "GeckoView:ResetUserPrefs": {
         for (const name of aData.names) {
           Services.prefs.clearUserPref(name);

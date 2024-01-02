@@ -27,12 +27,6 @@ module.exports = {
     {
       // These files use fluent-dom to insert content
       files: [
-        "content-src/aboutwelcome/components/Zap.jsx",
-        "content-src/aboutwelcome/components/MultiStageAboutWelcome.jsx",
-        "content-src/aboutwelcome/components/MultiStageScreen.jsx",
-        "content-src/aboutwelcome/components/MultiStageProtonScreen.jsx",
-        "content-src/aboutwelcome/components/MultiSelect.jsx",
-        "content-src/aboutwelcome/components/ReturnToAMO.jsx",
         "content-src/asrouter/templates/OnboardingMessage/**",
         "content-src/asrouter/templates/FirstRun/**",
         "content-src/components/TopSites/**",
@@ -65,7 +59,7 @@ module.exports = {
     {
       // Use a configuration that's appropriate for modules, workers and
       // non-production files.
-      files: ["*.jsm", "lib/cache-worker.js", "test/**"],
+      files: ["*.jsm", "lib/cache.worker.js", "test/**"],
       rules: {
         "no-implicit-globals": "off",
       },

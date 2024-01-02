@@ -401,6 +401,10 @@ MarkupView.prototype = {
     return this._contextMenu;
   },
 
+  hasEventDetailsTooltip() {
+    return !!this._eventDetailsTooltip;
+  },
+
   get eventDetailsTooltip() {
     if (!this._eventDetailsTooltip) {
       // This tooltip will be attached to the toolbox document.
@@ -1223,7 +1227,9 @@ MarkupView.prototype = {
                 this.emit("idref-attribute-link-failed");
                 return;
               }
-              this.inspector.selection.setNodeFront(node);
+              this.inspector.selection.setNodeFront(node, {
+                reason: "markup-attribute-link",
+              });
             });
         })
         .catch(console.error);

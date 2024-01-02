@@ -40,6 +40,7 @@
 #include "mozilla/dom/NotifyPaintEvent.h"
 #include "mozilla/dom/PageTransitionEvent.h"
 #include "mozilla/dom/PerformanceEventTiming.h"
+#include "mozilla/dom/PerformanceMainThread.h"
 #include "mozilla/dom/PointerEvent.h"
 #include "mozilla/dom/RootedDictionary.h"
 #include "mozilla/dom/ScrollAreaEvent.h"
@@ -838,6 +839,14 @@ nsresult EventDispatcher::Dispatch(EventTarget* aTarget,
   if (aPresContext && !aPresContext->IsPrintingOrPrintPreview()) {
     eventTimingEntry =
         PerformanceEventTiming::TryGenerateEventTiming(target, aEvent);
+
+    if (aEvent->IsTrusted() && aEvent->mMessage == eScroll) {
+      if (auto* perf = aPresContext->GetPerformanceMainThread()) {
+        if (!perf->HasDispatchedScrollEvent()) {
+          perf->SetHasDispatchedScrollEvent();
+        }
+      }
+    }
   }
 
   bool retargeted = false;
@@ -979,7 +988,7 @@ nsresult EventDispatcher::Dispatch(EventTarget* aTarget,
 
   aEvent->mFlags.mIsBeingDispatched = true;
 
-  EventTargetChainItem* activationTarget = nullptr;
+  Maybe<uint32_t> activationTargetItemIndex;
 
   // Create visitor object and start event dispatching.
   // GetEventTargetParent for the original target.
@@ -993,8 +1002,8 @@ nsresult EventDispatcher::Dispatch(EventTarget* aTarget,
   targetEtci->GetEventTargetParent(preVisitor);
 
   if (preVisitor.mWantsActivationBehavior) {
-    preVisitor.mEvent->mFlags.mMultiplePreActionsPrevented = true;
-    activationTarget = targetEtci;
+    MOZ_ASSERT(&chain[0] == targetEtci);
+    activationTargetItemIndex.emplace(0);
   }
 
   if (!preVisitor.mCanHandle) {
@@ -1060,10 +1069,10 @@ nsresult EventDispatcher::Dispatch(EventTarget* aTarget,
 
       parentEtci->GetEventTargetParent(preVisitor);
 
-      if (preVisitor.mWantsActivationBehavior && !activationTarget &&
-          aEvent->mFlags.mBubbles) {
-        preVisitor.mEvent->mFlags.mMultiplePreActionsPrevented = true;
-        activationTarget = parentEtci;
+      if (preVisitor.mWantsActivationBehavior &&
+          activationTargetItemIndex.isNothing() && aEvent->mFlags.mBubbles) {
+        MOZ_ASSERT(&chain.LastElement() == parentEtci);
+        activationTargetItemIndex.emplace(chain.Length() - 1);
       }
 
       if (preVisitor.mCanHandle) {
@@ -1092,8 +1101,9 @@ nsresult EventDispatcher::Dispatch(EventTarget* aTarget,
       }
     }
 
-    if (activationTarget) {
-      activationTarget->LegacyPreActivationBehavior(preVisitor);
+    if (activationTargetItemIndex) {
+      chain[activationTargetItemIndex.value()].LegacyPreActivationBehavior(
+          preVisitor);
     }
 
     if (NS_SUCCEEDED(rv)) {
@@ -1285,12 +1295,13 @@ nsresult EventDispatcher::Dispatch(EventTarget* aTarget,
     // XXXsmaug Check also all the touch objects.
   }
 
-  if (activationTarget) {
+  if (activationTargetItemIndex) {
     EventChainPostVisitor postVisitor(preVisitor);
     if (preVisitor.mEventStatus == nsEventStatus_eConsumeNoDefault) {
-      activationTarget->LegacyCanceledActivationBehavior(postVisitor);
+      chain[activationTargetItemIndex.value()].LegacyCanceledActivationBehavior(
+          postVisitor);
     } else {
-      activationTarget->ActivationBehavior(postVisitor);
+      chain[activationTargetItemIndex.value()].ActivationBehavior(postVisitor);
     }
     preVisitor.mEventStatus = postVisitor.mEventStatus;
     // If the DOM event was created during event flow.

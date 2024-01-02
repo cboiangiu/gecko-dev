@@ -13,7 +13,6 @@
 
 [Exposed=Window,
  InstrumentedProps=(cancelVideoFrameCallback,
-                    disablePictureInPicture,
                     onenterpictureinpicture,
                     onleavepictureinpicture,
                     playsInline,
@@ -55,14 +54,6 @@ partial interface HTMLVideoElement {
   // True if the video has an audio track available.
   readonly attribute boolean mozHasAudio;
 
-  // Attributes for builtin video controls to lock screen orientation.
-  // True if video controls should lock orientation when fullscreen.
-  [Pref="media.videocontrols.lock-video-orientation", Func="IsChromeOrUAWidget"]
-    readonly attribute boolean mozOrientationLockEnabled;
-  // True if screen orientation is locked by video controls.
-  [Pref="media.videocontrols.lock-video-orientation", Func="IsChromeOrUAWidget"]
-    attribute boolean mozIsOrientationLocked;
-
   // Clones the frames playing in this <video> to the target. Cloning ends
   // when either node is removed from their DOM trees. Throws if one or
   // both <video> elements are not attached to a DOM tree.
@@ -88,4 +79,9 @@ partial interface HTMLVideoElement {
 partial interface HTMLVideoElement {
   [Pref="media.mediasource.enabled", NewObject]
   VideoPlaybackQuality getVideoPlaybackQuality();
+};
+
+// https://w3c.github.io/picture-in-picture/#htmlvideoelement-extensions
+partial interface HTMLVideoElement {
+  [CEReactions, SetterThrows] attribute boolean disablePictureInPicture;
 };

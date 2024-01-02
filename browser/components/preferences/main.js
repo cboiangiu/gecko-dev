@@ -130,6 +130,7 @@ Preferences.addAll([
   { id: "general.autoScroll", type: "bool" },
   { id: "general.smoothScroll", type: "bool" },
   { id: "widget.gtk.overlay-scrollbars.enabled", type: "bool", inverted: true },
+  { id: "layout.css.always_underline_links", type: "bool" },
   { id: "layout.spellcheckDefault", type: "int" },
   { id: "accessibility.tabfocus", type: "int" },
 
@@ -422,7 +423,15 @@ var gMainPane = {
       NimbusFeatures.windowsLaunchOnLogin.recordExposureEvent({
         once: true,
       });
-      if (NimbusFeatures.windowsLaunchOnLogin.getVariable("enabled")) {
+      // We do a check here for startWithLastProfile as we could
+      // have disabled the pref for the user before they're ever
+      // exposed to the experiment on a new profile.
+      if (
+        NimbusFeatures.windowsLaunchOnLogin.getVariable("enabled") &&
+        Cc["@mozilla.org/toolkit/profile-service;1"].getService(
+          Ci.nsIToolkitProfileService
+        ).startWithLastProfile
+      ) {
         document.getElementById("windowsLaunchOnLoginBox").hidden = false;
       }
     }
@@ -658,17 +667,8 @@ var gMainPane = {
         let launchOnLoginCheckbox = document.getElementById(
           "windowsLaunchOnLogin"
         );
-        let registryName = WindowsLaunchOnLogin.getLaunchOnLoginRegistryName();
-        WindowsLaunchOnLogin.withLaunchOnLoginRegistryKey(async wrk => {
-          try {
-            // Reflect registry key value in about:preferences
-            launchOnLoginCheckbox.checked = wrk.hasValue(registryName);
-          } catch (e) {
-            // We should only end up here if we fail to open the registry
-            console.error("Failed to open Windows registry", e);
-          }
-        });
-
+        launchOnLoginCheckbox.checked =
+          WindowsLaunchOnLogin.getLaunchOnLoginEnabled();
         let approvedByWindows = WindowsLaunchOnLogin.getLaunchOnLoginApproved();
         launchOnLoginCheckbox.disabled = !approvedByWindows;
         document.getElementById("windowsLaunchOnLoginDisabledBox").hidden =
@@ -746,13 +746,15 @@ var gMainPane = {
       this._sortColumn = document.getElementById("typeColumn");
     }
 
-    let browserBundle = document.getElementById("browserBundle");
-    appendSearchKeywords("browserContainersSettings", [
-      browserBundle.getString("userContextPersonal.label"),
-      browserBundle.getString("userContextWork.label"),
-      browserBundle.getString("userContextBanking.label"),
-      browserBundle.getString("userContextShopping.label"),
-    ]);
+    appendSearchKeywords(
+      "browserContainersSettings",
+      [
+        "user-context-personal",
+        "user-context-work",
+        "user-context-banking",
+        "user-context-shopping",
+      ].map(ContextualIdentityService.formatContextLabel)
+    );
 
     AppearanceChooser.init();
 
@@ -1049,7 +1051,7 @@ var gMainPane = {
         const supportedLanguages =
           await TranslationsParent.getSupportedLanguages();
         const languageList =
-          TranslationsState.getLanguageList(supportedLanguages);
+          TranslationsParent.getLanguageList(supportedLanguages);
         const downloadPhases = await TranslationsState.createDownloadPhases(
           languageList
         );
@@ -1065,38 +1067,6 @@ var gMainPane = {
           languageList,
           downloadPhases
         );
-      }
-
-      /**
-       * Create a unique list of languages, sorted by the display name.
-       *
-       * @param {Object} supportedLanguages
-       * @returns {Array<{ langTag: string, displayName: string}}
-       */
-      static getLanguageList(supportedLanguages) {
-        const displayNames = new Map();
-        for (const languages of [
-          supportedLanguages.fromLanguages,
-          supportedLanguages.toLanguages,
-        ]) {
-          for (const { langTag, displayName } of languages) {
-            displayNames.set(langTag, displayName);
-          }
-        }
-
-        let appLangTag = new Intl.Locale(Services.locale.appLocaleAsBCP47)
-          .language;
-
-        // Don't offer to download the app's language.
-        displayNames.delete(appLangTag);
-
-        // Sort the list of languages by the display names.
-        return [...displayNames.entries()]
-          .map(([langTag, displayName]) => ({
-            langTag,
-            displayName,
-          }))
-          .sort((a, b) => a.displayName.localeCompare(b.displayName));
       }
 
       /**
@@ -1664,7 +1634,7 @@ var gMainPane = {
     startupPref.value = newValue;
   },
 
-  onWindowsLaunchOnLoginChange(event) {
+  async onWindowsLaunchOnLoginChange(event) {
     if (AppConstants.platform !== "win") {
       return;
     }
@@ -1676,8 +1646,9 @@ var gMainPane = {
         true
       );
     } else {
-      // windowsLaunchOnLogin has been unchecked: delete registry key
+      // windowsLaunchOnLogin has been unchecked: delete registry key and shortcut
       WindowsLaunchOnLogin.removeLaunchOnLoginRegistryKey();
+      await WindowsLaunchOnLogin.removeLaunchOnLoginShortcuts();
     }
   },
 
@@ -1765,7 +1736,7 @@ var gMainPane = {
   /**
    * Set browser as the operating system default browser.
    */
-  setDefaultBrowser() {
+  async setDefaultBrowser() {
     if (AppConstants.HAVE_SHELL_SERVICE) {
       let alwaysCheckPref = Preferences.get(
         "browser.shell.checkDefaultBrowser"
@@ -1779,11 +1750,20 @@ var gMainPane = {
       if (!shellSvc) {
         return;
       }
+
+      // Disable the set default button, so that the user doesn't try to hit it again
+      // while awaiting on setDefaultBrowser
+      let setDefaultButton = document.getElementById("setDefaultButton");
+      setDefaultButton.disabled = true;
+
       try {
-        shellSvc.setDefaultBrowser(false);
+        await shellSvc.setDefaultBrowser(false);
       } catch (ex) {
         console.error(ex);
         return;
+      } finally {
+        // Make sure to re-enable the default button when we're finished, regardless of the outcome
+        setDefaultButton.disabled = false;
       }
 
       let isDefault = shellSvc.isDefaultBrowser(false, true);
@@ -2164,22 +2144,14 @@ var gMainPane = {
   },
 
   onMigrationButtonCommand(command) {
-    // When browser.migrate.content-modal.enabled is enabled by default,
-    // the event handler can just call showMigrationWizardDialog directly,
-    // but for now, we delegate to MigrationUtils to open the native modal
-    // in case that's the dialog we're still using.
-    //
-    // Enabling the pref by default will be part of bug 1822156.
-    const browser = window.docShell.chromeEventHandler;
-    const browserWindow = browser.ownerGlobal;
+    // Even though we're going to be showing the migration wizard here in
+    // about:preferences, we'll delegate the call to
+    // `MigrationUtils.showMigrationWizard`, as this will allow us to
+    // properly measure entering the dialog from the PREFERENCES entrypoint.
+    const browserWindow = window.browsingContext.topChromeWindow;
 
-    // showMigrationWizard blocks on some platforms. We'll dispatch the request
-    // to open to a runnable on the main thread so that we don't have to block
-    // this function call.
-    Services.tm.dispatchToMainThread(() => {
-      MigrationUtils.showMigrationWizard(browserWindow, {
-        entrypoint: MigrationUtils.MIGRATION_ENTRYPOINTS.PREFERENCES,
-      });
+    MigrationUtils.showMigrationWizard(browserWindow, {
+      entrypoint: MigrationUtils.MIGRATION_ENTRYPOINTS.PREFERENCES,
     });
   },
 
@@ -3634,7 +3606,7 @@ var gMainPane = {
         // so if those are in use just display them. On other platforms
         // only do so if the folder matches the localized name.
         if (
-          AppConstants.platform == "mac" ||
+          AppConstants.platform == "macosx" ||
           leafName == firefoxLocalizedName
         ) {
           return { file, folderDisplayName: firefoxLocalizedName };
@@ -4203,22 +4175,10 @@ const AppearanceChooser = {
       });
     }
 
-    // Forward the click to the "colors" button.
-    document
-      .getElementById("web-appearance-manage-colors-link")
-      .addEventListener("click", function (e) {
-        document.getElementById("colors").click();
-        e.preventDefault();
-      });
-
-    document
-      .getElementById("web-appearance-manage-themes-link")
-      .addEventListener("click", function (e) {
-        window.browsingContext.topChromeWindow.BrowserOpenAddonsMgr(
-          "addons://list/theme"
-        );
-        e.preventDefault();
-      });
+    let webAppearanceSettings = document.getElementById(
+      "webAppearanceSettings"
+    );
+    webAppearanceSettings.addEventListener("click", this);
 
     this.warning = document.getElementById("web-appearance-override-warning");
 
@@ -4234,6 +4194,23 @@ const AppearanceChooser = {
   },
 
   handleEvent(e) {
+    if (e.type == "click") {
+      switch (e.target.id) {
+        // Forward the click to the "colors" button.
+        case "web-appearance-manage-colors-link":
+          document.getElementById("colors").click();
+          e.preventDefault();
+          break;
+        case "web-appearance-manage-themes-link":
+          window.browsingContext.topChromeWindow.BrowserOpenAddonsMgr(
+            "addons://list/theme"
+          );
+          e.preventDefault();
+          break;
+        default:
+          break;
+      }
+    }
     this._update();
   },
 

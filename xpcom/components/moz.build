@@ -75,11 +75,9 @@ LOCAL_INCLUDES += [
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
-    if CONFIG["MOZ_ENABLE_DBUS"]:
-        CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
 
 include("/ipc/chromium/chromium-config.mozbuild")
 
 PYTHON_UNITTEST_MANIFESTS += [
-    "test/python.ini",
+    "test/python.toml",
 ]

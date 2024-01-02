@@ -41,14 +41,28 @@
   --toolbar-field-border-color: ThreeDShadow;
   --toolbar-field-focus-background-color: Field;
   --toolbar-field-focus-color: FieldText;
+  --toolbar-field-focus-border-color: color-mix(in srgb, var(--focus-outline-color) 50%, transparent);
+
+  --toolbar-non-lwt-bgcolor: color-mix(in srgb, -moz-dialog 85%, white);
+  --toolbar-non-lwt-textcolor: -moz-dialogtext;
+  --toolbar-bgcolor: var(--toolbar-non-lwt-bgcolor);
+  --toolbar-color: var(--toolbar-non-lwt-textcolor);
+
+  /* This color scheme should match --toolbar-color. However, note that
+   * individual toolbars might override this (see ToolbarIconColor and the
+   * brighttext attribute). */
+  --toolbar-color-scheme: light dark;
+  &[lwt-toolbar="light"] {
+    --toolbar-color-scheme: light;
+  }
+  &[lwt-toolbar="dark"] {
+    --toolbar-color-scheme: dark;
+  }
 }
 
 :root:-moz-lwtheme {
-  --toolbar-field-background-color: rgba(255, 255, 255, 0.8);
-  --toolbar-field-focus-background-color: white;
-  --toolbar-field-color: black;
-  --toolbar-field-focus-color: black;
-  --toolbar-field-border-color: transparent;
+  --toolbar-bgcolor: rgba(255,255,255,.4);
+  --toolbar-color: var(--lwt-text-color, inherit);
 }
 
 @media (prefers-contrast) {
@@ -58,6 +72,7 @@
     --toolbarbutton-disabled-opacity: 0.3;
 
     --panel-separator-color: currentColor;
+    --toolbar-field-focus-border-color: var(--focus-outline-color);
   }
 
   :root:not(:-moz-lwtheme) {
@@ -77,11 +92,11 @@
 
 :root:-moz-lwtheme {
   toolbar,
-  panel {
+  &[lwt-popup="light"] panel {
     color-scheme: light;
   }
   toolbar[brighttext],
-  &[lwt-popup-brighttext] panel {
+  &[lwt-popup="dark"] panel {
     color-scheme: dark;
   }
 }
@@ -203,7 +218,7 @@ button.text-link .button-text {
   margin: 8px 16px 16px;
 }
 
-.panel-footer-button {
+.footer-button {
   appearance: none;
   border: 0;
   border-radius: 4px;
@@ -243,6 +258,14 @@ button.text-link .button-text {
         background-color: var(--button-primary-active-bgcolor);
       }
     }
+  }
+
+  &[type=menu] > .button-box > .button-menu-dropmarker {
+    appearance: none;
+    display: flex;
+    content: url("chrome://global/skin/icons/arrow-down-12.svg");
+    -moz-context-properties: fill;
+    fill: currentColor;
   }
 }
 
@@ -298,6 +321,11 @@ button.text-link .button-text {
    * backgrounds, so we make sure to apply it on top of the default background. */
   background-image: var(--content-select-background-image, none);
   background-color: -moz-Combobox;
+}
+
+/* Full width separator in select */
+#ContentSelectDropdown menuseparator {
+  padding-inline: 0;
 }
 
 /* Indent options in optgroups */

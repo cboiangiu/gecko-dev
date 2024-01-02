@@ -45,7 +45,7 @@ ChromeUtils.defineESModuleGetters(this, {
   BasePromiseWorker: "resource://gre/modules/PromiseWorker.sys.mjs",
 });
 
-const CACHE_WORKER_URL = "resource://activity-stream/lib/cache-worker.js";
+const CACHE_WORKER_URL = "resource://activity-stream/lib/cache.worker.js";
 const NEWTAB_RENDER_URL =
   "resource://activity-stream/data/content/newtab-render.js";
 
@@ -85,10 +85,6 @@ add_setup(async function () {
     })
   );
 
-  let newConfig = Object.assign(defaultDSConfig, {
-    show_spocs: false,
-  });
-
   const sandbox = sinon.createSandbox();
   sandbox
     .stub(DiscoveryStreamFeed.prototype, "generateFeedUrl")
@@ -98,7 +94,7 @@ add_setup(async function () {
   // at the local top stories feed.
   Services.prefs.setCharPref(
     "browser.newtabpage.activity-stream.discoverystream.config",
-    JSON.stringify(newConfig)
+    JSON.stringify(defaultDSConfig)
   );
 
   // We need to allow example.com as a place to get both the layout and the
@@ -112,7 +108,6 @@ add_setup(async function () {
     "browser.newtabpage.activity-stream.telemetry.structuredIngestion",
     false
   );
-  Services.prefs.setBoolPref("browser.ping-centre.telemetry", false);
 
   // We need a default search engine set up for rendering the search input.
   await SearchTestUtils.installSearchExtension(

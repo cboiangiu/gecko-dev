@@ -16,6 +16,9 @@ add_task(async function dragTest() {
       let helper = new ScreenshotsHelper(browser);
       let contentInfo = await helper.getContentDimensions();
       ok(contentInfo, "Got dimensions back from the content");
+      let expected = Math.floor(
+        490 * (await getContentDevicePixelRatio(browser))
+      );
 
       helper.triggerUIFromToolbar();
 
@@ -23,20 +26,17 @@ add_task(async function dragTest() {
 
       await helper.dragOverlay(10, 10, 500, 500);
 
-      let clipboardChanged = helper.waitForRawClipboardChange();
+      let clipboardChanged = helper.waitForRawClipboardChange(
+        expected,
+        expected
+      );
 
-      helper.clickCopyButton();
+      await helper.clickCopyButton();
 
       info("Waiting for clipboard change");
-      await clipboardChanged;
-
-      let result = await helper.getImageSizeAndColorFromClipboard();
+      let result = await clipboardChanged;
 
       info("result: " + JSON.stringify(result, null, 2));
-
-      let expected = Math.floor(
-        490 * (await getContentDevicePixelRatio(browser))
-      );
 
       Assert.equal(
         result.width,
@@ -68,6 +68,9 @@ add_task(async function dragTest1Point5Zoom() {
 
       let contentInfo = await helper.getContentDimensions();
       ok(contentInfo, "Got dimensions back from the content");
+      let expected = Math.floor(
+        50 * (await getContentDevicePixelRatio(browser))
+      );
 
       helper.triggerUIFromToolbar();
 
@@ -75,14 +78,16 @@ add_task(async function dragTest1Point5Zoom() {
 
       await helper.dragOverlay(300, 100, 350, 150);
 
-      let clipboardChanged = helper.waitForRawClipboardChange();
+      let clipboardChanged = helper.waitForRawClipboardChange(
+        expected,
+        expected
+      );
 
-      helper.clickCopyButton();
+      await helper.clickCopyButton();
 
       info("Waiting for clipboard change");
-      await clipboardChanged;
+      let result = await clipboardChanged;
 
-      let result = await helper.getImageSizeAndColorFromClipboard();
       result.zoom = zoom;
       result.devicePixelRatio = window.devicePixelRatio;
       result.contentDevicePixelRatio = await getContentDevicePixelRatio(
@@ -90,10 +95,6 @@ add_task(async function dragTest1Point5Zoom() {
       );
 
       info("result: " + JSON.stringify(result, null, 2));
-
-      let expected = Math.floor(
-        50 * (await getContentDevicePixelRatio(browser))
-      );
 
       Assert.equal(
         result.width,
@@ -163,7 +164,7 @@ add_task(async function overlayCancelButton() {
 
       await helper.dragOverlay(10, 10, 300, 300);
 
-      helper.clickCancelButton();
+      await helper.clickCancelButton();
 
       await helper.waitForOverlayClosed();
 
@@ -180,13 +181,16 @@ add_task(async function preserveBoxSizeWhenMovingOutOfWindowBounds() {
   await BrowserTestUtils.withNewTab(
     {
       gBrowser,
-      url: TEST_PAGE,
+      url: SHORT_TEST_PAGE,
     },
     async browser => {
       let helper = new ScreenshotsHelper(browser);
 
       let contentInfo = await helper.getContentDimensions();
       ok(contentInfo, "Got dimensions back from the content");
+      let expected = Math.floor(
+        490 * (await getContentDevicePixelRatio(browser))
+      );
 
       helper.triggerUIFromToolbar();
 
@@ -217,20 +221,21 @@ add_task(async function preserveBoxSizeWhenMovingOutOfWindowBounds() {
         Math.floor((endY - startY) / 2)
       );
 
-      let clipboardChanged = helper.waitForRawClipboardChange();
+      await helper.waitForStateChange("selected");
+      state = await helper.getOverlayState();
+      Assert.equal(state, "selected", "The overlay is in the selected state");
 
-      helper.clickCopyButton();
+      let clipboardChanged = helper.waitForRawClipboardChange(
+        expected,
+        expected
+      );
+
+      await helper.clickCopyButton();
 
       info("Waiting for clipboard change");
-      await clipboardChanged;
-
-      let result = await helper.getImageSizeAndColorFromClipboard();
+      let result = await clipboardChanged;
 
       info("result: " + JSON.stringify(result, null, 2));
-
-      let expected = Math.floor(
-        490 * (await getContentDevicePixelRatio(browser))
-      );
 
       Assert.equal(
         result.width,
@@ -261,6 +266,9 @@ add_task(async function resizeAllEdges() {
 
       let contentInfo = await helper.getContentDimensions();
       ok(contentInfo, "Got dimensions back from the content");
+      let expected = Math.floor(
+        300 * (await getContentDevicePixelRatio(browser))
+      );
 
       helper.triggerUIFromToolbar();
 
@@ -332,23 +340,20 @@ add_task(async function resizeAllEdges() {
       state = await helper.getOverlayState();
       Assert.equal(state, "selected", "The overlay is in the selected state");
 
-      let clipboardChanged = helper.waitForRawClipboardChange();
+      let clipboardChanged = helper.waitForRawClipboardChange(
+        expected,
+        expected
+      );
 
       helper.endX = 400;
       helper.endY = 400;
 
-      helper.clickCopyButton();
+      await helper.clickCopyButton();
 
       info("Waiting for clipboard change");
-      await clipboardChanged;
-
-      let result = await helper.getImageSizeAndColorFromClipboard();
+      let result = await clipboardChanged;
 
       info("result: " + JSON.stringify(result, null, 2));
-
-      let expected = Math.floor(
-        300 * (await getContentDevicePixelRatio(browser))
-      );
 
       Assert.equal(
         result.width,
@@ -379,6 +384,9 @@ add_task(async function resizeAllCorners() {
 
       let contentInfo = await helper.getContentDimensions();
       ok(contentInfo, "Got dimensions back from the content");
+      let expected = Math.floor(
+        300 * (await getContentDevicePixelRatio(browser))
+      );
 
       helper.triggerUIFromToolbar();
 
@@ -442,23 +450,20 @@ add_task(async function resizeAllCorners() {
       state = await helper.getOverlayState();
       Assert.equal(state, "selected", "The overlay is in the selected state");
 
-      let clipboardChanged = helper.waitForRawClipboardChange();
+      let clipboardChanged = helper.waitForRawClipboardChange(
+        expected,
+        expected
+      );
 
       helper.endX = 400;
       helper.endY = 400;
 
-      helper.clickCopyButton();
+      await helper.clickCopyButton();
 
       info("Waiting for clipboard change");
-      await clipboardChanged;
-
-      let result = await helper.getImageSizeAndColorFromClipboard();
+      let result = await clipboardChanged;
 
       info("result: " + JSON.stringify(result, null, 2));
-
-      let expected = Math.floor(
-        300 * (await getContentDevicePixelRatio(browser))
-      );
 
       Assert.equal(
         result.width,
@@ -469,6 +474,74 @@ add_task(async function resizeAllCorners() {
         result.height,
         expected,
         `The copied image from the overlay is ${expected}px in height`
+      );
+    }
+  );
+});
+
+/**
+ * This function tests clicking the overlay with the different mouse buttons
+ */
+add_task(async function test_otherMouseButtons() {
+  await BrowserTestUtils.withNewTab(
+    {
+      gBrowser,
+      url: TEST_PAGE,
+    },
+    async browser => {
+      let helper = new ScreenshotsHelper(browser);
+      helper.triggerUIFromToolbar();
+
+      await helper.waitForOverlay();
+
+      await helper.dragOverlay(10, 10, 100, 100);
+
+      // click outside overlay
+      mouse.click(200, 200, { button: 1 });
+      mouse.click(200, 200, { button: 2 });
+
+      await TestUtils.waitForTick();
+
+      await helper.waitForStateChange("selected");
+      let state = await helper.getOverlayState();
+      Assert.equal(
+        state,
+        "selected",
+        "The state is still in the selected state"
+      );
+
+      mouse.click(200, 200);
+
+      await helper.waitForStateChange("crosshairs");
+      state = await helper.getOverlayState();
+      Assert.equal(state, "crosshairs", "The state is in the crosshairs state");
+
+      mouse.down(10, 10, { button: 1 });
+      mouse.move(100, 100, { button: 1 });
+      mouse.up(100, 100, { button: 1 });
+
+      await TestUtils.waitForTick();
+
+      await helper.waitForStateChange("crosshairs");
+      state = await helper.getOverlayState();
+      Assert.equal(
+        state,
+        "crosshairs",
+        "The state is still in the crosshairs state"
+      );
+
+      mouse.down(10, 10, { button: 2 });
+      mouse.move(100, 100, { button: 2 });
+      mouse.up(100, 100, { button: 2 });
+
+      await TestUtils.waitForTick();
+
+      await helper.waitForStateChange("crosshairs");
+      state = await helper.getOverlayState();
+      Assert.equal(
+        state,
+        "crosshairs",
+        "The state is still in the crosshairs state"
       );
     }
   );

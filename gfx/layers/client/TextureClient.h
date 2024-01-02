@@ -18,6 +18,7 @@
 #include "mozilla/Attributes.h"  // for override
 #include "mozilla/DebugOnly.h"
 #include "mozilla/RefPtr.h"  // for RefPtr, RefCounted
+#include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/gfx/2D.h"  // for DrawTarget
 #include "mozilla/gfx/CriticalSection.h"
 #include "mozilla/gfx/Point.h"  // for IntSize
@@ -69,6 +70,7 @@ class SharedSurfaceTextureData;
 class TextureClientPool;
 #endif
 class TextureForwarder;
+struct RemoteTextureOwnerId;
 
 /**
  * TextureClient is the abstraction that allows us to share data between the
@@ -98,6 +100,9 @@ enum TextureAllocationFlags {
 
   // Do not use an accelerated texture type.
   ALLOC_DO_NOT_ACCELERATE = 1 << 8,
+
+  // Force allocation of remote/recorded texture, or fail if not possible.
+  ALLOC_FORCE_REMOTE = 1 << 9,
 };
 
 enum class BackendSelector { Content, Canvas };
@@ -222,6 +227,10 @@ class TextureData {
           canConcurrentlyReadLock(true) {}
   };
 
+  static TextureData* Create(
+      TextureType aTextureType, gfx::SurfaceFormat aFormat,
+      const gfx::IntSize& aSize, TextureAllocationFlags aAllocFlags,
+      gfx::BackendType aBackendType = gfx::BackendType::NONE);
   static TextureData* Create(TextureForwarder* aAllocator,
                              gfx::SurfaceFormat aFormat, gfx::IntSize aSize,
                              KnowsCompositor* aKnowsCompositor,
@@ -230,11 +239,17 @@ class TextureData {
                              TextureAllocationFlags aAllocFlags);
 
   static bool IsRemote(KnowsCompositor* aKnowsCompositor,
-                       BackendSelector aSelector);
+                       BackendSelector aSelector,
+                       gfx::SurfaceFormat aFormat = gfx::SurfaceFormat::UNKNOWN,
+                       gfx::IntSize aSize = gfx::IntSize(1, 1));
 
   MOZ_COUNTED_DTOR_VIRTUAL(TextureData)
 
+  virtual TextureType GetTextureType() const { return TextureType::Last; }
+
   virtual void FillInfo(TextureData::Info& aInfo) const = 0;
+
+  virtual void InvalidateContents() {}
 
   virtual bool Lock(OpenMode aMode) = 0;
 
@@ -253,6 +268,8 @@ class TextureData {
   virtual already_AddRefed<gfx::SourceSurface> BorrowSnapshot() {
     return nullptr;
   }
+
+  virtual void ReturnSnapshot(already_AddRefed<gfx::SourceSurface> aSnapshot) {}
 
   virtual bool BorrowMappedData(MappedTextureData&) { return false; }
 
@@ -310,6 +327,10 @@ class TextureData {
   virtual mozilla::ipc::FileDescriptor GetAcquireFence() {
     return mozilla::ipc::FileDescriptor();
   }
+
+  virtual void SetRemoteTextureOwnerId(RemoteTextureOwnerId) {}
+
+  virtual bool RequiresRefresh() const { return false; }
 
  protected:
   MOZ_COUNTED_DEFAULT_CTOR(TextureData)
@@ -446,6 +467,8 @@ class TextureClient : public AtomicRefCountedWithFinalize<TextureClient> {
 
   already_AddRefed<gfx::SourceSurface> BorrowSnapshot();
 
+  void ReturnSnapshot(already_AddRefed<gfx::SourceSurface> aSnapshot);
+
   /**
    * Similar to BorrowDrawTarget but provides direct access to the texture's
    * bits instead of a DrawTarget.
@@ -554,7 +577,8 @@ class TextureClient : public AtomicRefCountedWithFinalize<TextureClient> {
    * Should be called only once per TextureClient.
    * The TextureClient must not be locked when calling this method.
    */
-  bool InitIPDLActor(KnowsCompositor* aKnowsCompositor);
+  bool InitIPDLActor(KnowsCompositor* aKnowsCompositor,
+                     const dom::ContentParentId& aContentId);
 
   /**
    * Return a pointer to the IPDLActor.
@@ -701,6 +725,7 @@ class TextureClient : public AtomicRefCountedWithFinalize<TextureClient> {
 
   TextureData* mData;
   RefPtr<gfx::DrawTarget> mBorrowedDrawTarget;
+  bool mBorrowedSnapshot = false;
 
   TextureFlags mFlags;
 

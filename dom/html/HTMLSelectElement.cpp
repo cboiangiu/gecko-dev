@@ -16,8 +16,10 @@
 #include "mozilla/dom/HTMLOptionElement.h"
 #include "mozilla/dom/HTMLSelectElementBinding.h"
 #include "mozilla/dom/UnionTypes.h"
+#include "mozilla/dom/WindowGlobalChild.h"
 #include "mozilla/MappedDeclarationsBuilder.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/Unused.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsContentList.h"
 #include "nsContentUtils.h"
@@ -162,6 +164,55 @@ NS_IMPL_ELEMENT_CLONE(HTMLSelectElement)
 void HTMLSelectElement::SetCustomValidity(const nsAString& aError) {
   ConstraintValidation::SetCustomValidity(aError);
   UpdateValidityElementStates(true);
+}
+
+// https://html.spec.whatwg.org/multipage/input.html#dom-input-showpicker
+void HTMLSelectElement::ShowPicker(ErrorResult& aRv) {
+  // Step 1. If this is not mutable, then throw an "InvalidStateError"
+  // DOMException.
+  if (IsDisabled()) {
+    return aRv.ThrowInvalidStateError("This select is disabled.");
+  }
+
+  // Step 2. If this's relevant settings object's origin is not same origin with
+  // this's relevant settings object's top-level origin, and this is a select
+  // element, [...], then throw a "SecurityError" DOMException.
+  nsPIDOMWindowInner* window = OwnerDoc()->GetInnerWindow();
+  WindowGlobalChild* windowGlobalChild =
+      window ? window->GetWindowGlobalChild() : nullptr;
+  if (!windowGlobalChild || !windowGlobalChild->SameOriginWithTop()) {
+    return aRv.ThrowSecurityError(
+        "Call was blocked because the current origin isn't same-origin with "
+        "top.");
+  }
+
+  // Step 3. If this's relevant global object does not have transient
+  // activation, then throw a "NotAllowedError" DOMException.
+  if (!OwnerDoc()->HasValidTransientUserGestureActivation()) {
+    return aRv.ThrowNotAllowedError(
+        "Call was blocked due to lack of user activation.");
+  }
+
+  // Step 4. If this is a select element, and this is not being rendered, then
+  // throw a "NotSupportedError" DOMException.
+
+  // Flush frames so that IsRendered returns up-to-date results.
+  Unused << GetPrimaryFrame(FlushType::Frames);
+  if (!IsRendered()) {
+    return aRv.ThrowNotSupportedError("This select isn't being rendered.");
+  }
+
+  // Step 5. Show the picker, if applicable, for this.
+#if !defined(ANDROID)
+  if (!IsCombobox()) {
+    return;
+  }
+#endif
+  if (!OpenInParentProcess()) {
+    RefPtr<Document> doc = OwnerDoc();
+    nsContentUtils::DispatchChromeEvent(doc, this, u"mozshowdropdown"_ns,
+                                        CanBubble::eYes, Cancelable::eNo);
+  }
 }
 
 void HTMLSelectElement::GetAutocomplete(DOMString& aValue) {
@@ -328,7 +379,13 @@ nsresult HTMLSelectElement::RemoveOptionsFromList(nsIContent* aOptions,
       if (mSelectedIndex < (aListIndex + numRemoved)) {
         // aListIndex <= mSelectedIndex < aListIndex+numRemoved
         // Find a new selected index if it was one of the ones removed.
-        FindSelectedIndex(aListIndex, aNotify);
+        // If this is a Combobox, no other Item will be selected.
+        if (IsCombobox()) {
+          mSelectedIndex = -1;
+          SetSelectionChanged(true, aNotify);
+        } else {
+          FindSelectedIndex(aListIndex, aNotify);
+        }
       } else {
         // Shift the selected index if something in front of it was removed
         // aListIndex+numRemoved <= mSelectedIndex

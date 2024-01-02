@@ -53,10 +53,10 @@ module.exports = {
       },
     },
     {
-      files: ["**/*.mjs", "**/*.jsm"],
+      files: ["**/*.mjs", "**/*.jsm", "**/?(*.)worker.?(m)js"],
       rules: {
-        // Modules are far easier to check for no-unused-vars on a global scope,
-        // than our content files. Hence we turn that on here.
+        // Modules and workers are far easier to check for no-unused-vars on a
+        // global scope, than our content files. Hence we turn that on here.
         "no-unused-vars": [
           "error",
           {
@@ -101,13 +101,13 @@ module.exports = {
         browser: false,
         "mozilla/privileged": false,
         "mozilla/sjs": true,
+        "mozilla/specific": false,
       },
       files: ["**/*.sjs"],
       rules: {
-        // TODO Bug 1501127: sjs files have their own sandbox, and do not inherit
-        // the Window backstage pass directly. Turn this rule off for sjs files for
-        // now until we develop a solution.
-        "mozilla/reject-importGlobalProperties": "off",
+        // For sjs files, reject everything as we should update the sandbox
+        // to include the globals we need, as these are test-only files.
+        "mozilla/reject-importGlobalProperties": ["error", "everything"],
       },
     },
     {
@@ -115,7 +115,12 @@ module.exports = {
         browser: false,
         worker: true,
       },
-      files: ["**/*.worker.js", "**/*.worker.mjs"],
+      files: [
+        // Most files should use the `.worker.` format to be consistent with
+        // other items like `.sys.mjs`, but we allow simply calling the file
+        // "worker" as well.
+        "**/?(*.)worker.?(m)js",
+      ],
     },
   ],
 

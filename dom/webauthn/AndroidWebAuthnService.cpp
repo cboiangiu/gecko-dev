@@ -34,8 +34,13 @@ namespace dom {
 NS_IMPL_ISUPPORTS(AndroidWebAuthnService, nsIWebAuthnService)
 
 NS_IMETHODIMP
+AndroidWebAuthnService::GetIsUVPAA(bool* aAvailable) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 AndroidWebAuthnService::MakeCredential(uint64_t aTransactionId,
-                                       uint64_t browsingContextId,
+                                       uint64_t aBrowsingContextId,
                                        nsIWebAuthnRegisterArgs* aArgs,
                                        nsIWebAuthnRegisterPromise* aPromise) {
   Reset();
@@ -84,11 +89,7 @@ AndroidWebAuthnService::MakeCredential(uint64_t aTransactionId,
             userId.Length());
 
         nsTArray<uint8_t> challBuf;
-        nsresult rv = aArgs->GetClientDataHash(challBuf);
-        if (NS_FAILED(rv)) {
-          aPromise->Reject(rv);
-          return;
-        }
+        Unused << aArgs->GetChallenge(challBuf);
         jni::ByteBuffer::LocalRef challenge = jni::ByteBuffer::New(
             const_cast<void*>(static_cast<const void*>(challBuf.Elements())),
             challBuf.Length());
@@ -109,9 +110,7 @@ AndroidWebAuthnService::MakeCredential(uint64_t aTransactionId,
         }
 
         nsTArray<uint8_t> transportBuf;
-        /* Bug 1857335 - nsIWebAuthnRegisterArgs doesn't expose the transports
-         * associated with the allowList entries. They're optional, so it's
-         * not critical that we include them. */
+        Unused << aArgs->GetExcludeListTransports(transportBuf);
         jni::ByteBuffer::LocalRef transportList = jni::ByteBuffer::New(
             const_cast<void*>(
                 static_cast<const void*>(transportBuf.Elements())),
@@ -152,7 +151,8 @@ AndroidWebAuthnService::MakeCredential(uint64_t aTransactionId,
         }
 
         nsString authenticatorAttachment;
-        rv = aArgs->GetAuthenticatorAttachment(authenticatorAttachment);
+        nsresult rv =
+            aArgs->GetAuthenticatorAttachment(authenticatorAttachment);
         if (rv != NS_ERROR_NOT_AVAILABLE) {
           if (NS_FAILED(rv)) {
             aPromise->Reject(rv);
@@ -201,10 +201,17 @@ AndroidWebAuthnService::MakeCredential(uint64_t aTransactionId,
 
 NS_IMETHODIMP
 AndroidWebAuthnService::GetAssertion(uint64_t aTransactionId,
-                                     uint64_t browsingContextId,
+                                     uint64_t aBrowsingContextId,
                                      nsIWebAuthnSignArgs* aArgs,
                                      nsIWebAuthnSignPromise* aPromise) {
   Reset();
+
+  bool conditionallyMediated;
+  Unused << aArgs->GetConditionallyMediated(&conditionallyMediated);
+  if (conditionallyMediated) {
+    aPromise->Reject(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    return NS_OK;
+  }
 
   GetMainThreadSerialEventTarget()->Dispatch(NS_NewRunnableFunction(
       "java::WebAuthnTokenManager::WebAuthnGetAssertion",
@@ -213,11 +220,7 @@ AndroidWebAuthnService::GetAssertion(uint64_t aTransactionId,
         AssertIsOnMainThread();
 
         nsTArray<uint8_t> challBuf;
-        nsresult rv = aArgs->GetClientDataHash(challBuf);
-        if (NS_FAILED(rv)) {
-          aPromise->Reject(NS_ERROR_DOM_NOT_ALLOWED_ERR);
-          return;
-        }
+        Unused << aArgs->GetChallenge(challBuf);
         jni::ByteBuffer::LocalRef challenge = jni::ByteBuffer::New(
             const_cast<void*>(static_cast<const void*>(challBuf.Elements())),
             challBuf.Length());
@@ -238,9 +241,7 @@ AndroidWebAuthnService::GetAssertion(uint64_t aTransactionId,
         }
 
         nsTArray<uint8_t> transportBuf;
-        /* Bug 1857335 - nsIWebAuthnSignArgs doesn't expose the transports
-         * associated with the allowList entries. They're optional, so it's
-         * not critical that we include them. */
+        Unused << aArgs->GetAllowListTransports(transportBuf);
         jni::ByteBuffer::LocalRef transportList = jni::ByteBuffer::New(
             const_cast<void*>(
                 static_cast<const void*>(transportBuf.Elements())),
@@ -272,7 +273,7 @@ AndroidWebAuthnService::GetAssertion(uint64_t aTransactionId,
         GECKOBUNDLE_START(extensionsBundle);
 
         nsString appId;
-        rv = aArgs->GetAppId(appId);
+        nsresult rv = aArgs->GetAppId(appId);
         if (rv != NS_ERROR_NOT_AVAILABLE) {
           if (NS_FAILED(rv)) {
             aPromise->Reject(NS_ERROR_DOM_NOT_ALLOWED_ERR);
@@ -305,12 +306,41 @@ AndroidWebAuthnService::GetAssertion(uint64_t aTransactionId,
 
 NS_IMETHODIMP
 AndroidWebAuthnService::Reset() {
-  mRegisterCredPropsRk = Nothing();
+  mRegisterCredPropsRk.reset();
+
   return NS_OK;
 }
 
 NS_IMETHODIMP
 AndroidWebAuthnService::Cancel(uint64_t aTransactionId) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+AndroidWebAuthnService::HasPendingConditionalGet(uint64_t aBrowsingContextId,
+                                                 const nsAString& aOrigin,
+                                                 uint64_t* aRv) {
+  // Signal that there is no pending conditional get request, so the caller
+  // will not attempt to call GetAutoFillEntries, SelectAutoFillEntry, or
+  // ResumeConditionalGet (as these are not implemented).
+  *aRv = 0;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+AndroidWebAuthnService::GetAutoFillEntries(
+    uint64_t aTransactionId, nsTArray<RefPtr<nsIWebAuthnAutoFillEntry>>& aRv) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+AndroidWebAuthnService::SelectAutoFillEntry(
+    uint64_t aTransactionId, const nsTArray<uint8_t>& aCredentialId) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+AndroidWebAuthnService::ResumeConditionalGet(uint64_t aTransactionId) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -377,6 +407,14 @@ AndroidWebAuthnService::RemoveAllCredentials(uint64_t authenticatorId) {
 NS_IMETHODIMP
 AndroidWebAuthnService::SetUserVerified(uint64_t authenticatorId,
                                         bool isUserVerified) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+AndroidWebAuthnService::Listen() { return NS_ERROR_NOT_IMPLEMENTED; }
+
+NS_IMETHODIMP
+AndroidWebAuthnService::RunCommand(const nsACString& cmd) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 

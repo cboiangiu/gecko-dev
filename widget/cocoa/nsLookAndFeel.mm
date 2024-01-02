@@ -47,7 +47,7 @@ void nsLookAndFeel::NativeInit() {
 
 static nscolor GetColorFromNSColor(NSColor* aColor) {
   NSColor* deviceColor =
-      [aColor colorUsingColorSpaceName:NSDeviceRGBColorSpace];
+      [aColor colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]];
   return NS_RGBA((unsigned int)(deviceColor.redComponent * 255.0),
                  (unsigned int)(deviceColor.greenComponent * 255.0),
                  (unsigned int)(deviceColor.blueComponent * 255.0),
@@ -57,7 +57,7 @@ static nscolor GetColorFromNSColor(NSColor* aColor) {
 static nscolor GetColorFromNSColorWithCustomAlpha(NSColor* aColor,
                                                   float alpha) {
   NSColor* deviceColor =
-      [aColor colorUsingColorSpaceName:NSDeviceRGBColorSpace];
+      [aColor colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]];
   return NS_RGBA((unsigned int)(deviceColor.redComponent * 255.0),
                  (unsigned int)(deviceColor.greenComponent * 255.0),
                  (unsigned int)(deviceColor.blueComponent * 255.0),
@@ -130,14 +130,17 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
     case ColorID::MozMenuhoverdisabled:
       aColor = NS_TRANSPARENT;
       break;
+    case ColorID::Accentcolor:
+      color = GetColorFromNSColor(NSColor.controlAccentColor);
+      break;
     case ColorID::MozMenuhover:
     case ColorID::Selecteditem:
-      color = GetColorFromNSColor(NSColor.alternateSelectedControlColor);
+      color = GetColorFromNSColor(NSColor.selectedContentBackgroundColor);
       break;
     case ColorID::Accentcolortext:
     case ColorID::MozMenuhovertext:
     case ColorID::Selecteditemtext:
-      color = GetColorFromNSColor(NSColor.alternateSelectedControlTextColor);
+      color = GetColorFromNSColor(NSColor.selectedMenuItemTextColor);
       break;
     case ColorID::IMESelectedRawTextBackground:
     case ColorID::IMESelectedConvertedTextBackground:
@@ -176,6 +179,14 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
     case ColorID::MozMacDefaultbuttontext:
       color = NS_RGB(0xFF, 0xFF, 0xFF);
       break;
+    case ColorID::MozSidebar:
+      color = aScheme == ColorScheme::Light ? NS_RGB(0xf6, 0xf6, 0xf6)
+                                            : NS_RGB(0x2d, 0x2d, 0x2d);
+      break;
+    case ColorID::MozSidebarborder:
+      // hsla(240, 5%, 5%, .1)
+      color = NS_RGBA(12, 12, 13, 26);
+      break;
     case ColorID::MozButtonactivetext:
       // Pre-macOS 12, pressed buttons were filled with the highlight color and
       // the text was white. Starting with macOS 12, pressed (non-default)
@@ -187,6 +198,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
       break;
     case ColorID::Menutext:
     case ColorID::Infotext:
+    case ColorID::MozSidebartext:
       color = GetColorFromNSColor(NSColor.textColor);
       break;
     case ColorID::Windowtext:
@@ -202,6 +214,9 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
     case ColorID::MozButtonhoverface:
     case ColorID::MozButtonactiveface:
     case ColorID::MozButtondisabledface:
+    case ColorID::MozColheader:
+    case ColorID::MozColheaderhover:
+    case ColorID::MozColheaderactive:
       color = GetColorFromNSColor(NSColor.controlColor);
       if (!NS_GET_A(color)) {
         color = GetColorFromNSColor(NSColor.controlBackgroundColor);
@@ -236,7 +251,10 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
                                            : NS_RGB(0xDA, 0xDA, 0xDA);
       break;
     case ColorID::Menu:
-      color = GetColorFromNSColor(NSColor.textBackgroundColor);
+      // Hand-picked from Sonoma because there doesn't seem to be any
+      // appropriate menu system color.
+      color = aScheme == ColorScheme::Dark ? NS_RGB(0x36, 0x36, 0x39)
+                                           : NS_RGB(0xeb, 0xeb, 0xeb);
       break;
     case ColorID::Windowframe:
       color = GetColorFromNSColor(NSColor.windowFrameColor);
@@ -258,17 +276,12 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
     case ColorID::MozCellhighlighttext:
     case ColorID::MozColheadertext:
     case ColorID::MozColheaderhovertext:
+    case ColorID::MozColheaderactivetext:
       color = GetColorFromNSColor(NSColor.controlTextColor);
       break;
     case ColorID::MozMacFocusring:
       color = GetColorFromNSColorWithCustomAlpha(
           NSColor.keyboardFocusIndicatorColor, 0.48);
-      break;
-    case ColorID::MozMacMenutextdisable:
-      color = NS_RGB(0x98, 0x98, 0x98);
-      break;
-    case ColorID::MozMacMenutextselect:
-      color = GetColorFromNSColor(NSColor.selectedMenuItemTextColor);
       break;
     case ColorID::MozMacDisabledtoolbartext:
     case ColorID::Graytext:
@@ -293,25 +306,6 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
       break;
     case ColorID::MozNativevisitedhyperlinktext:
       color = GetColorFromNSColor(NSColor.systemPurpleColor);
-      break;
-    case ColorID::MozMacTooltip:
-    case ColorID::MozMacMenupopup:
-    case ColorID::MozMacMenuitem:
-      color = aScheme == ColorScheme::Light ? NS_RGB(0xf6, 0xf6, 0xf6)
-                                            : NS_RGB(0x28, 0x28, 0x28);
-      break;
-    case ColorID::MozMacSourceList:
-      color = aScheme == ColorScheme::Light ? NS_RGB(0xf6, 0xf6, 0xf6)
-                                            : NS_RGB(0x2d, 0x2d, 0x2d);
-      break;
-    case ColorID::MozMacSourceListSelection:
-      color = aScheme == ColorScheme::Light ? NS_RGB(0xd3, 0xd3, 0xd3)
-                                            : NS_RGB(0x2d, 0x2d, 0x2d);
-      break;
-    case ColorID::MozMacActiveMenuitem:
-    case ColorID::MozMacActiveSourceListSelection:
-    case ColorID::Accentcolor:
-      color = GetColorFromNSColor([NSColor controlAccentColor]);
       break;
     case ColorID::MozHeaderbartext:
     case ColorID::MozHeaderbarinactivetext:

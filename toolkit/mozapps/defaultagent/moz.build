@@ -18,9 +18,11 @@ UNIFIED_SOURCES += [
     "Policy.cpp",
     "Registry.cpp",
     "ScheduledTask.cpp",
+    "ScheduledTaskRemove.cpp",
     "SetDefaultBrowser.cpp",
     "Telemetry.cpp",
     "UtfConvert.cpp",
+    "WindowsMutex.cpp",
 ]
 
 SOURCES += [
@@ -40,6 +42,7 @@ SOURCES["Notification.cpp"].flags += [
 
 EXPORTS.mozilla += [
     "DefaultAgent.h",
+    "WindowsMutex.h",
 ]
 
 USE_LIBS += [
@@ -75,6 +78,7 @@ OS_LIBS += [
 
 XPIDL_SOURCES += [
     "nsIDefaultAgent.idl",
+    "nsIWindowsMutex.idl",
 ]
 
 XPIDL_MODULE = "default-agent"
@@ -83,20 +87,18 @@ XPCOM_MANIFESTS += [
     "components.conf",
 ]
 
+XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell/xpcshell.toml"]
+
 # If defines are added to this list that are required by the Cache,
 # SetDefaultBrowser, or their dependencies (Registry, EventLog, common),
 # tests/gtest/moz.build will need to be updated as well.
 for var in ("MOZ_APP_BASENAME", "MOZ_APP_DISPLAYNAME", "MOZ_APP_VENDOR"):
     DEFINES[var] = '"%s"' % CONFIG[var]
 
-GENERATED_FILES += ["defaultagent.ini"]
-defaultagentini = GENERATED_FILES["defaultagent.ini"]
-defaultagentini.script = "/browser/locales/generate_ini.py"
-defaultagentini.inputs = [
-    "defaultagent.ini",
-    "defaultagent_append.ini",
-]
-FINAL_TARGET_FILES += ["!defaultagent.ini"]
+DEFINES["UNICODE"] = True
+DEFINES["_UNICODE"] = True
+
+FINAL_TARGET_FILES += ["defaultagent.ini"]
 
 FINAL_LIBRARY = "xul"
 

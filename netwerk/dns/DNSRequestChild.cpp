@@ -414,7 +414,7 @@ DNSRequestSender::Cancel(nsresult reason) {
                 host, trrServer, port, type, originAttributes, flags, reason);
           }
         });
-    SchedulerGroup::Dispatch(TaskCategory::Other, runnable.forget());
+    SchedulerGroup::Dispatch(runnable.forget());
   }
   return NS_OK;
 }
@@ -423,13 +423,12 @@ void DNSRequestSender::StartRequest() {
   // we can only do IPDL on the main thread
   if (!NS_IsMainThread()) {
     SchedulerGroup::Dispatch(
-        TaskCategory::Other,
         NewRunnableMethod("net::DNSRequestSender::StartRequest", this,
                           &DNSRequestSender::StartRequest));
     return;
   }
 
-  if (DNSRequestChild* child = mIPCActor->AsDNSRequestChild()) {
+  if (RefPtr<DNSRequestChild> child = mIPCActor->AsDNSRequestChild()) {
     if (XRE_IsContentProcess()) {
       mozilla::dom::ContentChild* cc =
           static_cast<mozilla::dom::ContentChild*>(gNeckoChild->Manager());
@@ -451,8 +450,8 @@ void DNSRequestSender::StartRequest() {
         return;
       }
 
-      socketProcessChild->SendPDNSRequestConstructor(
-          child, mHost, mTrrServer, mPort, mType, mOriginAttributes, mFlags);
+      MOZ_ALWAYS_TRUE(socketProcessChild->SendPDNSRequestConstructor(
+          child, mHost, mTrrServer, mPort, mType, mOriginAttributes, mFlags));
     } else {
       MOZ_ASSERT(false, "Wrong process");
       return;

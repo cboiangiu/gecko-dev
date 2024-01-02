@@ -156,6 +156,13 @@
 #   - attribute not specified (default): no code generated
 #   - true: allows cloning
 #
+# can_consume_float32
+# ===================
+# Indicates whether this instruction's operands can have MIRType::Float32.
+# Possible values:
+#   - attribute not specified (default): no code generated
+#   - true: canConsumeFloat32 returns true
+#
 
 # TODO(no-TI): try to remove this instruction.
 - name: Start
@@ -1194,6 +1201,7 @@
   result_type: String
   congruent_to: if_operands_equal
   alias_set: none
+  movable: true
   can_recover: true
 
 - name: ModuleMetadata
@@ -1271,6 +1279,7 @@
   result_type: Int32
   movable: true
   congruent_to: if_operands_equal
+  folds_to: custom
   alias_set: custom
   compute_range: custom
   clone: true
@@ -1500,6 +1509,35 @@
   # might coerce the elements of the Array to strings. This coercion might
   # cause the evaluation of JavaScript code.
 
+# Object.prototype.keys. Used to elide it when possible.
+- name: ObjectKeys
+  operands:
+    object: Object
+  result_type: Object
+
+  # We can recover Object.keys on bailout as long as the object is not escaped
+  # or that the object is not mutated by any aliased calls in-between the
+  # instruction and the recovered location, as the recovered keys array might be
+  # different.
+  can_recover: custom
+
+# Used to fold Object.keys(obj).length into a single operation.
+#
+# This should not be used with a Proxy, as proxies can have a user-defined
+# `ownKeys` function which can have arbitrary outputs.
+#
+# This MIR node is created by folding an MObjectKeys with an MArrayLength, as
+# part of MArrayLength::foldsTo.
+- name: ObjectKeysLength
+  operands:
+    object: Object
+  result_type: Int32
+  movable: false
+  congruent_to: if_operands_equal
+  alias_set: custom
+  compute_range: custom
+  clone: true
+
 - name: LoadUnboxedScalar
   gen_boilerplate: false
 
@@ -1574,6 +1612,15 @@
   congruent_to: custom
   alias_set: custom
   might_alias: custom
+
+- name: GuardFuse
+  arguments:
+    fuseIndex: RealmFuses::FuseIndex
+  result_type: None
+  guard: true
+  movable: true
+  congruent_to: custom
+  alias_set: custom
 
 - name: GuardMultipleShapes
   operands:
@@ -2307,6 +2354,8 @@
   folds_to: custom
   congruent_to: if_operands_equal
   alias_set: none
+  type_policy: none
+  can_consume_float32: true
 
 - name: HasClass
   gen_boilerplate: false
@@ -3150,6 +3199,9 @@
   gen_boilerplate: false
 
 - name: WasmRefIsSubtypeOfAbstract
+  gen_boilerplate: false
+
+- name: WasmNewStructObject
   gen_boilerplate: false
 
 #ifdef FUZZING_JS_FUZZILLI

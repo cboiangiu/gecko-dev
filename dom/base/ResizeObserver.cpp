@@ -113,8 +113,7 @@ static AutoTArray<LogicalPixelSize, 1> CalculateBoxSize(
   // always return false. (So its observation won't be fired.)
   // TODO: Should we use an empty array instead?
   // https://github.com/w3c/csswg-drafts/issues/7734
-  if (!frame->IsFrameOfType(nsIFrame::eReplaced) &&
-      frame->IsFrameOfType(nsIFrame::eLineParticipant)) {
+  if (!frame->IsReplaced() && frame->IsLineParticipant()) {
     return {LogicalPixelSize()};
   }
 
@@ -186,10 +185,7 @@ ResizeObservation::ResizeObservation(Element& aTarget,
     : mTarget(&aTarget),
       mObserver(&aObserver),
       mObservedBox(aBox),
-      mLastReportedSize(
-          {StaticPrefs::dom_resize_observer_last_reported_size_invalid()
-               ? LogicalPixelSize(WritingMode(), gfx::Size(-1, -1))
-               : LogicalPixelSize()}) {
+      mLastReportedSize({LogicalPixelSize(WritingMode(), gfx::Size(-1, -1))}) {
   aTarget.BindObject(mObserver);
 }
 
@@ -313,20 +309,6 @@ void ResizeObserver::Observe(Element& aTarget,
   }
 
   observation = new ResizeObservation(aTarget, *this, aOptions.mBox);
-  if (!StaticPrefs::dom_resize_observer_last_reported_size_invalid() &&
-      this == mDocument->GetLastRememberedSizeObserver()) {
-    // Resize observations are initialized with a (0, 0) mLastReportedSize,
-    // this means that the callback won't be called if the element is 0x0.
-    // But we need it called for handling the last remembered size, so set
-    // mLastReportedSize to an invalid size to ensure IsActive() is true
-    // for the current element size.
-    // See https://github.com/w3c/csswg-drafts/issues/3664 about doing this in
-    // the general case, then we won't need this hack for the last remembered
-    // size, and will have consistency with IntersectionObserver.
-    observation->UpdateLastReportedSize(
-        {LogicalPixelSize(WritingMode(), gfx::Size(-1, -1))});
-    MOZ_ASSERT(observation->IsActive());
-  }
   mObservationList.insertBack(observation);
 
   // Per the spec, we need to trigger notification in event loop that
@@ -379,7 +361,12 @@ void ResizeObserver::GatherActiveObservations(uint32_t aDepth) {
     if (targetDepth > aDepth) {
       mActiveTargets.AppendElement(observation);
     } else {
-      mHasSkippedTargets = true;
+      // This boolean is only used to indicate we will deliver resize loop error
+      // notification later on. However, we don't want to do that for our
+      // internal observers.
+      if (!HasNativeCallback()) {
+        mHasSkippedTargets = true;
+      }
     }
   }
 }
@@ -553,8 +540,7 @@ static void LastRememberedSizeCallback(
       aObserver.Unobserve(*target);
       continue;
     }
-    MOZ_ASSERT(!frame->IsFrameOfType(nsIFrame::eLineParticipant) ||
-                   frame->IsFrameOfType(nsIFrame::eReplaced),
+    MOZ_ASSERT(!frame->IsLineParticipant() || frame->IsReplaced(),
                "Should have unobserved non-replaced inline.");
     MOZ_ASSERT(!frame->HidesContent(),
                "Should have unobserved element skipping its contents.");

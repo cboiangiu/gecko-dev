@@ -28,9 +28,8 @@ export class AdmWikipedia extends BaseFeature {
 
   get shouldEnable() {
     return (
-      lazy.UrlbarPrefs.get("quickSuggestRemoteSettingsEnabled") &&
-      (lazy.UrlbarPrefs.get("suggest.quicksuggest.nonsponsored") ||
-        lazy.UrlbarPrefs.get("suggest.quicksuggest.sponsored"))
+      lazy.UrlbarPrefs.get("suggest.quicksuggest.nonsponsored") ||
+      lazy.UrlbarPrefs.get("suggest.quicksuggest.sponsored")
     );
   }
 
@@ -58,6 +57,7 @@ export class AdmWikipedia extends BaseFeature {
       lazy.QuickSuggest.jsBackend.register(this);
     } else {
       lazy.QuickSuggest.jsBackend.unregister(this);
+      this.#suggestionsMap.clear();
     }
   }
 
@@ -125,28 +125,52 @@ export class AdmWikipedia extends BaseFeature {
   }
 
   makeResult(queryContext, suggestion, searchString) {
+    let originalUrl;
     if (suggestion.source == "rust") {
-      suggestion = {
+      // The Rust backend defines `rawUrl` on AMP suggestions, and its value is
+      // what we on desktop call the `originalUrl`, i.e., it's a URL that may
+      // contain timestamp templates. Rust does not define `rawUrl` for
+      // Wikipedia suggestions, but we have historically included `originalUrl`
+      // for both AMP and Wikipedia even though Wikipedia URLs never contain
+      // timestamp templates. So, when setting `originalUrl`, fall back to `url`
+      // for suggestions without `rawUrl`.
+      originalUrl = suggestion.rawUrl ?? suggestion.url;
+
+      // The Rust backend uses camelCase instead of snake_case, and it excludes
+      // some properties in non-sponsored suggestions that we expect, so convert
+      // the Rust suggestion to a suggestion object we expect here on desktop.
+      let desktopSuggestion = {
         title: suggestion.title,
         url: suggestion.url,
         is_sponsored: suggestion.is_sponsored,
         full_keyword: suggestion.fullKeyword,
-        impression_url: suggestion.impressionUrl,
-        click_url: suggestion.clickUrl,
-        block_id: suggestion.blockId,
-        advertiser: suggestion.advertiser,
-        iab_category: suggestion.iabCategory,
       };
+      if (suggestion.is_sponsored) {
+        desktopSuggestion.impression_url = suggestion.impressionUrl;
+        desktopSuggestion.click_url = suggestion.clickUrl;
+        desktopSuggestion.block_id = suggestion.blockId;
+        desktopSuggestion.advertiser = suggestion.advertiser;
+        desktopSuggestion.iab_category = suggestion.iabCategory;
+      } else {
+        desktopSuggestion.advertiser = "Wikipedia";
+        desktopSuggestion.iab_category = "5 - Education";
+      }
+      suggestion = desktopSuggestion;
+    } else {
+      // Replace the suggestion's template substrings, but first save the
+      // original URL before its timestamp template is replaced.
+      originalUrl = suggestion.url;
+      lazy.QuickSuggest.replaceSuggestionTemplates(suggestion);
     }
-
-    // Replace the suggestion's template substrings, but first save the original
-    // URL before its timestamp template is replaced.
-    let originalUrl = suggestion.url;
-    lazy.QuickSuggest.replaceSuggestionTemplates(suggestion);
 
     let payload = {
       originalUrl,
       url: suggestion.url,
+      title: suggestion.title,
+      qsSuggestion: [
+        suggestion.full_keyword,
+        lazy.UrlbarUtils.HIGHLIGHT.SUGGESTED,
+      ],
       isSponsored: suggestion.is_sponsored,
       requestId: suggestion.request_id,
       urlTimestampIndex: suggestion.urlTimestampIndex,
@@ -159,48 +183,11 @@ export class AdmWikipedia extends BaseFeature {
       helpL10n: {
         id: "urlbar-result-menu-learn-more-about-firefox-suggest",
       },
+      isBlockable: true,
       blockL10n: {
         id: "urlbar-result-menu-dismiss-firefox-suggest",
       },
     };
-
-    // Determine if the suggestion itself is a best match.
-    let isSuggestionBestMatch = false;
-    if (lazy.QuickSuggest.jsBackend.config.best_match) {
-      let { best_match } = lazy.QuickSuggest.jsBackend.config;
-      isSuggestionBestMatch =
-        best_match.min_search_string_length <= searchString.length &&
-        !best_match.blocked_suggestion_ids.includes(suggestion.block_id);
-    }
-
-    // Determine if the urlbar result should be a best match.
-    let isResultBestMatch =
-      isSuggestionBestMatch &&
-      lazy.UrlbarPrefs.get("bestMatchEnabled") &&
-      lazy.UrlbarPrefs.get("suggest.bestmatch");
-    if (isResultBestMatch) {
-      // Show the result as a best match. Best match titles don't include the
-      // `full_keyword`, and the user's search string is highlighted.
-      payload.title = [suggestion.title, lazy.UrlbarUtils.HIGHLIGHT.TYPED];
-    } else {
-      // Show the result as a usual quick suggest. Include the `full_keyword`
-      // and highlight the parts that aren't in the search string.
-      payload.title = suggestion.title;
-      payload.qsSuggestion = [
-        suggestion.full_keyword,
-        lazy.UrlbarUtils.HIGHLIGHT.SUGGESTED,
-      ];
-    }
-
-    // Set `is_top_pick` on the suggestion to tell the provider to set
-    // best-match related properties on the result.
-    suggestion.is_top_pick = isResultBestMatch;
-
-    payload.isBlockable = lazy.UrlbarPrefs.get(
-      isResultBestMatch
-        ? "bestMatchBlockingEnabled"
-        : "quickSuggestBlockingEnabled"
-    );
 
     let result = new lazy.UrlbarResult(
       lazy.UrlbarUtils.RESULT_TYPE.URL,

@@ -32,6 +32,7 @@
 #include "gc/TraceMethods-inl.h"
 #include "vm/JSObject-inl.h"
 #include "vm/PlainObject-inl.h"
+#include "vm/StringType-inl.h"
 #ifdef ENABLE_RECORD_TUPLE
 #  include "vm/TupleType.h"
 #endif
@@ -644,40 +645,20 @@ size_t js::gc::TenuringTracer::moveSlotsToTenured(NativeObject* dst,
     return 0;
   }
 
-  Zone* zone = src->nurseryZone();
   size_t count = src->numDynamicSlots();
-
-  uint64_t uid = src->maybeUniqueId();
-
   size_t allocSize = ObjectSlots::allocSize(count);
 
-  ObjectSlots* srcHeader = src->getSlotsHeader();
-  if (!nursery().isInside(srcHeader)) {
-    AddCellMemory(dst, allocSize, MemoryUse::ObjectSlots);
-    nursery().removeMallocedBufferDuringMinorGC(srcHeader);
+  ObjectSlots* header = src->getSlotsHeader();
+  Nursery::WasBufferMoved result = nursery().maybeMoveBufferOnPromotion(
+      &header, dst, allocSize, MemoryUse::ObjectSlots);
+  if (result == Nursery::BufferNotMoved) {
     return 0;
   }
 
-  {
-    AutoEnterOOMUnsafeRegion oomUnsafe;
-    HeapSlot* allocation =
-        zone->pod_malloc<HeapSlot>(ObjectSlots::allocCount(count));
-    if (!allocation) {
-      oomUnsafe.crash(allocSize, "Failed to allocate slots while tenuring.");
-    }
-
-    ObjectSlots* slotsHeader = new (allocation)
-        ObjectSlots(count, srcHeader->dictionarySlotSpan(), uid);
-    dst->slots_ = slotsHeader->slots();
-  }
-
-  AddCellMemory(dst, allocSize, MemoryUse::ObjectSlots);
-
-  PodCopy(dst->slots_, src->slots_, count);
+  dst->slots_ = header->slots();
   if (count) {
     nursery().setSlotsForwardingPointer(src->slots_, dst->slots_, count);
   }
-
   return allocSize;
 }
 
@@ -688,31 +669,19 @@ size_t js::gc::TenuringTracer::moveElementsToTenured(NativeObject* dst,
     return 0;
   }
 
-  Zone* zone = src->nurseryZone();
-
   ObjectElements* srcHeader = src->getElementsHeader();
   size_t nslots = srcHeader->numAllocatedElements();
   size_t allocSize = nslots * sizeof(HeapSlot);
 
-  void* srcAllocatedHeader = src->getUnshiftedElementsHeader();
-
-  /* TODO Bug 874151: Prefer to put element data inline if we have space. */
-  if (!nursery().isInside(srcAllocatedHeader)) {
-    MOZ_ASSERT(src->elements_ == dst->elements_);
-    nursery().removeMallocedBufferDuringMinorGC(srcAllocatedHeader);
-
-    AddCellMemory(dst, allocSize, MemoryUse::ObjectElements);
-
-    return 0;
-  }
-
   // Shifted elements are copied too.
   uint32_t numShifted = srcHeader->numShiftedElements();
+
+  void* unshiftedHeader = src->getUnshiftedElementsHeader();
 
   /* Unlike other objects, Arrays and Tuples can have fixed elements. */
   if (src->canHaveFixedElements() && nslots <= GetGCKindSlots(dstKind)) {
     dst->as<NativeObject>().setFixedElements();
-    js_memcpy(dst->getElementsHeader(), srcAllocatedHeader, allocSize);
+    js_memcpy(dst->getElementsHeader(), unshiftedHeader, allocSize);
     dst->elements_ += numShifted;
     dst->getElementsHeader()->flags |= ObjectElements::FIXED;
     nursery().setElementsForwardingPointer(srcHeader, dst->getElementsHeader(),
@@ -720,22 +689,16 @@ size_t js::gc::TenuringTracer::moveElementsToTenured(NativeObject* dst,
     return allocSize;
   }
 
-  MOZ_ASSERT(nslots >= 2);
+  /* TODO Bug 874151: Prefer to put element data inline if we have space. */
 
-  ObjectElements* dstHeader;
-  {
-    AutoEnterOOMUnsafeRegion oomUnsafe;
-    dstHeader =
-        reinterpret_cast<ObjectElements*>(zone->pod_malloc<HeapSlot>(nslots));
-    if (!dstHeader) {
-      oomUnsafe.crash(allocSize, "Failed to allocate elements while tenuring.");
-    }
+  Nursery::WasBufferMoved result = nursery().maybeMoveBufferOnPromotion(
+      &unshiftedHeader, dst, allocSize, MemoryUse::ObjectElements);
+  if (result == Nursery::BufferNotMoved) {
+    return 0;
   }
 
-  AddCellMemory(dst, allocSize, MemoryUse::ObjectElements);
-
-  js_memcpy(dstHeader, srcAllocatedHeader, allocSize);
-  dst->elements_ = dstHeader->elements() + numShifted;
+  dst->elements_ =
+      static_cast<ObjectElements*>(unshiftedHeader)->elements() + numShifted;
   dst->getElementsHeader()->flags &= ~ObjectElements::FIXED;
   nursery().setElementsForwardingPointer(srcHeader, dst->getElementsHeader(),
                                          srcHeader->capacity);
@@ -908,7 +871,6 @@ JS::BigInt* js::gc::TenuringTracer::moveToTenured(JS::BigInt* src) {
 
   AllocKind dstKind = src->getAllocKind();
   Zone* zone = src->nurseryZone();
-  zone->tenuredBigInts++;
 
   JS::BigInt* dst = allocTenured<JS::BigInt>(zone, dstKind);
   tenuredSize += moveBigIntToTenured(dst, src, dstKind);
@@ -990,10 +952,25 @@ size_t js::gc::TenuringTracer::moveStringToTenured(JSString* dst, JSString* src,
   MOZ_ASSERT(OffsetToChunkEnd(src) >= size);
   js_memcpy(dst, src, size);
 
+  if (!src->hasOutOfLineChars()) {
+    return size;
+  }
+
   if (src->ownsMallocedChars()) {
     void* chars = src->asLinear().nonInlineCharsRaw();
     nursery().removeMallocedBufferDuringMinorGC(chars);
     AddCellMemory(dst, dst->asLinear().allocSize(), MemoryUse::StringContents);
+    return size;
+  }
+
+  // String data is in the nursery and needs to be moved to the malloc heap.
+
+  MOZ_ASSERT(nursery().isInside(src->asLinear().nonInlineCharsRaw()));
+
+  if (src->hasLatin1Chars()) {
+    size += dst->asLinear().maybeMallocCharsOnPromotion<Latin1Char>(&nursery());
+  } else {
+    size += dst->asLinear().maybeMallocCharsOnPromotion<char16_t>(&nursery());
   }
 
   return size;
@@ -1014,32 +991,70 @@ size_t js::gc::TenuringTracer::moveBigIntToTenured(JS::BigInt* dst,
 
   MOZ_ASSERT(dst->zone() == src->nurseryZone());
 
-  if (src->hasHeapDigits()) {
-    size_t length = dst->digitLength();
-    if (!nursery().isInside(src->heapDigits_)) {
-      nursery().removeMallocedBufferDuringMinorGC(src->heapDigits_);
-    } else {
-      Zone* zone = src->nurseryZone();
-      {
-        AutoEnterOOMUnsafeRegion oomUnsafe;
-        dst->heapDigits_ = zone->pod_malloc<JS::BigInt::Digit>(length);
-        if (!dst->heapDigits_) {
-          oomUnsafe.crash(sizeof(JS::BigInt::Digit) * length,
-                          "Failed to allocate digits while tenuring.");
-        }
-      }
+  if (!src->hasHeapDigits()) {
+    return size;
+  }
 
-      PodCopy(dst->heapDigits_, src->heapDigits_, length);
-      nursery().setDirectForwardingPointer(src->heapDigits_, dst->heapDigits_);
+  size_t length = dst->digitLength();
+  size_t nbytes = length * sizeof(JS::BigInt::Digit);
 
-      size += length * sizeof(JS::BigInt::Digit);
-    }
-
-    AddCellMemory(dst, length * sizeof(JS::BigInt::Digit),
-                  MemoryUse::BigIntDigits);
+  Nursery::WasBufferMoved result = nursery().maybeMoveBufferOnPromotion(
+      &dst->heapDigits_, dst, nbytes, MemoryUse::BigIntDigits);
+  if (result == Nursery::BufferMoved) {
+    nursery().setDirectForwardingPointer(src->heapDigits_, dst->heapDigits_);
+    size += nbytes;
   }
 
   return size;
+}
+
+template <typename Key>
+/* static */
+inline HashNumber DeduplicationStringHasher<Key>::hash(const Lookup& lookup) {
+  JS::AutoCheckCannotGC nogc;
+  HashNumber strHash;
+
+  // Include flags in the hash. A string relocation overlay stores either the
+  // nursery root base chars or the dependent string nursery base, but does not
+  // indicate which one. If strings with different string types were
+  // deduplicated, for example, a dependent string gets deduplicated into an
+  // extensible string, the base chain would be broken and the root base would
+  // be unreachable.
+
+  if (lookup->asLinear().hasLatin1Chars()) {
+    strHash = mozilla::HashString(lookup->asLinear().latin1Chars(nogc),
+                                  lookup->length());
+  } else {
+    MOZ_ASSERT(lookup->asLinear().hasTwoByteChars());
+    strHash = mozilla::HashString(lookup->asLinear().twoByteChars(nogc),
+                                  lookup->length());
+  }
+
+  return mozilla::HashGeneric(strHash, lookup->zone(), lookup->flags());
+}
+
+template <typename Key>
+/* static */
+MOZ_ALWAYS_INLINE bool DeduplicationStringHasher<Key>::match(
+    const Key& key, const Lookup& lookup) {
+  if (!key->sameLengthAndFlags(*lookup) ||
+      key->asTenured().zone() != lookup->zone() ||
+      key->asTenured().getAllocKind() != lookup->getAllocKind()) {
+    return false;
+  }
+
+  JS::AutoCheckCannotGC nogc;
+
+  if (key->asLinear().hasLatin1Chars()) {
+    MOZ_ASSERT(lookup->asLinear().hasLatin1Chars());
+    return EqualChars(key->asLinear().latin1Chars(nogc),
+                      lookup->asLinear().latin1Chars(nogc), lookup->length());
+  }
+
+  MOZ_ASSERT(key->asLinear().hasTwoByteChars());
+  MOZ_ASSERT(lookup->asLinear().hasTwoByteChars());
+  return EqualChars(key->asLinear().twoByteChars(nogc),
+                    lookup->asLinear().twoByteChars(nogc), lookup->length());
 }
 
 MinorSweepingTracer::MinorSweepingTracer(JSRuntime* rt)

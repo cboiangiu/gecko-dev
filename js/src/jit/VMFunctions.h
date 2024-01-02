@@ -300,6 +300,8 @@ struct VMFunctionData {
     return count;
   }
 
+  size_t sizeOfOutParamStackSlot() const;
+
   constexpr VMFunctionData(const char* name, uint32_t explicitArgs,
                            uint32_t argumentProperties,
                            uint32_t argumentPassedInFloatRegs,
@@ -510,6 +512,8 @@ void JitWasmAnyRefPreWriteBarrier(JSRuntime* rt, wasm::AnyRef* refp);
 
 bool ObjectIsCallable(JSObject* obj);
 bool ObjectIsConstructor(JSObject* obj);
+JSObject* ObjectKeys(JSContext* cx, HandleObject obj);
+bool ObjectKeysLength(JSContext* cx, HandleObject obj, int32_t* length);
 
 [[nodiscard]] bool ThrowRuntimeLexicalError(JSContext* cx,
                                             unsigned errorNumber);
@@ -691,6 +695,8 @@ void Printf1(const char* output, uintptr_t value);
 enum class VMFunctionId;
 
 extern const VMFunctionData& GetVMFunction(VMFunctionId id);
+
+extern size_t NumVMFunctions();
 
 }  // namespace jit
 }  // namespace js

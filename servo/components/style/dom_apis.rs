@@ -15,11 +15,11 @@ use crate::invalidation::element::invalidator::{InvalidationProcessor, Invalidat
 use crate::selector_parser::SelectorImpl;
 use crate::values::AtomIdent;
 use selectors::attr::CaseSensitivity;
+use selectors::attr::{AttrSelectorOperation, NamespaceConstraint};
 use selectors::matching::{
-    self, MatchingForInvalidation, MatchingContext, MatchingMode, NeedsSelectorFlags,
+    self, MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags,
     SelectorCaches,
 };
-use selectors::attr::{AttrSelectorOperation, NamespaceConstraint};
 use selectors::parser::{Combinator, Component, LocalName};
 use selectors::{Element, SelectorList};
 use smallvec::SmallVec;
@@ -461,11 +461,13 @@ where
         Component::AttributeInNoNamespaceExists {
             ref local_name,
             ref local_name_lower,
-        } => {
-            collect_all_elements::<E, Q, _>(root, results, |element| {
-                element.has_attr_in_no_namespace(matching::select_name(&element, local_name, local_name_lower))
-            })
-        },
+        } => collect_all_elements::<E, Q, _>(root, results, |element| {
+            element.has_attr_in_no_namespace(matching::select_name(
+                &element,
+                local_name,
+                local_name_lower,
+            ))
+        }),
         Component::AttributeInNoNamespace {
             ref local_name,
             ref value,
@@ -480,7 +482,10 @@ where
                     local_name,
                     &AttrSelectorOperation::WithValue {
                         operator,
-                        case_sensitivity: matching::to_unconditional_case_sensitivity(case_sensitivity, &element),
+                        case_sensitivity: matching::to_unconditional_case_sensitivity(
+                            case_sensitivity,
+                            &element,
+                        ),
                         value,
                     },
                 )
@@ -532,11 +537,11 @@ where
 {
     // We need to return elements in document order, and reordering them
     // afterwards is kinda silly.
-    if selector_list.0.len() > 1 {
+    if selector_list.len() > 1 {
         return Err(());
     }
 
-    let selector = &selector_list.0[0];
+    let selector = &selector_list.slice()[0];
     let class_and_id_case_sensitivity = matching_context.classes_and_ids_case_sensitivity();
     // Let's just care about the easy cases for now.
     if selector.len() == 1 {
@@ -782,13 +787,13 @@ pub fn query_selector<E, Q>(
     // A selector with a combinator needs to have a length of at least 3: A
     // simple selector, a combinator, and another simple selector.
     let invalidation_may_be_useful = may_use_invalidation == MayUseInvalidation::Yes &&
-        selector_list.0.iter().any(|s| s.len() > 2);
+        selector_list.slice().iter().any(|s| s.len() > 2);
 
     if root_element.is_some() || !invalidation_may_be_useful {
         query_selector_slow::<E, Q>(root, selector_list, results, &mut matching_context);
     } else {
         let dependencies = selector_list
-            .0
+            .slice()
             .iter()
             .map(|selector| Dependency::for_full_selector_invalidation(selector.clone()))
             .collect::<SmallVec<[_; 5]>>();

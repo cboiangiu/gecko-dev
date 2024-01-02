@@ -261,7 +261,6 @@ NrIceCtx::NrIceCtx(const std::string& name)
       gathering_state_(ICE_CTX_GATHER_INIT),
       name_(name),
       ice_controlling_set_(false),
-      streams_(),
       ctx_(nullptr),
       peer_(nullptr),
       ice_handler_vtbl_(nullptr),
@@ -377,7 +376,7 @@ int NrIceCtx::stream_ready(void* obj, nr_ice_media_stream* stream) {
   // Streams which do not exist should never be ready.
   MOZ_ASSERT(s);
 
-  s->Ready();
+  s->Ready(stream);
 
   return 0;
 }

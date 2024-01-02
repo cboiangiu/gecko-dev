@@ -292,7 +292,7 @@ impl<W: Write> Writer<W> {
 
                 // Write the constant
                 // `write_constant` adds no trailing or leading space/newline
-                self.write_const_expression(module, init)?;
+                self.write_expr(module, init, func_ctx)?;
             }
 
             // Finish the local with `;` and add a newline (only for readability)
@@ -426,11 +426,11 @@ impl<W: Write> Writer<W> {
     /// Adds no trailing or leading whitespace
     fn write_value_type(&mut self, module: &Module, inner: &TypeInner) -> BackendResult {
         match *inner {
-            TypeInner::Vector { size, kind, width } => write!(
+            TypeInner::Vector { size, scalar } => write!(
                 self.out,
                 "vec{}<{}>",
                 back::vector_size_str(size),
-                scalar_kind_str(kind, width),
+                scalar_kind_str(scalar),
             )?,
             TypeInner::Sampler { comparison: false } => {
                 write!(self.out, "sampler")?;
@@ -452,7 +452,7 @@ impl<W: Write> Writer<W> {
                     Ic::Sampled { kind, multi } => (
                         "",
                         if multi { "multisampled_" } else { "" },
-                        scalar_kind_str(kind, 4),
+                        scalar_kind_str(crate::Scalar { kind, width: 4 }),
                         "",
                     ),
                     Ic::Depth { multi } => {
@@ -481,11 +481,11 @@ impl<W: Write> Writer<W> {
                     write!(self.out, "<{format_str}{storage_str}>")?;
                 }
             }
-            TypeInner::Scalar { kind, width } => {
-                write!(self.out, "{}", scalar_kind_str(kind, width))?;
+            TypeInner::Scalar(scalar) => {
+                write!(self.out, "{}", scalar_kind_str(scalar))?;
             }
-            TypeInner::Atomic { kind, width } => {
-                write!(self.out, "atomic<{}>", scalar_kind_str(kind, width))?;
+            TypeInner::Atomic(scalar) => {
+                write!(self.out, "atomic<{}>", scalar_kind_str(scalar))?;
             }
             TypeInner::Array {
                 base,
@@ -524,14 +524,14 @@ impl<W: Write> Writer<W> {
             TypeInner::Matrix {
                 columns,
                 rows,
-                width: _,
+                scalar,
             } => {
                 write!(
                     self.out,
-                    //TODO: Can matrix be other than f32?
-                    "mat{}x{}<f32>",
+                    "mat{}x{}<{}>",
                     back::vector_size_str(columns),
                     back::vector_size_str(rows),
+                    scalar_kind_str(scalar)
                 )?;
             }
             TypeInner::Pointer { base, space } => {
@@ -552,13 +552,12 @@ impl<W: Write> Writer<W> {
             }
             TypeInner::ValuePointer {
                 size: None,
-                kind,
-                width,
+                scalar,
                 space,
             } => {
                 let (address, maybe_access) = address_space_str(space);
                 if let Some(space) = address {
-                    write!(self.out, "ptr<{}, {}", space, scalar_kind_str(kind, width))?;
+                    write!(self.out, "ptr<{}, {}", space, scalar_kind_str(scalar))?;
                     if let Some(access) = maybe_access {
                         write!(self.out, ", {access}")?;
                     }
@@ -571,8 +570,7 @@ impl<W: Write> Writer<W> {
             }
             TypeInner::ValuePointer {
                 size: Some(size),
-                kind,
-                width,
+                scalar,
                 space,
             } => {
                 let (address, maybe_access) = address_space_str(space);
@@ -582,7 +580,7 @@ impl<W: Write> Writer<W> {
                         "ptr<{}, vec{}<{}>",
                         space,
                         back::vector_size_str(size),
-                        scalar_kind_str(kind, width)
+                        scalar_kind_str(scalar)
                     )?;
                     if let Some(access) = maybe_access {
                         write!(self.out, ", {access}")?;
@@ -1093,13 +1091,19 @@ impl<W: Write> Writer<W> {
                 match literal {
                     // Floats are written using `Debug` instead of `Display` because it always appends the
                     // decimal part even it's zero
-                    crate::Literal::F64(_) => {
-                        return Err(Error::Custom("unsupported f64 literal".to_string()));
-                    }
                     crate::Literal::F32(value) => write!(self.out, "{:?}", value)?,
                     crate::Literal::U32(value) => write!(self.out, "{}u", value)?,
-                    crate::Literal::I32(value) => write!(self.out, "{}", value)?,
+                    crate::Literal::I32(value) => write!(self.out, "{}i", value)?,
                     crate::Literal::Bool(value) => write!(self.out, "{}", value)?,
+                    crate::Literal::F64(value) => write!(self.out, "{:?}lf", value)?,
+                    crate::Literal::I64(_) => {
+                        return Err(Error::Custom("unsupported i64 literal".to_string()));
+                    }
+                    crate::Literal::AbstractInt(_) | crate::Literal::AbstractFloat(_) => {
+                        return Err(Error::Custom(
+                            "Abstract types should not appear in IR presented to backends".into(),
+                        ));
+                    }
                 }
             }
             Expression::Constant(handle) => {
@@ -1411,10 +1415,13 @@ impl<W: Write> Writer<W> {
                     TypeInner::Matrix {
                         columns,
                         rows,
-                        width,
-                        ..
+                        scalar,
                     } => {
-                        let scalar_kind_str = scalar_kind_str(kind, convert.unwrap_or(width));
+                        let scalar = crate::Scalar {
+                            kind,
+                            width: convert.unwrap_or(scalar.width),
+                        };
+                        let scalar_kind_str = scalar_kind_str(scalar);
                         write!(
                             self.out,
                             "mat{}x{}<{}>",
@@ -1423,17 +1430,28 @@ impl<W: Write> Writer<W> {
                             scalar_kind_str
                         )?;
                     }
-                    TypeInner::Vector { size, width, .. } => {
+                    TypeInner::Vector {
+                        size,
+                        scalar: crate::Scalar { width, .. },
+                    } => {
+                        let scalar = crate::Scalar {
+                            kind,
+                            width: convert.unwrap_or(width),
+                        };
                         let vector_size_str = back::vector_size_str(size);
-                        let scalar_kind_str = scalar_kind_str(kind, convert.unwrap_or(width));
+                        let scalar_kind_str = scalar_kind_str(scalar);
                         if convert.is_some() {
                             write!(self.out, "vec{vector_size_str}<{scalar_kind_str}>")?;
                         } else {
                             write!(self.out, "bitcast<vec{vector_size_str}<{scalar_kind_str}>>")?;
                         }
                     }
-                    TypeInner::Scalar { width, .. } => {
-                        let scalar_kind_str = scalar_kind_str(kind, convert.unwrap_or(width));
+                    TypeInner::Scalar(crate::Scalar { width, .. }) => {
+                        let scalar = crate::Scalar {
+                            kind,
+                            width: convert.unwrap_or(width),
+                        };
+                        let scalar_kind_str = scalar_kind_str(scalar);
                         if convert.is_some() {
                             write!(self.out, "{scalar_kind_str}")?
                         } else {
@@ -1529,7 +1547,6 @@ impl<W: Write> Writer<W> {
                     Mf::Pow => Function::Regular("pow"),
                     // geometry
                     Mf::Dot => Function::Regular("dot"),
-                    Mf::Outer => Function::Regular("outerProduct"),
                     Mf::Cross => Function::Regular("cross"),
                     Mf::Distance => Function::Regular("distance"),
                     Mf::Length => Function::Regular("length"),
@@ -1568,7 +1585,7 @@ impl<W: Write> Writer<W> {
                     Mf::Unpack2x16snorm => Function::Regular("unpack2x16snorm"),
                     Mf::Unpack2x16unorm => Function::Regular("unpack2x16unorm"),
                     Mf::Unpack2x16float => Function::Regular("unpack2x16float"),
-                    Mf::Inverse => {
+                    Mf::Inverse | Mf::Outer => {
                         return Err(Error::UnsupportedMathFunction(fun));
                     }
                 };
@@ -1600,16 +1617,8 @@ impl<W: Write> Writer<W> {
             Expression::Unary { op, expr } => {
                 let unary = match op {
                     crate::UnaryOperator::Negate => "-",
-                    crate::UnaryOperator::Not => {
-                        match *func_ctx.resolve_type(expr, &module.types) {
-                            TypeInner::Scalar {
-                                kind: crate::ScalarKind::Bool,
-                                ..
-                            }
-                            | TypeInner::Vector { .. } => "!",
-                            _ => "~",
-                        }
-                    }
+                    crate::UnaryOperator::LogicalNot => "!",
+                    crate::UnaryOperator::BitwiseNot => "~",
                 };
 
                 write!(self.out, "{unary}(")?;
@@ -1792,15 +1801,31 @@ const fn image_dimension_str(dim: crate::ImageDimension) -> &'static str {
     }
 }
 
-const fn scalar_kind_str(kind: crate::ScalarKind, width: u8) -> &'static str {
+const fn scalar_kind_str(scalar: crate::Scalar) -> &'static str {
+    use crate::Scalar;
     use crate::ScalarKind as Sk;
 
-    match (kind, width) {
-        (Sk::Float, 8) => "f64",
-        (Sk::Float, 4) => "f32",
-        (Sk::Sint, 4) => "i32",
-        (Sk::Uint, 4) => "u32",
-        (Sk::Bool, 1) => "bool",
+    match scalar {
+        Scalar {
+            kind: Sk::Float,
+            width: 8,
+        } => "f64",
+        Scalar {
+            kind: Sk::Float,
+            width: 4,
+        } => "f32",
+        Scalar {
+            kind: Sk::Sint,
+            width: 4,
+        } => "i32",
+        Scalar {
+            kind: Sk::Uint,
+            width: 4,
+        } => "u32",
+        Scalar {
+            kind: Sk::Bool,
+            width: 1,
+        } => "bool",
         _ => unreachable!(),
     }
 }
@@ -1830,6 +1855,7 @@ const fn storage_format_str(format: crate::StorageFormat) -> &'static str {
         Sf::Rgba8Snorm => "rgba8snorm",
         Sf::Rgba8Uint => "rgba8uint",
         Sf::Rgba8Sint => "rgba8sint",
+        Sf::Bgra8Unorm => "bgra8unorm",
         Sf::Rgb10a2Uint => "rgb10a2uint",
         Sf::Rgb10a2Unorm => "rgb10a2unorm",
         Sf::Rg11b10Float => "rg11b10float",

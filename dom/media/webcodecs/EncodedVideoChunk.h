@@ -43,9 +43,9 @@ class EncodedVideoChunkData {
                         const EncodedVideoChunkType& aType, int64_t aTimestamp,
                         Maybe<uint64_t>&& aDuration);
   EncodedVideoChunkData(const EncodedVideoChunkData& aData) = default;
-  ~EncodedVideoChunkData() = default;
+  ~EncodedVideoChunkData();
 
-  UniquePtr<EncodedVideoChunkData> Clone();
+  UniquePtr<EncodedVideoChunkData> Clone() const;
   already_AddRefed<MediaRawData> TakeData();
 
  protected:

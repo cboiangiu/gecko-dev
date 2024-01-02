@@ -24,9 +24,10 @@
 #include "nsIPowerManagerService.h"
 #ifdef MOZ_ENABLE_DBUS
 #  include <gio/gio.h>
-#  include "WakeLockListener.h"
 #  include "nsIObserverService.h"
+#  include "WidgetUtilsGtk.h"
 #endif
+#include "WakeLockListener.h"
 #include "gfxPlatform.h"
 #include "nsAppRunner.h"
 #include "mozilla/XREAppData.h"
@@ -38,11 +39,13 @@
 #endif
 
 using namespace mozilla;
+using namespace mozilla::widget;
 using mozilla::widget::HeadlessScreenHelper;
 using mozilla::widget::ScreenHelperGTK;
 using mozilla::widget::ScreenManager;
 
 #define NOTIFY_TOKEN 0xFA
+#define QUIT_TOKEN 0xFB
 
 LazyLogModule gWidgetLog("Widget");
 LazyLogModule gWidgetDragLog("WidgetDrag");
@@ -53,6 +56,8 @@ LazyLogModule gDmabufLog("Dmabuf");
 LazyLogModule gClipboardLog("WidgetClipboard");
 
 static GPollFunc sPollFunc;
+
+nsAppShell* sAppShell = nullptr;
 
 // Wrapper function to disable hang monitoring while waiting in poll().
 static gint PollWrapper(GPollFD* aUfds, guint aNfsd, gint aTimeout) {
@@ -140,13 +145,23 @@ gboolean nsAppShell::EventProcessorCallback(GIOChannel* source,
 
   unsigned char c;
   Unused << read(self->mPipeFDs[0], &c, 1);
-  NS_ASSERTION(c == (unsigned char)NOTIFY_TOKEN, "wrong token");
-
-  self->NativeEventCallback();
+  switch (c) {
+    case NOTIFY_TOKEN:
+      self->NativeEventCallback();
+      break;
+    case QUIT_TOKEN:
+      self->Exit();
+      break;
+    default:
+      NS_ASSERTION(false, "wrong token");
+      break;
+  }
   return TRUE;
 }
 
 nsAppShell::~nsAppShell() {
+  sAppShell = nullptr;
+
 #ifdef MOZ_ENABLE_DBUS
   StopDBusListening();
 #endif
@@ -155,6 +170,28 @@ nsAppShell::~nsAppShell() {
   if (mTag) g_source_remove(mTag);
   if (mPipeFDs[0]) close(mPipeFDs[0]);
   if (mPipeFDs[1]) close(mPipeFDs[1]);
+}
+
+mozilla::StaticRefPtr<WakeLockListener> sWakeLockListener;
+static void AddScreenWakeLockListener() {
+  nsCOMPtr<nsIPowerManagerService> powerManager =
+      do_GetService(POWERMANAGERSERVICE_CONTRACTID);
+  if (powerManager) {
+    sWakeLockListener = new WakeLockListener();
+    powerManager->AddWakeLockListener(sWakeLockListener);
+  } else {
+    NS_WARNING(
+        "Failed to retrieve PowerManagerService, wakelocks will be broken!");
+  }
+}
+
+static void RemoveScreenWakeLockListener() {
+  nsCOMPtr<nsIPowerManagerService> powerManager =
+      do_GetService(POWERMANAGERSERVICE_CONTRACTID);
+  if (powerManager) {
+    powerManager->RemoveWakeLockListener(sWakeLockListener);
+    sWakeLockListener = nullptr;
+  }
 }
 
 #ifdef MOZ_ENABLE_DBUS
@@ -220,7 +257,7 @@ void nsAppShell::DBusConnectClientResponse(GObject* aObject,
   RefPtr<GDBusProxy> proxyClient =
       dont_AddRef(g_dbus_proxy_new_finish(aResult, getter_Transfers(error)));
   if (!proxyClient) {
-    if (!g_error_matches(error.get(), G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+    if (!IsCancelledGError(error.get())) {
       NS_WARNING(
           nsPrintfCString("Failed to connect to client: %s\n", error->message)
               .get());
@@ -288,25 +325,42 @@ void nsAppShell::StopDBusListening() {
 }
 #endif
 
+void nsAppShell::TermSignalHandler(int signo) {
+  if (signo != SIGTERM) {
+    NS_WARNING("Wrong signal!");
+    return;
+  }
+  sAppShell->ScheduleQuitEvent();
+}
+
+void nsAppShell::InstallTermSignalHandler() {
+  if (!XRE_IsParentProcess() || PR_GetEnv("MOZ_DISABLE_SIG_HANDLER") ||
+      !sAppShell) {
+    return;
+  }
+
+  struct sigaction act = {}, oldact;
+  act.sa_handler = TermSignalHandler;
+  sigfillset(&act.sa_mask);
+
+  if (NS_WARN_IF(sigaction(SIGTERM, nullptr, &oldact) != 0)) {
+    return;
+  }
+  if (oldact.sa_handler != SIG_DFL) {
+    NS_WARNING("SIGTERM signal handler is already set?");
+  }
+
+  sigaction(SIGTERM, &act, nullptr);
+}
+
 nsresult nsAppShell::Init() {
   mozilla::hal::Init();
 
-  if (XRE_IsParentProcess()) {
-    nsCOMPtr<nsIPowerManagerService> powerManagerService =
-        do_GetService(POWERMANAGERSERVICE_CONTRACTID);
-
-    if (powerManagerService) {
-      powerManagerService->AddWakeLockListener(
-          WakeLockListener::GetSingleton());
-    } else {
-      NS_WARNING(
-          "Failed to retrieve PowerManagerService, wakelocks will be broken!");
-    }
-
 #ifdef MOZ_ENABLE_DBUS
+  if (XRE_IsParentProcess()) {
     StartDBusListening();
-#endif
   }
+#endif
 
   if (!sPollFunc) {
     sPollFunc = g_main_context_get_poll_func(nullptr);
@@ -398,6 +452,8 @@ nsresult nsAppShell::Init() {
   mTag = g_source_attach(source, nullptr);
   g_source_unref(source);
 
+  sAppShell = this;
+
   return nsBaseAppShell::Init();
 failed:
   close(mPipeFDs[0]);
@@ -406,8 +462,26 @@ failed:
   return NS_ERROR_FAILURE;
 }
 
+NS_IMETHODIMP nsAppShell::Run() {
+  if (XRE_IsParentProcess()) {
+    AddScreenWakeLockListener();
+  }
+
+  nsresult rv = nsBaseAppShell::Run();
+
+  if (XRE_IsParentProcess()) {
+    RemoveScreenWakeLockListener();
+  }
+  return rv;
+}
+
 void nsAppShell::ScheduleNativeEventCallback() {
   unsigned char buf[] = {NOTIFY_TOKEN};
+  Unused << write(mPipeFDs[1], buf, 1);
+}
+
+void nsAppShell::ScheduleQuitEvent() {
+  unsigned char buf[] = {QUIT_TOKEN};
   Unused << write(mPipeFDs[1], buf, 1);
 }
 

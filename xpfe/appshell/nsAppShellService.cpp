@@ -567,9 +567,6 @@ nsresult nsAppShellService::JustCreateTopWindow(
             ? widget::WindowType::Dialog
             : widget::WindowType::TopLevel;
 
-  if (aChromeMask & nsIWebBrowserChrome::CHROME_WINDOW_POPUP)
-    widgetInitData.mWindowType = widget::WindowType::Popup;
-
   if (aChromeMask & nsIWebBrowserChrome::CHROME_SUPPRESS_ANIMATION)
     widgetInitData.mIsAnimationSuppressed = true;
 
@@ -713,7 +710,7 @@ nsresult nsAppShellService::JustCreateTopWindow(
           "hardcoding the system principal");
       // Use the system principal as the storage principal too until the new
       // window finishes navigating and gets a real storage principal.
-      rv = docShell->CreateAboutBlankContentViewer(
+      rv = docShell->CreateAboutBlankDocumentViewer(
           nsContentUtils::GetSystemPrincipal(),
           nsContentUtils::GetSystemPrincipal(),
           /* aCsp = */ nullptr, /* aBaseURI = */ nullptr,
@@ -736,7 +733,6 @@ nsresult nsAppShellService::JustCreateTopWindow(
   }
 
   window.forget(aResult);
-  if (parent) parent->AddChildWindow(*aResult);
 
   if (center) rv = (*aResult)->Center(parent, parent ? false : true, false);
 

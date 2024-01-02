@@ -90,11 +90,11 @@ FINAL_LIBRARY = "xul"
 
 if CONFIG["MOZ_BUILD_APP"] != "mobile/android":
     BROWSER_CHROME_MANIFESTS += [
-        "test/browser/browser-blocking.ini",
+        "test/browser/browser-blocking.toml",
         "test/browser/browser.toml",
     ]
 
-XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/xpcshell.ini"]
+XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/xpcshell.toml"]
 
 TEST_DIRS += ["test/gtest"]
 

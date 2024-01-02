@@ -6,9 +6,6 @@
 
 #include "EffectCompositor.h"
 
-#include <bitset>
-#include <initializer_list>
-
 #include "mozilla/dom/Animation.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/KeyframeEffect.h"
@@ -28,14 +25,11 @@
 #include "mozilla/StaticPrefs_layers.h"
 #include "mozilla/StyleAnimationValue.h"
 #include "nsContentUtils.h"
-#include "nsCSSPseudoElements.h"
 #include "nsCSSPropertyIDSet.h"
 #include "nsCSSProps.h"
 #include "nsDisplayItemTypes.h"
-#include "nsAtom.h"
 #include "nsLayoutUtils.h"
 #include "nsTArray.h"
-#include "PendingAnimationTracker.h"
 
 using mozilla::dom::Animation;
 using mozilla::dom::Element;
@@ -128,19 +122,6 @@ bool FindAnimationsForCompositor(
     return false;
   }
 
-  // First check for newly-started transform animations that should be
-  // synchronized with geometric animations. We need to do this before any
-  // other early returns (the one above is ok) since we can only check this
-  // state when the animation is newly-started.
-  if (aPropertySet.Intersects(LayerAnimationInfo::GetCSSPropertiesFor(
-          DisplayItemType::TYPE_TRANSFORM))) {
-    PendingAnimationTracker* tracker =
-        aFrame->PresContext()->Document()->GetPendingAnimationTracker();
-    if (tracker) {
-      tracker->MarkAnimationsThatMightNeedSynchronization();
-    }
-  }
-
   AnimationPerformanceWarning::Type warning =
       AnimationPerformanceWarning::Type::None;
   if (!EffectCompositor::AllowCompositorAnimationsOnFrame(aFrame, warning)) {
@@ -169,8 +150,7 @@ bool FindAnimationsForCompositor(
 
   bool foundRunningAnimations = false;
   for (KeyframeEffect* effect : *effects) {
-    AnimationPerformanceWarning::Type effectWarning =
-        AnimationPerformanceWarning::Type::None;
+    auto effectWarning = AnimationPerformanceWarning::Type::None;
     KeyframeEffect::MatchForCompositor matchResult =
         effect->IsMatchForCompositor(aPropertySet, aFrame, *effects,
                                      effectWarning);
@@ -628,11 +608,14 @@ nsCSSPropertyIDSet EffectCompositor::GetOverriddenProperties(
     nsCSSPropertyIDSet propertiesToTrackAsSet;
     for (KeyframeEffect* effect : aEffectSet) {
       for (const AnimationProperty& property : effect->Properties()) {
-        if (nsCSSProps::PropHasFlags(property.mProperty,
+        if (property.mProperty.IsCustom()) {
+          continue;
+        }
+        if (nsCSSProps::PropHasFlags(property.mProperty.mID,
                                      CSSPropFlags::CanAnimateOnCompositor) &&
-            !propertiesToTrackAsSet.HasProperty(property.mProperty)) {
-          propertiesToTrackAsSet.AddProperty(property.mProperty);
-          propertiesToTrack.AppendElement(property.mProperty);
+            !propertiesToTrackAsSet.HasProperty(property.mProperty.mID)) {
+          propertiesToTrackAsSet.AddProperty(property.mProperty.mID);
+          propertiesToTrack.AppendElement(property.mProperty.mID);
         }
       }
       // Skip iterating over the rest of the effects if we've already
@@ -704,16 +687,19 @@ void EffectCompositor::UpdateCascadeResults(EffectSet& aEffectSet,
     CascadeLevel cascadeLevel = effect->GetAnimation()->CascadeLevel();
 
     for (const AnimationProperty& prop : effect->Properties()) {
-      if (overriddenProperties.HasProperty(prop.mProperty)) {
-        propertiesWithImportantRules.AddProperty(prop.mProperty);
+      if (prop.mProperty.IsCustom()) {
+        continue;
+      }
+      if (overriddenProperties.HasProperty(prop.mProperty.mID)) {
+        propertiesWithImportantRules.AddProperty(prop.mProperty.mID);
       }
 
       switch (cascadeLevel) {
         case EffectCompositor::CascadeLevel::Animations:
-          propertiesForAnimationsLevel.AddProperty(prop.mProperty);
+          propertiesForAnimationsLevel.AddProperty(prop.mProperty.mID);
           break;
         case EffectCompositor::CascadeLevel::Transitions:
-          propertiesForTransitionsLevel.AddProperty(prop.mProperty);
+          propertiesForTransitionsLevel.AddProperty(prop.mProperty.mID);
           break;
       }
     }
@@ -932,7 +918,7 @@ static void ReduceEffectSet(EffectSet& aEffectSet) {
   }
   sortedEffectList.Sort(EffectCompositeOrderComparator());
 
-  nsCSSPropertyIDSet setProperties;
+  AnimatedPropertyIDSet setProperties;
 
   // Iterate in reverse
   for (auto iter = sortedEffectList.rbegin(); iter != sortedEffectList.rend();
@@ -945,7 +931,7 @@ static void ReduceEffectSet(EffectSet& aEffectSet) {
         effect.GetPropertySet().IsSubsetOf(setProperties)) {
       animation.Remove();
     } else if (animation.IsReplaceable()) {
-      setProperties |= effect.GetPropertySet();
+      setProperties.AddProperties(effect.GetPropertySet());
     }
   }
 }

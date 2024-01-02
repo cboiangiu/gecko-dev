@@ -1,4 +1,3 @@
-// |reftest| shell-option(--enable-arraybuffer-transfer) skip-if(!ArrayBuffer.prototype.transfer||!xulRuntime.shell) -- arraybuffer-transfer is not enabled unconditionally, requires shell-options
 // Copyright (C) 2021 the V8 project authors. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 /*---
@@ -23,7 +22,7 @@ includes: [propertyHelper.js]
 verifyProperty(ArrayBuffer.prototype.transfer, 'name', {
   value: 'transfer',
   enumerable: false,
-  wrtiable: false,
+  writable: false,
   configurable: true
 });
 

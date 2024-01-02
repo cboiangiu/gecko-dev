@@ -37,6 +37,7 @@ class Apps(ClassificationEnum):
     CHROME_M = {"value": "chrome-m", "index": 5}
     SAFARI = {"value": "safari", "index": 6}
     CHROMIUM_RELEASE = {"value": "custom-car", "index": 7}
+    CHROMIUM_RELEASE_M = {"value": "cstm-car-m", "index": 8}
 
 
 class Suites(ClassificationEnum):
@@ -63,6 +64,10 @@ enable (see build_category_matrix for more info).
 
 def check_for_android(android=False, **kwargs):
     return android
+
+
+def check_for_fenix(fenix=False, **kwargs):
+    return fenix or ("fenix" in kwargs.get("requested_apps", []))
 
 
 def check_for_chrome(chrome=False, **kwargs):
@@ -123,7 +128,7 @@ class ClassificationProvider:
     def apps(self):
         return {
             Apps.FIREFOX.value: {
-                "query": "!chrom !geckoview !fenix !safari !custom-car",
+                "query": "!chrom !geckoview !fenix !safari !m-car",
                 "platforms": [Platforms.DESKTOP.value],
             },
             Apps.CHROME.value: {
@@ -140,10 +145,13 @@ class ClassificationProvider:
             },
             Apps.GECKOVIEW.value: {
                 "query": "'geckoview",
+                "negation": "!geckoview",
                 "platforms": [Platforms.ANDROID.value],
             },
             Apps.FENIX.value: {
                 "query": "'fenix",
+                "negation": "!fenix",
+                "restriction": check_for_fenix,
                 "platforms": [Platforms.ANDROID.value],
             },
             Apps.CHROME_M.value: {
@@ -159,14 +167,20 @@ class ClassificationProvider:
                 "platforms": [Platforms.MACOSX.value],
             },
             Apps.CHROMIUM_RELEASE.value: {
-                "query": "'custom-car",
-                "negation": "!custom-car",
+                "query": "'m-car",
+                "negation": "!m-car",
                 "restriction": check_for_custom_car,
                 "platforms": [
                     Platforms.LINUX.value,
                     Platforms.WINDOWS.value,
                     Platforms.MACOSX.value,
                 ],
+            },
+            Apps.CHROMIUM_RELEASE_M.value: {
+                "query": "'m-car",
+                "negation": "!m-car",
+                "restriction": check_for_custom_car,
+                "platforms": [Platforms.ANDROID.value],
             },
         }
 
@@ -265,6 +279,8 @@ class ClassificationProvider:
                 },
                 "suites": [Suites.RAPTOR.value],
                 "tasks": [],
+                "description": "Run all the pageload tests in warm, and cold. Used to determine "
+                "if your patch has a direct impact on pageload performance.",
             },
             "Speedometer 3": {
                 "query": {
@@ -274,6 +290,7 @@ class ClassificationProvider:
                 "suites": [Suites.RAPTOR.value],
                 "app-restrictions": {},
                 "tasks": [],
+                "description": "",
             },
             "Responsiveness": {
                 "query": {
@@ -291,6 +308,7 @@ class ClassificationProvider:
                     ],
                 },
                 "tasks": [],
+                "description": "",
             },
             "Benchmarks": {
                 "query": {
@@ -299,6 +317,7 @@ class ClassificationProvider:
                 "suites": [Suites.RAPTOR.value],
                 "variant-restrictions": {Suites.RAPTOR.value: []},
                 "tasks": [],
+                "description": "",
             },
             "DAMP (Devtools)": {
                 "query": {
@@ -306,6 +325,7 @@ class ClassificationProvider:
                 },
                 "suites": [Suites.TALOS.value],
                 "tasks": [],
+                "description": "",
             },
             "Talos PerfTests": {
                 "query": {
@@ -313,6 +333,7 @@ class ClassificationProvider:
                 },
                 "suites": [Suites.TALOS.value],
                 "tasks": [],
+                "description": "",
             },
             "Resource Usage": {
                 "query": {
@@ -331,6 +352,7 @@ class ClassificationProvider:
                     Suites.TALOS.value: [Apps.FIREFOX.value],
                 },
                 "tasks": [],
+                "description": "",
             },
             "Graphics, & Media Playback": {
                 "query": {
@@ -350,5 +372,6 @@ class ClassificationProvider:
                     ],
                 },
                 "tasks": [],
+                "description": "",
             },
         }

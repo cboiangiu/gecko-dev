@@ -167,7 +167,6 @@
 
 #include "js/SliceBudget.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/AutoGlobalTimelineMarker.h"
 #include "mozilla/Likely.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/MemoryReporting.h"
@@ -568,8 +567,7 @@ class PtrInfo final {
         mParticipant(aParticipant),
         mColor(grey),
         mInternalRefs(0),
-        mRefCount(kInitialRefCount),
-        mFirstChild() {
+        mRefCount(kInitialRefCount) {
     MOZ_ASSERT(aParticipant);
 
     // We initialize mRefCount to a large non-zero value so
@@ -2690,12 +2688,6 @@ void nsCycleCollector::ForgetSkippable(js::SliceBudget& aBudget,
     return;
   }
 
-  mozilla::Maybe<mozilla::AutoGlobalTimelineMarker> marker;
-  if (NS_IsMainThread()) {
-    marker.emplace("nsCycleCollector::ForgetSkippable",
-                   MarkerStackRequest::NO_STACK);
-  }
-
   // If we remove things from the purple buffer during graph building, we may
   // lose track of an object that was mutated during graph building.
   MOZ_ASSERT(IsIdle());
@@ -3398,8 +3390,8 @@ void nsCycleCollector::CleanupAfterCollection() {
 
   if (mCCJSRuntime) {
     mCCJSRuntime->FinalizeDeferredThings(
-        mResults.mAnyManual ? CycleCollectedJSContext::FinalizeNow
-                            : CycleCollectedJSContext::FinalizeIncrementally);
+        mResults.mAnyManual ? CycleCollectedJSRuntime::FinalizeNow
+                            : CycleCollectedJSRuntime::FinalizeIncrementally);
     mCCJSRuntime->EndCycleCollectionCallback(mResults);
     timeLog.Checkpoint("CleanupAfterCollection::EndCycleCollectionCallback()");
   }
@@ -3453,11 +3445,6 @@ bool nsCycleCollector::Collect(CCReason aReason, ccIsManual aIsManual,
   mActivelyCollecting = true;
 
   MOZ_ASSERT(!IsIncrementalGCInProgress());
-
-  mozilla::Maybe<mozilla::AutoGlobalTimelineMarker> marker;
-  if (NS_IsMainThread()) {
-    marker.emplace("nsCycleCollector::Collect", MarkerStackRequest::NO_STACK);
-  }
 
   bool startedIdle = IsIdle();
   bool collectedAny = false;
@@ -3519,7 +3506,7 @@ bool nsCycleCollector::Collect(CCReason aReason, ccIsManual aIsManual,
         break;
     }
     if (continueSlice) {
-      aBudget.stepAndForceCheck();
+      aBudget.forceCheck();
       continueSlice = !aBudget.isOverBudget();
     }
   } while (continueSlice);

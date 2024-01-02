@@ -29,6 +29,7 @@ import {
   getHighlightedLineRangeForSelectedSource,
   isSourceMapIgnoreListEnabled,
   isSourceOnSourceMapIgnoreList,
+  isMapScopesEnabled,
 } from "../../selectors";
 
 // Redux actions
@@ -119,6 +120,7 @@ class Editor extends PureComponent {
       breakableLines: PropTypes.object.isRequired,
       highlightedLineRange: PropTypes.object,
       isSourceOnIgnoreList: PropTypes.bool,
+      mapScopesEnabled: PropTypes.bool,
     };
   }
 
@@ -186,10 +188,24 @@ class Editor extends PureComponent {
     }
 
     const { codeMirror } = editor;
-    const codeMirrorWrapper = codeMirror.getWrapperElement();
+
+    this.abortController = new window.AbortController();
+
+    // CodeMirror refreshes its internal state on window resize, but we need to also
+    // refresh it when the side panels are resized.
+    // We could have a ResizeObserver instead, but we wouldn't be able to differentiate
+    // between window resize and side panel resize and as a result, might refresh
+    // codeMirror twice, which is wasteful.
+    window.document
+      .querySelector(".editor-pane")
+      .addEventListener("resizeend", () => codeMirror.refresh(), {
+        signal: this.abortController.signal,
+      });
 
     codeMirror.on("gutterClick", this.onGutterClick);
+    codeMirror.on("cursorActivity", this.onCursorChange);
 
+    const codeMirrorWrapper = codeMirror.getWrapperElement();
     // Set code editor wrapper to be focusable
     codeMirrorWrapper.tabIndex = 0;
     codeMirrorWrapper.addEventListener("keydown", e => this.onKeyDown(e));
@@ -260,6 +276,11 @@ class Editor extends PureComponent {
     shortcuts.off(L10N.getStr("toggleBreakpoint.key"));
     shortcuts.off(L10N.getStr("toggleCondPanel.breakpoint.key"));
     shortcuts.off(L10N.getStr("toggleCondPanel.logPoint.key"));
+
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
   }
 
   getCurrentLine() {
@@ -416,6 +437,29 @@ class Editor extends PureComponent {
 
     this.props.showEditorContextMenu(event, editor, location);
   }
+
+  /**
+   * CodeMirror event handler, called whenever the cursor moves
+   * for user-driven or programatic reasons.
+   */
+  onCursorChange = event => {
+    const { line, ch } = event.doc.getCursor();
+    this.props.selectLocation(
+      createLocation({
+        source: this.props.selectedSource,
+        // CodeMirror cursor location is all 0-based.
+        // Whereast in DevTools frontend and backend,
+        // only colunm is 0-based, the line is 1 based.
+        line: line + 1,
+        column: ch,
+      }),
+      {
+        // Reset the context, so that we don't switch to original
+        // while moving the cursor within a bundle
+        keepContext: false,
+      }
+    );
+  };
 
   onGutterClick = (cm, line, gutter, ev) => {
     const {
@@ -604,6 +648,7 @@ class Editor extends PureComponent {
       blackboxedRanges,
       isSourceOnIgnoreList,
       selectedSourceIsBlackBoxed,
+      mapScopesEnabled,
     } = this.props;
     const { editor } = this.state;
 
@@ -620,10 +665,15 @@ class Editor extends PureComponent {
       React.createElement(Breakpoints, {
         editor,
       }),
-      React.createElement(Preview, {
-        editor,
-        editorRef: this.$editorWrapper,
-      }),
+      isPaused &&
+        selectedSource.isOriginal &&
+        !selectedSource.isPrettyPrinted &&
+        !mapScopesEnabled
+        ? null
+        : React.createElement(Preview, {
+            editor,
+            editorRef: this.$editorWrapper,
+          }),
       highlightedLineRange
         ? React.createElement(HighlightLines, {
             editor,
@@ -648,7 +698,11 @@ class Editor extends PureComponent {
       React.createElement(ColumnBreakpoints, {
         editor,
       }),
-      isPaused && inlinePreviewEnabled
+      isPaused &&
+        inlinePreviewEnabled &&
+        (!selectedSource.isOriginal ||
+          (selectedSource.isOriginal && selectedSource.isPrettyPrinted) ||
+          (selectedSource.isOriginal && mapScopesEnabled))
         ? React.createElement(InlinePreviews, {
             editor,
             selectedSource,
@@ -713,6 +767,9 @@ const mapStateToProps = state => {
     blackboxedRanges: getBlackBoxRanges(state),
     breakableLines: getSelectedBreakableLines(state),
     highlightedLineRange: getHighlightedLineRangeForSelectedSource(state),
+    mapScopesEnabled: selectedSource?.isOriginal
+      ? isMapScopesEnabled(state)
+      : null,
   };
 };
 
@@ -730,6 +787,7 @@ const mapDispatchToProps = dispatch => ({
       closeTab: actions.closeTab,
       showEditorContextMenu: actions.showEditorContextMenu,
       showEditorGutterContextMenu: actions.showEditorGutterContextMenu,
+      selectLocation: actions.selectLocation,
     },
     dispatch
   ),

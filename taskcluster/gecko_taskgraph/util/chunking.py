@@ -27,6 +27,12 @@ TEST_VARIANTS = {}
 if os.path.exists(os.path.join(GECKO, "taskcluster", "ci", "test", "variants.yml")):
     TEST_VARIANTS = load_yaml(GECKO, "taskcluster", "ci", "test", "variants.yml")
 
+WPT_SUBSUITES = {
+    "canvas": "html/canvas",
+    "webgpu": "_mozilla/webgpu",
+    "privatebrowsing": "/service-workers/cache-storage",
+}
+
 
 def guess_mozinfo_from_task(task, repo=""):
     """Attempt to build a mozinfo dict from a task definition.
@@ -122,6 +128,13 @@ def guess_mozinfo_from_task(task, repo=""):
             value = any("xorigin" in key for key in runtime_keys)
 
         info[tag] = value
+
+    # wpt has canvas and webgpu as tags, lets find those
+    for tag in WPT_SUBSUITES.keys():
+        if tag in task["test-name"]:
+            info[tag] = True
+        else:
+            info[tag] = False
     return info
 
 
@@ -236,8 +249,16 @@ class DefaultLoader(BaseManifestLoader):
         # TODO: the only exception here is we schedule webgpu as that is a --tag
         if "web-platform-tests" in suite:
             manifests = set()
+            subsuite = [x for x in WPT_SUBSUITES.keys() if mozinfo[x]]
             for t in tests:
-                manifests.add(t["manifest"])
+                if subsuite:
+                    # add specific directories
+                    if WPT_SUBSUITES[subsuite[0]] in t["manifest"]:
+                        manifests.add(t["manifest"])
+                else:
+                    if any(x in t["manifest"] for x in WPT_SUBSUITES.values()):
+                        continue
+                    manifests.add(t["manifest"])
             return {
                 "active": list(manifests),
                 "skipped": [],

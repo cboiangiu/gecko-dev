@@ -87,7 +87,7 @@
 #include "nsPIDOMWindow.h"
 #include "nsPIWindowRoot.h"
 #include "nsIWebNavigation.h"
-#include "nsIContentViewer.h"
+#include "nsIDocumentViewer.h"
 #include "nsFrameManager.h"
 #include "nsIBrowserChild.h"
 #include "nsMenuPopupFrame.h"
@@ -2390,7 +2390,7 @@ void EventStateManager::DetermineDragTargetAndDefaultData(
     bool wasAlt = (mGestureModifiers & MODIFIER_ALT) != 0;
     nsresult rv = nsContentAreaDragDrop::GetDragData(
         aWindow, mGestureDownContent, aSelectionTarget, wasAlt, aDataTransfer,
-        &canDrag, aSelection, getter_AddRefs(dragDataNode), aPrincipal, aCsp,
+        &canDrag, aSelection, getter_AddRefs(dragDataNode), aCsp,
         aCookieJarSettings);
     if (NS_FAILED(rv) || !canDrag) {
       return;
@@ -4274,7 +4274,7 @@ static CursorImage ComputeCustomCursor(nsPresContext* aPresContext,
                           : Nothing();
     gfx::IntPoint hotspot = ComputeHotspot(container, specifiedHotspot);
     CursorImage result{hotspot, std::move(container),
-                       image.image.GetResolution(), loading};
+                       image.image.GetResolution(style), loading};
     if (ShouldBlockCustomCursor(aPresContext, aEvent, result)) {
       continue;
     }
@@ -4539,6 +4539,20 @@ class MOZ_STACK_CLASS ESMEventCB : public EventDispatchingCallback {
 static UniquePtr<WidgetMouseEvent> CreateMouseOrPointerWidgetEvent(
     WidgetMouseEvent* aMouseEvent, EventMessage aMessage,
     EventTarget* aRelatedTarget) {
+  // This method does not support creating a mouse/pointer button change event
+  // because of no data about the changing state.
+  MOZ_ASSERT(aMessage != eMouseDown);
+  MOZ_ASSERT(aMessage != eMouseUp);
+  MOZ_ASSERT(aMessage != ePointerDown);
+  MOZ_ASSERT(aMessage != ePointerUp);
+  // This method is currently designed to create the following events.
+  MOZ_ASSERT(aMessage == eMouseOver || aMessage == eMouseEnter ||
+             aMessage == eMouseOut || aMessage == eMouseLeave ||
+             aMessage == ePointerOver || aMessage == ePointerEnter ||
+             aMessage == ePointerOut || aMessage == ePointerLeave ||
+             aMessage == eMouseEnterIntoWidget ||
+             aMessage == eMouseExitFromWidget);
+
   WidgetPointerEvent* sourcePointer = aMouseEvent->AsPointerEvent();
   UniquePtr<WidgetMouseEvent> newEvent;
   if (sourcePointer) {
@@ -4557,12 +4571,72 @@ static UniquePtr<WidgetMouseEvent> CreateMouseOrPointerWidgetEvent(
                                             aMouseEvent->mWidget,
                                             WidgetMouseEvent::eReal);
   }
+
+  // Inherit whether the event is synthesized by the test API or not.
+  // Then, when the event is synthesized by a test API and handled in a remote
+  // process, it won't be ignored.  See PresShell::HandleEvent().
+  newEvent->mFlags.mIsSynthesizedForTests =
+      aMouseEvent->mFlags.mIsSynthesizedForTests;
+
   newEvent->mRelatedTarget = aRelatedTarget;
   newEvent->mRefPoint = aMouseEvent->mRefPoint;
   newEvent->mModifiers = aMouseEvent->mModifiers;
-  newEvent->mButton = aMouseEvent->mButton;
-  newEvent->mButtons = aMouseEvent->mButtons;
-  newEvent->mPressure = aMouseEvent->mPressure;
+  if (!aMouseEvent->mFlags.mDispatchedAtLeastOnce &&
+      aMouseEvent->InputSourceSupportsHover()) {
+    // If we synthesize a pointer event or a mouse event from another event
+    // which changes a button state whose input soucre supports hover state and
+    // the source event has not been dispatched yet, we should set to the button
+    // state of the synthesizing event to previous one.
+    // Note that we don't need to do this if the input source does not support
+    // hover state because a WPT check the behavior (see below) and the other
+    // browsers pass the test even though this is inconsistent behavior.
+    newEvent->mButton =
+        sourcePointer ? MouseButton::eNotPressed : MouseButton::ePrimary;
+    if (aMouseEvent->IsPressingButton()) {
+      // If the source event has not been dispatched into the DOM yet, we
+      // need to remove the flag which is being pressed.
+      newEvent->mButtons = static_cast<decltype(WidgetMouseEvent::mButtons)>(
+          aMouseEvent->mButtons &
+          ~MouseButtonsFlagToChange(
+              static_cast<MouseButton>(aMouseEvent->mButton)));
+    } else if (aMouseEvent->IsReleasingButton()) {
+      // If the source event has not been dispatched into the DOM yet, we
+      // need to add the flag which is being released.
+      newEvent->mButtons = static_cast<decltype(WidgetMouseEvent::mButtons)>(
+          aMouseEvent->mButtons |
+          MouseButtonsFlagToChange(
+              static_cast<MouseButton>(aMouseEvent->mButton)));
+    } else {
+      // The source event does not change the buttons state so that we can
+      // set mButtons value as-is.
+      newEvent->mButtons = aMouseEvent->mButtons;
+    }
+    // Adjust pressure if it does not matches with mButtons.
+    // FIXME: We may use wrong pressure value if the source event has not been
+    // dispatched into the DOM yet.  However, fixing this requires to store the
+    // last pressure value somewhere.
+    if (newEvent->mButtons && aMouseEvent->mPressure == 0) {
+      newEvent->mPressure = 0.5f;
+    } else if (!newEvent->mButtons && aMouseEvent->mPressure != 0) {
+      newEvent->mPressure = 0;
+    } else {
+      newEvent->mPressure = aMouseEvent->mPressure;
+    }
+  } else {
+    // If the event has already been dispatched into the tree, web apps has
+    // already handled the button state change, so the button state of the
+    // source event has already synced.
+    // If the input source does not have hover state, we don't need to modify
+    // the state because the other browsers behave so and tested by
+    // pointerevent_attributes_nohover_pointers.html even though this is
+    // different expectation from
+    // pointerevent_attributes_hoverable_pointers.html, but the other browsers
+    // pass both of them.
+    newEvent->mButton = aMouseEvent->mButton;
+    newEvent->mButtons = aMouseEvent->mButtons;
+    newEvent->mPressure = aMouseEvent->mPressure;
+  }
+
   newEvent->mInputSource = aMouseEvent->mInputSource;
   newEvent->pointerId = aMouseEvent->pointerId;
 
@@ -6171,18 +6245,11 @@ nsresult EventStateManager::DoContentCommandEvent(
         case eContentCommandPasteTransferable: {
           BrowserParent* remote = BrowserParent::GetFocused();
           if (remote) {
-            nsCOMPtr<nsITransferable> transferable = aEvent->mTransferable;
-            IPCTransferableData ipcTransferableData;
-            nsContentUtils::TransferableToIPCTransferableData(
-                transferable, &ipcTransferableData, false, remote->Manager());
-            bool isPrivateData = transferable->GetIsPrivateData();
-            nsCOMPtr<nsIPrincipal> requestingPrincipal =
-                transferable->GetRequestingPrincipal();
-            nsContentPolicyType contentPolicyType =
-                transferable->GetContentPolicyType();
-            remote->SendPasteTransferable(std::move(ipcTransferableData),
-                                          isPrivateData, requestingPrincipal,
-                                          contentPolicyType);
+            IPCTransferable ipcTransferable;
+            nsContentUtils::TransferableToIPCTransferable(
+                aEvent->mTransferable, &ipcTransferable, false,
+                remote->Manager());
+            remote->SendPasteTransferable(std::move(ipcTransferable));
             rv = NS_OK;
           } else {
             nsCOMPtr<nsICommandController> commandController =

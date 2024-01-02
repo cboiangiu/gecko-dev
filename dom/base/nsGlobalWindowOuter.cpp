@@ -15,7 +15,6 @@
 
 // Local Includes
 #include "Navigator.h"
-#include "mozilla/Encoding.h"
 #include "nsContentSecurityManager.h"
 #include "nsGlobalWindowOuter.h"
 #include "nsScreen.h"
@@ -92,6 +91,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Likely.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/Unused.h"
@@ -152,7 +152,7 @@
 #include "nsDOMWindowUtils.h"
 #include "nsIWindowWatcher.h"
 #include "nsPIWindowWatcher.h"
-#include "nsIContentViewer.h"
+#include "nsIDocumentViewer.h"
 #include "nsIScriptError.h"
 #include "nsISHistory.h"
 #include "nsIControllers.h"
@@ -1261,7 +1261,7 @@ const nsOuterWindowProxy nsOuterWindowProxy::singleton;
 
 class nsChromeOuterWindowProxy : public nsOuterWindowProxy {
  public:
-  constexpr nsChromeOuterWindowProxy() : nsOuterWindowProxy() {}
+  constexpr nsChromeOuterWindowProxy() = default;
 
   const char* className(JSContext* cx,
                         JS::Handle<JSObject*> wrapper) const override;
@@ -1789,9 +1789,9 @@ void nsGlobalWindowOuter::SetInitialPrincipal(
   // Use the subject (or system) principal as the storage principal too until
   // the new window finishes navigating and gets a real storage principal.
   nsDocShell::Cast(GetDocShell())
-      ->CreateAboutBlankContentViewer(aNewWindowPrincipal, aNewWindowPrincipal,
-                                      aCSP, nullptr,
-                                      /* aIsInitialDocument */ true, aCOEP);
+      ->CreateAboutBlankDocumentViewer(aNewWindowPrincipal, aNewWindowPrincipal,
+                                       aCSP, nullptr,
+                                       /* aIsInitialDocument */ true, aCOEP);
 
   if (mDoc) {
     MOZ_ASSERT(mDoc->IsInitialDocument(),
@@ -2031,8 +2031,6 @@ static nsresult CreateNativeGlobalForInner(
 
   SelectZone(aCx, principal, aNewInner, creationOptions);
 
-  creationOptions.setSecureContext(aIsSecureContext);
-
   // Define the SharedArrayBuffer global constructor property only if shared
   // memory may be used and structured-cloned (e.g. through postMessage).
   //
@@ -2043,7 +2041,7 @@ static nsresult CreateNativeGlobalForInner(
       aDefineSharedArrayBufferConstructor);
 
   xpc::InitGlobalObjectOptions(
-      options, principal->IsSystemPrincipal(),
+      options, principal->IsSystemPrincipal(), aIsSecureContext,
       aDocument->ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
       aDocument->ShouldResistFingerprinting(RFPTarget::JSMathFdlibm),
       aDocument->ShouldResistFingerprinting(RFPTarget::JSLocale));
@@ -2416,6 +2414,8 @@ nsresult nsGlobalWindowOuter::SetNewDocument(Document* aDocument,
 
   MOZ_RELEASE_ASSERT(newInnerWindow->mDoc == aDocument);
 
+  newInnerWindow->RefreshReduceTimerPrecisionCallerType();
+
   if (!aState) {
     if (reUseInnerWindow) {
       // The StorageAccess state may have changed. Invalidate the cached
@@ -2490,7 +2490,7 @@ nsresult nsGlobalWindowOuter::SetNewDocument(Document* aDocument,
         &nsGlobalWindowInner::FireOnNewGlobalObject));
   }
 
-  if (newInnerWindow && !newInnerWindow->mHasNotifiedGlobalCreated && mDoc) {
+  if (!newInnerWindow->mHasNotifiedGlobalCreated && mDoc) {
     // We should probably notify. However if this is the, arguably bad,
     // situation when we're creating a temporary non-chrome-about-blank
     // document in a chrome docshell, don't notify just yet. Instead wait
@@ -2818,11 +2818,11 @@ bool nsGlobalWindowOuter::AreDialogsEnabled() {
 
   // Dialogs are blocked if the content viewer is hidden
   if (mDocShell) {
-    nsCOMPtr<nsIContentViewer> cv;
-    mDocShell->GetContentViewer(getter_AddRefs(cv));
+    nsCOMPtr<nsIDocumentViewer> viewer;
+    mDocShell->GetDocViewer(getter_AddRefs(viewer));
 
     bool isHidden;
-    cv->GetIsHidden(&isHidden);
+    viewer->GetIsHidden(&isHidden);
     if (isHidden) {
       return false;
     }
@@ -3037,7 +3037,7 @@ Navigator* nsGlobalWindowOuter::GetNavigator() {
 }
 
 nsScreen* nsGlobalWindowOuter::GetScreen() {
-  FORWARD_TO_INNER(GetScreen, (IgnoreErrors()), nullptr);
+  FORWARD_TO_INNER(Screen, (), nullptr);
 }
 
 void nsPIDOMWindowOuter::ActivateMediaComponents() {
@@ -3124,26 +3124,17 @@ nsPIDOMWindowOuter* nsGlobalWindowOuter::GetInProcessScriptableParentOrNull() {
   return (nsGlobalWindowOuter::Cast(parent) == this) ? nullptr : parent;
 }
 
-/**
- * nsPIDOMWindow::GetParent (when called from C++) is just a wrapper around
- * GetRealParent.
- */
 already_AddRefed<nsPIDOMWindowOuter> nsGlobalWindowOuter::GetInProcessParent() {
   if (!mDocShell) {
     return nullptr;
   }
 
-  nsCOMPtr<nsIDocShell> parent;
-  mDocShell->GetSameTypeInProcessParentIgnoreBrowserBoundaries(
-      getter_AddRefs(parent));
-
-  if (parent) {
-    nsCOMPtr<nsPIDOMWindowOuter> win = parent->GetWindow();
-    return win.forget();
+  if (auto* parentBC = GetBrowsingContext()->GetParent()) {
+    if (auto* parent = parentBC->GetDOMWindow()) {
+      return do_AddRef(parent);
+    }
   }
-
-  nsCOMPtr<nsPIDOMWindowOuter> win(this);
-  return win.forget();
+  return do_AddRef(this);
 }
 
 static nsresult GetTopImpl(nsGlobalWindowOuter* aWin, nsIURI* aURIBeingLoaded,
@@ -3763,9 +3754,9 @@ void nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
 
       // Get the screen dimensions
       // XXX This should use nsIScreenManager once it's fully fleshed out.
-      int32_t screenLeft = screen->GetAvailLeft(IgnoreErrors());
-      int32_t screenWidth = screen->GetAvailWidth(IgnoreErrors());
-      int32_t screenHeight = screen->GetAvailHeight(IgnoreErrors());
+      int32_t screenLeft = screen->AvailLeft();
+      int32_t screenWidth = screen->AvailWidth();
+      int32_t screenHeight = screen->AvailHeight();
 #if defined(XP_MACOSX)
       /* The mac's coordinate system is different from the assumed Windows'
          system. It offsets by the height of the menubar so that a window
@@ -3774,9 +3765,9 @@ void nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
          the Avail... coordinates is overloaded. Here we allow a window
          to be placed at (0,0) because it does make sense to do so.
       */
-      int32_t screenTop = screen->GetTop(IgnoreErrors());
+      int32_t screenTop = screen->Top();
 #else
-      int32_t screenTop = screen->GetAvailTop(IgnoreErrors());
+      int32_t screenTop = screen->AvailTop();
 #endif
 
       if (aLeft) {
@@ -4090,10 +4081,18 @@ FullscreenTransitionTask::Run() {
     // If the widget has been destroyed before we get here, don't try to
     // do anything more. Just let it go and release ourselves.
     NS_WARNING("The widget to fullscreen has been destroyed");
+    mWindow->mIsInFullScreenTransition = false;
     return NS_OK;
   }
   if (stage == eBeforeToggle) {
     PROFILER_MARKER_UNTYPED("Fullscreen transition start", DOM);
+
+    mWindow->mIsInFullScreenTransition = true;
+
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    NS_ENSURE_TRUE(obs, NS_ERROR_FAILURE);
+    obs->NotifyObservers(nullptr, "fullscreen-transition-start", nullptr);
+
     mWidget->PerformFullscreenTransition(nsIWidget::eBeforeFullscreenToggle,
                                          mDuration.mFadeIn, mTransitionData,
                                          this);
@@ -4134,6 +4133,13 @@ FullscreenTransitionTask::Run() {
                                          this);
   } else if (stage == eEnd) {
     PROFILER_MARKER_UNTYPED("Fullscreen transition end", DOM);
+
+    mWindow->mIsInFullScreenTransition = false;
+
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    NS_ENSURE_TRUE(obs, NS_ERROR_FAILURE);
+    obs->NotifyObservers(nullptr, "fullscreen-transition-end", nullptr);
+
     mWidget->CleanupFullscreenTransition();
   }
   return NS_OK;
@@ -5051,7 +5057,7 @@ Nullable<WindowProxyHolder> nsGlobalWindowOuter::Print(
   nsAutoSyncOperation sync(docToPrint, SyncOperationBehavior::eAllowInput);
   AutoModalState modalState(*this);
 
-  nsCOMPtr<nsIContentViewer> cv;
+  nsCOMPtr<nsIDocumentViewer> viewer;
   RefPtr<BrowsingContext> bc;
   bool hasPrintCallbacks = false;
   if (docToPrint->IsStaticDocument()) {
@@ -5076,8 +5082,8 @@ Nullable<WindowProxyHolder> nsGlobalWindowOuter::Print(
           "docshell");
       return nullptr;
     }
-    docShell->GetContentViewer(getter_AddRefs(cv));
-    MOZ_DIAGNOSTIC_ASSERT(cv);
+    docShell->GetDocViewer(getter_AddRefs(viewer));
+    MOZ_DIAGNOSTIC_ASSERT(viewer);
   } else {
     if (aDocShellToCloneInto) {
       // Ensure the content viewer is created if needed.
@@ -5114,9 +5120,9 @@ Nullable<WindowProxyHolder> nsGlobalWindowOuter::Print(
     Unused << bc->Top()->SetIsPrinting(true);
     nsCOMPtr<nsIDocShell> cloneDocShell = bc->GetDocShell();
     MOZ_DIAGNOSTIC_ASSERT(cloneDocShell);
-    cloneDocShell->GetContentViewer(getter_AddRefs(cv));
-    MOZ_DIAGNOSTIC_ASSERT(cv);
-    if (!cv) {
+    cloneDocShell->GetDocViewer(getter_AddRefs(viewer));
+    MOZ_DIAGNOSTIC_ASSERT(viewer);
+    if (!viewer) {
       aError.ThrowNotSupportedError("Didn't end up with a content viewer");
       return nullptr;
     }
@@ -5134,7 +5140,7 @@ Nullable<WindowProxyHolder> nsGlobalWindowOuter::Print(
       MOZ_DIAGNOSTIC_ASSERT(bc->Group() == sourceBC->Group());
     }
 
-    if (RefPtr<Document> doc = cv->GetDocument()) {
+    if (RefPtr<Document> doc = viewer->GetDocument()) {
       if (doc->IsShowing()) {
         // We're going to drop this document on the floor, in the SetDocument
         // call below. Make sure to run OnPageHide() to keep state consistent
@@ -5147,14 +5153,14 @@ Nullable<WindowProxyHolder> nsGlobalWindowOuter::Print(
 
     nsAutoScriptBlocker blockScripts;
     RefPtr<Document> clone = docToPrint->CreateStaticClone(
-        cloneDocShell, cv, ps, &hasPrintCallbacks);
+        cloneDocShell, viewer, ps, &hasPrintCallbacks);
     if (!clone) {
       aError.ThrowNotSupportedError("Clone operation for printing failed");
       return nullptr;
     }
   }
 
-  nsCOMPtr<nsIWebBrowserPrint> webBrowserPrint = do_QueryInterface(cv);
+  nsCOMPtr<nsIWebBrowserPrint> webBrowserPrint = do_QueryInterface(viewer);
   if (!webBrowserPrint) {
     aError.ThrowNotSupportedError(
         "Content viewer didn't implement nsIWebBrowserPrint");
@@ -5376,13 +5382,13 @@ void nsGlobalWindowOuter::SizeToContentOuter(
 
   // The content viewer does a check to make sure that it's a content
   // viewer for a toplevel docshell.
-  nsCOMPtr<nsIContentViewer> cv;
-  mDocShell->GetContentViewer(getter_AddRefs(cv));
-  if (!cv) {
+  nsCOMPtr<nsIDocumentViewer> viewer;
+  mDocShell->GetDocViewer(getter_AddRefs(viewer));
+  if (!viewer) {
     return aError.Throw(NS_ERROR_FAILURE);
   }
 
-  auto contentSize = cv->GetContentSize(
+  auto contentSize = viewer->GetContentSize(
       aConstraints.mMaxWidth, aConstraints.mMaxHeight, aConstraints.mPrefWidth);
   if (!contentSize) {
     return aError.Throw(NS_ERROR_FAILURE);
@@ -5397,12 +5403,12 @@ void nsGlobalWindowOuter::SizeToContentOuter(
 
   // Don't use DevToCSSIntPixelsForBaseWindow() nor
   // CSSToDevIntPixelsForBaseWindow() here because contentSize is comes from
-  // nsIContentViewer::GetContentSize() and it's computed with nsPresContext so
+  // nsIDocumentViewer::GetContentSize() and it's computed with nsPresContext so
   // that we need to work with nsPresContext here too.
-  RefPtr<nsPresContext> presContext = cv->GetPresContext();
+  RefPtr<nsPresContext> presContext = viewer->GetPresContext();
   MOZ_ASSERT(
       presContext,
-      "Should be non-nullptr if nsIContentViewer::GetContentSize() succeeded");
+      "Should be non-nullptr if nsIDocumentViewer::GetContentSize() succeeded");
   CSSIntSize cssSize = *contentSize;
   CheckSecurityWidthAndHeight(&cssSize.width, &cssSize.height, aCallerType);
 
@@ -5874,8 +5880,7 @@ class nsCloseEvent : public Runnable {
  public:
   static nsresult PostCloseEvent(nsGlobalWindowOuter* aWindow, bool aIndirect) {
     nsCOMPtr<nsIRunnable> ev = new nsCloseEvent(aWindow, aIndirect);
-    nsresult rv = aWindow->Dispatch(TaskCategory::Other, ev.forget());
-    return rv;
+    return aWindow->Dispatch(ev.forget());
   }
 
   NS_IMETHOD Run() override {
@@ -5903,11 +5908,11 @@ bool nsGlobalWindowOuter::CanClose() {
     return true;
   }
 
-  nsCOMPtr<nsIContentViewer> cv;
-  mDocShell->GetContentViewer(getter_AddRefs(cv));
-  if (cv) {
+  nsCOMPtr<nsIDocumentViewer> viewer;
+  mDocShell->GetDocViewer(getter_AddRefs(viewer));
+  if (viewer) {
     bool canClose;
-    nsresult rv = cv->PermitUnload(&canClose);
+    nsresult rv = viewer->PermitUnload(&canClose);
     if (NS_SUCCEEDED(rv) && !canClose) return false;
   }
 
@@ -6239,7 +6244,7 @@ bool nsGlobalWindowOuter::IsInModalState() {
 void nsGlobalWindowOuter::NotifyWindowIDDestroyed(const char* aTopic) {
   nsCOMPtr<nsIRunnable> runnable =
       new WindowDestroyedEvent(this, mWindowID, aTopic);
-  Dispatch(TaskCategory::Other, runnable.forget());
+  Dispatch(runnable.forget());
 }
 
 Element* nsGlobalWindowOuter::GetFrameElement(nsIPrincipal& aSubjectPrincipal) {
@@ -6599,8 +6604,8 @@ nsresult nsGlobalWindowOuter::GetInterfaceInternal(const nsIID& aIID,
 #ifdef NS_PRINTING
   else if (aIID.Equals(NS_GET_IID(nsIWebBrowserPrint))) {
     if (mDocShell) {
-      nsCOMPtr<nsIContentViewer> viewer;
-      mDocShell->GetContentViewer(getter_AddRefs(viewer));
+      nsCOMPtr<nsIDocumentViewer> viewer;
+      mDocShell->GetDocViewer(getter_AddRefs(viewer));
       if (viewer) {
         nsCOMPtr<nsIWebBrowserPrint> webBrowserPrint(do_QueryInterface(viewer));
         webBrowserPrint.forget(aSink);
@@ -6679,7 +6684,7 @@ class AutoUnblockScriptClosing {
         &nsGlobalWindowOuter::UnblockScriptedClosing;
     nsCOMPtr<nsIRunnable> caller = NewRunnableMethod(
         "AutoUnblockScriptClosing::~AutoUnblockScriptClosing", mWin, run);
-    mWin->Dispatch(TaskCategory::Other, caller.forget());
+    mWin->Dispatch(caller.forget());
   }
 };
 
@@ -7253,30 +7258,14 @@ void nsGlobalWindowOuter::CheckForDPIChange() {
 }
 
 nsresult nsGlobalWindowOuter::Dispatch(
-    TaskCategory aCategory, already_AddRefed<nsIRunnable>&& aRunnable) {
+    already_AddRefed<nsIRunnable>&& aRunnable) const {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
-  if (GetDocGroup()) {
-    return GetDocGroup()->Dispatch(aCategory, std::move(aRunnable));
-  }
-  return DispatcherTrait::Dispatch(aCategory, std::move(aRunnable));
+  return NS_DispatchToCurrentThread(std::move(aRunnable));
 }
 
-nsISerialEventTarget* nsGlobalWindowOuter::EventTargetFor(
-    TaskCategory aCategory) const {
+nsISerialEventTarget* nsGlobalWindowOuter::SerialEventTarget() const {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
-  if (GetDocGroup()) {
-    return GetDocGroup()->EventTargetFor(aCategory);
-  }
-  return DispatcherTrait::EventTargetFor(aCategory);
-}
-
-AbstractThread* nsGlobalWindowOuter::AbstractMainThreadFor(
-    TaskCategory aCategory) {
-  MOZ_RELEASE_ASSERT(NS_IsMainThread());
-  if (GetDocGroup()) {
-    return GetDocGroup()->AbstractMainThreadFor(aCategory);
-  }
-  return DispatcherTrait::AbstractMainThreadFor(aCategory);
+  return GetMainThreadSerialEventTarget();
 }
 
 void nsGlobalWindowOuter::MaybeResetWindowName(Document* aNewDocument) {

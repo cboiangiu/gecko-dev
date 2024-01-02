@@ -3,12 +3,17 @@
 
 "use strict";
 
+const { SessionStoreTestUtils } = ChromeUtils.importESModule(
+  "resource://testing-common/SessionStoreTestUtils.sys.mjs"
+);
+
 const PREF_ID_ALWAYS_ASK =
   "browser.privatebrowsing.resetPBM.showConfirmationDialog";
 
 const SELECTOR_TOOLBAR_BUTTON = "#reset-pbm-toolbar-button";
 
 const SELECTOR_PANELVIEW = "panel #reset-pbm-panel";
+const SELECTOR_CONTAINER = "#reset-pbm-panel-container";
 const SELECTOR_PANEL_HEADING = "#reset-pbm-panel-header > description";
 const SELECTOR_PANEL_DESCRIPTION = "#reset-pbm-panel-description";
 const SELECTOR_PANEL_CHECKBOX = "#reset-pbm-panel-checkbox";
@@ -306,6 +311,38 @@ add_task(async function test_panel() {
     "The always ask pref should be true."
   );
 
+  info("Accessibility checks");
+  let panel = privateWin.document.querySelector(SELECTOR_PANELVIEW);
+  Assert.equal(
+    panel.getAttribute("role"),
+    "document",
+    "Panel should have role document."
+  );
+
+  let container = panel.querySelector(SELECTOR_CONTAINER);
+  Assert.equal(
+    container.getAttribute("role"),
+    "alertdialog",
+    "Panel container should have role alertdialog."
+  );
+  Assert.equal(
+    container.getAttribute("aria-labelledby"),
+    "reset-pbm-panel-header",
+    "aria-labelledby should point to heading."
+  );
+
+  let heading = panel.querySelector(SELECTOR_PANEL_HEADING);
+  Assert.equal(
+    heading.getAttribute("role"),
+    "heading",
+    "Heading should have role heading."
+  );
+  Assert.equal(
+    heading.getAttribute("aria-level"),
+    "2",
+    "heading should have aria-level 2"
+  );
+
   info("Click the checkbox to uncheck it.");
   await BrowserTestUtils.synthesizeMouseAtCenter(
     SELECTOR_PANEL_CHECKBOX,
@@ -560,4 +597,228 @@ add_task(async function test_reset_action() {
 
   // We bypass telemetry by calling ResetPBMPanel._restartPBM directly.
   assertTelemetry([], [], "No glean events after the test.");
+});
+
+/**
+ * Ensure that we don't show the tab close warning when closing multiple tabs
+ * with the reset PBM action.
+ */
+add_task(async function test_tab_close_warning_suppressed() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.privatebrowsing.resetPBM.enabled", true],
+      ["browser.tabs.warnOnClose", true],
+      ["browser.tabs.warnOnCloseOtherTabs", true],
+    ],
+  });
+
+  info("Open a private browsing window.");
+  let win = await BrowserTestUtils.openNewBrowserWindow({
+    private: true,
+  });
+
+  info("Open enough tabs so the tab close warning would show.");
+  let loadPromises = [];
+  // warnAboutClosingTabs uses this number to determine whether to show the tab
+  // close warning.
+  let maxTabsUndo = Services.prefs.getIntPref(
+    "browser.sessionstore.max_tabs_undo"
+  );
+  for (let i = 0; i < maxTabsUndo + 2; i++) {
+    let tab = BrowserTestUtils.addTab(win.gBrowser, "about:blank");
+    loadPromises.push(BrowserTestUtils.browserLoaded(tab.linkedBrowser));
+  }
+  await Promise.all(loadPromises);
+
+  // Create promises for tab close for all tabs in the triggering private browsing window.
+  let promisesTabsClosed = win.gBrowser.tabs.map(tab =>
+    BrowserTestUtils.waitForTabClosing(tab)
+  );
+
+  info("Trigger the restart PBM action");
+
+  let promiseDataClear = waitForPBMDataClear();
+  await ResetPBMPanel._restartPBM(win);
+
+  info("Wait for tabs in the trigger private window to close.");
+  await Promise.all(promisesTabsClosed);
+
+  info("Wait for data to be cleared.");
+  await promiseDataClear;
+
+  Assert.equal(
+    win.gBrowser.tabs.length,
+    1,
+    "Should only have 1 tab remaining."
+  );
+
+  await BrowserTestUtils.waitForCondition(
+    () =>
+      win.gBrowser.selectedBrowser.currentURI.spec == "about:privatebrowsing"
+  );
+  Assert.equal(
+    win.gBrowser.selectedBrowser.currentURI.spec,
+    "about:privatebrowsing",
+    "The remaining tab should point to about:privatebrowsing."
+  );
+
+  // Close the private window that remained open.
+  await BrowserTestUtils.closeWindow(win);
+});
+
+/**
+ * Test that if the browser sidebar is open the reset action closes it.
+ */
+add_task(async function test_reset_action_closes_sidebar() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.privatebrowsing.resetPBM.enabled", true]],
+  });
+
+  info("Open a private browsing window.");
+  let win = await BrowserTestUtils.openNewBrowserWindow({
+    private: true,
+  });
+
+  info(
+    "Open the sidebar of both the private browsing window and the normal browsing window."
+  );
+  await SidebarUI.show("viewBookmarksSidebar");
+  await win.SidebarUI.show("viewBookmarksSidebar");
+
+  info("Trigger the restart PBM action");
+  await ResetPBMPanel._restartPBM(win);
+
+  Assert.ok(
+    SidebarUI.isOpen,
+    "Normal browsing window sidebar should still be open."
+  );
+  Assert.ok(
+    !win.SidebarUI.isOpen,
+    "Private browsing sidebar should be closed."
+  );
+
+  // Cleanup: Close the sidebar of the normal browsing window.
+  SidebarUI.hide();
+
+  // Cleanup: Close the private window that remained open.
+  await BrowserTestUtils.closeWindow(win);
+});
+
+/**
+ * Test that the session store history gets purged by the reset action.
+ */
+add_task(async function test_reset_action_purges_session_store() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.privatebrowsing.resetPBM.enabled", true]],
+  });
+
+  info("Open a private browsing window.");
+  let win = await BrowserTestUtils.openNewBrowserWindow({
+    private: true,
+  });
+
+  Assert.equal(
+    SessionStore.getClosedTabCountForWindow(win),
+    0,
+    "Initially there should be no closed tabs recorded for the PBM window in SessionStore."
+  );
+
+  info("Load a bunch of tabs in the private window.");
+
+  let tab;
+  let loadPromises = [
+    "https://example.com",
+    "https://example.org",
+    "https://example.net",
+  ].map(async url => {
+    tab = BrowserTestUtils.addTab(win.gBrowser, url);
+    await BrowserTestUtils.browserLoaded(tab.linkedBrowser);
+  });
+  await Promise.all(loadPromises);
+
+  info("Manually close a tab");
+  await SessionStoreTestUtils.closeTab(tab);
+
+  Assert.equal(
+    SessionStore.getClosedTabCountForWindow(win),
+    1,
+    "The manually closed tab should be recorded in SessionStore."
+  );
+
+  info("Trigger the restart PBM action");
+  await ResetPBMPanel._restartPBM(win);
+
+  Assert.equal(
+    SessionStore.getClosedTabCountForWindow(win),
+    0,
+    "After triggering the PBM reset action there should be no closed tabs recorded for the PBM window in SessionStore."
+  );
+
+  // Cleanup: Close the private window that remained open.
+  await BrowserTestUtils.closeWindow(win);
+});
+
+/**
+ * Test that the the reset action closes all tabs, including pinned and (multi-)selected
+ * tabs.
+ */
+add_task(async function test_reset_action_closes_pinned_and_selected_tabs() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.privatebrowsing.resetPBM.enabled", true]],
+  });
+
+  info("Open a private browsing window.");
+  let win = await BrowserTestUtils.openNewBrowserWindow({
+    private: true,
+  });
+
+  info("Load a list of tabs.");
+  let loadPromises = [
+    "https://example.com",
+    "https://example.org",
+    "https://example.net",
+    "about:blank",
+  ].map(async url => {
+    let tab = BrowserTestUtils.addTab(win.gBrowser, url);
+    await BrowserTestUtils.browserLoaded(tab.linkedBrowser);
+    return tab;
+  });
+  let tabs = await Promise.all(loadPromises);
+
+  info("Pin a tab");
+  win.gBrowser.pinTab(tabs[0]);
+
+  info("Multi-select tabs.");
+  await BrowserTestUtils.switchTab(win.gBrowser, tabs[2]);
+  win.gBrowser.addToMultiSelectedTabs(tabs[3]);
+
+  // Create promises for tab close for all tabs in the triggering private browsing window.
+  let promisesTabsClosed = win.gBrowser.tabs.map(tab =>
+    BrowserTestUtils.waitForTabClosing(tab)
+  );
+
+  info("Trigger the restart PBM action");
+  await ResetPBMPanel._restartPBM(win);
+
+  info("Wait for all tabs to be closed.");
+  await promisesTabsClosed;
+
+  Assert.equal(
+    win.gBrowser.tabs.length,
+    1,
+    "Should only have 1 tab remaining."
+  );
+
+  await BrowserTestUtils.waitForCondition(
+    () =>
+      win.gBrowser.selectedBrowser.currentURI.spec == "about:privatebrowsing"
+  );
+  Assert.equal(
+    win.gBrowser.selectedBrowser.currentURI.spec,
+    "about:privatebrowsing",
+    "The remaining tab should point to about:privatebrowsing."
+  );
+
+  // Cleanup: Close the private window/
+  await BrowserTestUtils.closeWindow(win);
 });

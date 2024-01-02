@@ -8,11 +8,22 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   AnimationFramePromise: "chrome://remote/content/shared/Sync.sys.mjs",
+  assert: "chrome://remote/content/shared/webdriver/Assert.sys.mjs",
   ClipRectangleType:
     "chrome://remote/content/webdriver-bidi/modules/root/browsingContext.sys.mjs",
-  dom: "chrome://remote/content/shared/DOM.sys.mjs",
+  error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
   LoadListener: "chrome://remote/content/shared/listeners/LoadListener.sys.mjs",
+  LocatorType:
+    "chrome://remote/content/webdriver-bidi/modules/root/browsingContext.sys.mjs",
+  OriginType:
+    "chrome://remote/content/webdriver-bidi/modules/root/browsingContext.sys.mjs",
 });
+
+const DOCUMENT_FRAGMENT_NODE = 11;
+const DOCUMENT_NODE = 9;
+const ELEMENT_NODE = 1;
+
+const ORDERED_NODE_SNAPSHOT_TYPE = 7;
 
 class BrowsingContextModule extends WindowGlobalBiDiModule {
   #loadListener;
@@ -43,6 +54,33 @@ class BrowsingContextModule extends WindowGlobalBiDiModule {
       timestamp: Date.now(),
       url: data.target.URL,
     };
+  }
+
+  #getOriginRectangle(origin) {
+    const win = this.messageHandler.window;
+
+    if (origin === lazy.OriginType.viewport) {
+      const viewport = win.visualViewport;
+      // Until it's clarified in the scope of the issue:
+      // https://github.com/w3c/webdriver-bidi/issues/592
+      // if we should take into account scrollbar dimensions, when calculating
+      // the viewport size, we match the behavior of WebDriver Classic,
+      // meaning we include scrollbar dimensions.
+      return new DOMRect(
+        viewport.pageLeft,
+        viewport.pageTop,
+        win.innerWidth,
+        win.innerHeight
+      );
+    }
+
+    const documentElement = win.document.documentElement;
+    return new DOMRect(
+      0,
+      0,
+      documentElement.scrollWidth,
+      documentElement.scrollHeight
+    );
   }
 
   #startListening() {
@@ -114,6 +152,83 @@ class BrowsingContextModule extends WindowGlobalBiDiModule {
       this.emitEvent("browsingContext.load", this.#getNavigationInfo(data));
     }
   };
+
+  /**
+   * Locate nodes using css selector.
+   *
+   * @see https://w3c.github.io/webdriver-bidi/#locate-nodes-using-css
+   */
+  #locateNodesUsingCss(contextNodes, selector, maxReturnedNodeCount) {
+    const returnedNodes = [];
+
+    for (const contextNode of contextNodes) {
+      let elements;
+      try {
+        elements = contextNode.querySelectorAll(selector);
+      } catch (e) {
+        throw new lazy.error.InvalidSelectorError(
+          `${e.message}: "${selector}"`
+        );
+      }
+
+      if (maxReturnedNodeCount === null) {
+        returnedNodes.push(...elements);
+      } else {
+        for (const element of elements) {
+          returnedNodes.push(element);
+
+          if (returnedNodes.length === maxReturnedNodeCount) {
+            return returnedNodes;
+          }
+        }
+      }
+    }
+
+    return returnedNodes;
+  }
+
+  /**
+   * Locate nodes using XPath.
+   *
+   * @see https://w3c.github.io/webdriver-bidi/#locate-nodes-using-xpath
+   */
+  #locateNodesUsingXPath(contextNodes, selector, maxReturnedNodeCount) {
+    const returnedNodes = [];
+
+    for (const contextNode of contextNodes) {
+      let evaluationResult;
+      try {
+        evaluationResult = this.messageHandler.window.document.evaluate(
+          selector,
+          contextNode,
+          null,
+          ORDERED_NODE_SNAPSHOT_TYPE,
+          null
+        );
+      } catch (e) {
+        const errorMessage = `${e.message}: "${selector}"`;
+        if (DOMException.isInstance(e) && e.name === "SyntaxError") {
+          throw new lazy.error.InvalidSelectorError(errorMessage);
+        }
+
+        throw new lazy.error.UnknownError(errorMessage);
+      }
+
+      for (let index = 0; index < evaluationResult.snapshotLength; index++) {
+        const node = evaluationResult.snapshotItem(index);
+        returnedNodes.push(node);
+
+        if (
+          maxReturnedNodeCount !== null &&
+          returnedNodes.length === maxReturnedNodeCount
+        ) {
+          return returnedNodes;
+        }
+      }
+    }
+
+    return returnedNodes;
+  }
 
   /**
    * Normalize rectangle. This ensures that the resulting rect has
@@ -246,40 +361,114 @@ class BrowsingContextModule extends WindowGlobalBiDiModule {
   }
 
   _getScreenshotRect(params = {}) {
-    const { clip } = params;
+    const { clip, origin } = params;
 
-    const win = this.messageHandler.window;
-    const viewportRect = new DOMRect(0, 0, win.innerWidth, win.innerHeight);
-
-    let clipRect = viewportRect;
+    const originRect = this.#getOriginRectangle(origin);
+    let clipRect = originRect;
 
     if (clip !== null) {
       switch (clip.type) {
+        case lazy.ClipRectangleType.Box: {
+          clipRect = new DOMRect(
+            clip.x + originRect.x,
+            clip.y + originRect.y,
+            clip.width,
+            clip.height
+          );
+          break;
+        }
+
         case lazy.ClipRectangleType.Element: {
           const realm = this.messageHandler.getRealm();
           const element = this.deserialize(realm, clip.element);
+          const viewportRect = this.#getOriginRectangle(
+            lazy.OriginType.viewport
+          );
+          const elementRect = element.getBoundingClientRect();
 
-          if (clip.scrollIntoView && !lazy.dom.isInView(element)) {
-            lazy.dom.scrollIntoView(element);
-          }
-
-          clipRect = element.getBoundingClientRect();
-          break;
-        }
-        case lazy.ClipRectangleType.Viewport: {
-          clipRect = new DOMRect(clip.x, clip.y, clip.width, clip.height);
+          clipRect = new DOMRect(
+            elementRect.x + viewportRect.x,
+            elementRect.y + viewportRect.y,
+            elementRect.width,
+            elementRect.height
+          );
           break;
         }
       }
     }
 
-    const intersection = this.#rectangleIntersection(viewportRect, clipRect);
+    return this.#rectangleIntersection(originRect, clipRect);
+  }
 
-    // Change coordinate system from viewport-based to document-based.
-    intersection.x += win.pageXOffset;
-    intersection.y += win.pageYOffset;
+  _locateNodes(params = {}) {
+    const {
+      locator,
+      maxNodeCount,
+      resultOwnership,
+      sandbox,
+      serializationOptions,
+      startNodes,
+    } = params;
 
-    return intersection;
+    const realm = this.messageHandler.getRealm({ sandboxName: sandbox });
+
+    const contextNodes = [];
+    if (startNodes === null) {
+      contextNodes.push(this.messageHandler.window.document.documentElement);
+    } else {
+      for (const serializedStartNode of startNodes) {
+        const startNode = this.deserialize(realm, serializedStartNode);
+        lazy.assert.that(
+          startNode =>
+            Node.isInstance(startNode) &&
+            [DOCUMENT_FRAGMENT_NODE, DOCUMENT_NODE, ELEMENT_NODE].includes(
+              startNode.nodeType
+            ),
+          `Expected an item of "startNodes" to be an Element, got ${startNode}`
+        )(startNode);
+
+        contextNodes.push(startNode);
+      }
+    }
+
+    let returnedNodes;
+    switch (locator.type) {
+      case lazy.LocatorType.css: {
+        returnedNodes = this.#locateNodesUsingCss(
+          contextNodes,
+          locator.value,
+          maxNodeCount
+        );
+        break;
+      }
+      case lazy.LocatorType.xpath: {
+        returnedNodes = this.#locateNodesUsingXPath(
+          contextNodes,
+          locator.value,
+          maxNodeCount
+        );
+        break;
+      }
+    }
+
+    const serializedNodes = [];
+    const seenNodeIds = new Map();
+    for (const returnedNode of returnedNodes) {
+      serializedNodes.push(
+        this.serialize(
+          returnedNode,
+          serializationOptions,
+          resultOwnership,
+          realm,
+          { seenNodeIds }
+        )
+      );
+    }
+
+    return {
+      serializedNodes,
+      _extraData: { seenNodeIds },
+    };
   }
 }
 

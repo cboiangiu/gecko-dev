@@ -53,6 +53,7 @@ export var UrlbarUtils = {
     HEURISTIC_TOKEN_ALIAS_ENGINE: "heuristicTokenAliasEngine",
     INPUT_HISTORY: "inputHistory",
     OMNIBOX: "extension",
+    RECENT_SEARCH: "recentSearch",
     REMOTE_SUGGESTION: "remoteSuggestion",
     REMOTE_TAB: "remoteTab",
     SUGGESTED_INDEX: "suggestedIndex",
@@ -549,9 +550,11 @@ export var UrlbarUtils = {
     switch (result.type) {
       case UrlbarUtils.RESULT_TYPE.SEARCH:
         if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
-          return UrlbarUtils.RESULT_GROUP.FORM_HISTORY;
+          return result.providerName == "RecentSearches"
+            ? UrlbarUtils.RESULT_GROUP.RECENT_SEARCH
+            : UrlbarUtils.RESULT_GROUP.FORM_HISTORY;
         }
-        if (result.payload.tail) {
+        if (result.payload.tail && !result.isRichSuggestion) {
           return UrlbarUtils.RESULT_GROUP.TAIL_SUGGESTION;
         }
         if (result.payload.suggestion) {
@@ -1205,6 +1208,9 @@ export var UrlbarUtils = {
       case UrlbarUtils.RESULT_TYPE.TAB_SWITCH:
         return "switchtab";
       case UrlbarUtils.RESULT_TYPE.SEARCH:
+        if (result.providerName == "RecentSearches") {
+          return "recent_search";
+        }
         if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
           return "formhistory";
         }
@@ -1311,7 +1317,7 @@ export var UrlbarUtils = {
 
   /**
    * Unescape, decode punycode, and trim (both protocol and trailing slash)
-   * the URL.
+   * the URL. Use for displaying purposes only!
    *
    * @param {string} url The url that should be prepared for display.
    * @returns {string} Prepared url.
@@ -1356,6 +1362,9 @@ export var UrlbarUtils = {
     switch (this.getResultGroup(result)) {
       case UrlbarUtils.RESULT_GROUP.INPUT_HISTORY: {
         return "adaptive_history";
+      }
+      case UrlbarUtils.RESULT_GROUP.RECENT_SEARCH: {
+        return "recent_search";
       }
       case UrlbarUtils.RESULT_GROUP.FORM_HISTORY: {
         return "search_history";
@@ -1430,6 +1439,8 @@ export var UrlbarUtils = {
             return "site_specific_contextual_search";
           case "UrlbarProviderQuickSuggest":
             return this._getQuickSuggestTelemetryType(result);
+          case "UrlbarProviderQuickSuggestContextualOptIn":
+            return "fxsuggest_data_sharing_opt_in";
           case "Weather":
             return "weather";
         }
@@ -1445,7 +1456,9 @@ export var UrlbarUtils = {
           return "tab_to_search";
         }
         if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
-          return "search_history";
+          return result.providerName == "RecentSearches"
+            ? "recent_search"
+            : "search_history";
         }
         if (result.payload.suggestion) {
           let type = result.payload.trending
@@ -1544,6 +1557,18 @@ export var UrlbarUtils = {
       source = "rs";
     }
     return `${source}_${result.payload.telemetryType}`;
+  },
+
+  /**
+   * For use when we want to hash a pair of items in a dictionary
+   *
+   * @param {string[]} tokens
+   *   list of tokens to join into a string eg "a" "b" "c"
+   * @returns {string}
+   *   the tokens joined in a string "a|b|c"
+   */
+  tupleString(...tokens) {
+    return tokens.filter(t => t).join("|");
   },
 };
 
@@ -2385,6 +2410,18 @@ export class UrlbarProvider {
    *  The associated controller.
    */
   onEngagement(state, queryContext, details, controller) {}
+
+  /**
+   * Called before a result from the provider is selected. See `onSelection`
+   * for details on what that means.
+   *
+   * @param {UrlbarResult} result
+   *   The result that was selected.
+   * @param {Element} element
+   *   The element in the result's view that was selected.
+   * @abstract
+   */
+  onBeforeSelection(result, element) {}
 
   /**
    * Called when a result from the provider is selected. "Selected" refers to

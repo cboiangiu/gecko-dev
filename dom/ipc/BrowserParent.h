@@ -303,7 +303,10 @@ class BrowserParent final : public PBrowserParent,
       const bool aBlocked, const nsACString& aTrackingOrigin,
       nsTArray<nsCString>&& aTrackingFullHashes,
       const Maybe<mozilla::ContentBlockingNotifier::
-                      StorageAccessPermissionGrantedReason>& aReason);
+                      StorageAccessPermissionGrantedReason>& aReason,
+      const Maybe<mozilla::ContentBlockingNotifier::CanvasFingerprinter>&
+          aCanvasFingerprinter,
+      const Maybe<bool>& aCanvasFingerprinterKnownText);
 
   mozilla::ipc::IPCResult RecvNavigationFinished();
 
@@ -588,7 +591,8 @@ class BrowserParent final : public PBrowserParent,
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY bool SendHandleTap(
       TapType aType, const LayoutDevicePoint& aPoint, Modifiers aModifiers,
-      const ScrollableLayerGuid& aGuid, uint64_t aInputBlockId);
+      const ScrollableLayerGuid& aGuid, uint64_t aInputBlockId,
+      const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics);
 
   already_AddRefed<PFilePickerParent> AllocPFilePickerParent(
       const nsString& aTitle, const nsIFilePicker::Mode& aMode);
@@ -603,10 +607,7 @@ class BrowserParent final : public PBrowserParent,
 
   bool SendInsertText(const nsString& aStringToInsert);
 
-  bool SendPasteTransferable(IPCTransferableData&& aTransferableData,
-                             const bool& aIsPrivateData,
-                             nsIPrincipal* aRequestingPrincipal,
-                             const nsContentPolicyType& aContentPolicyType);
+  bool SendPasteTransferable(IPCTransferable&& aTransferable);
 
   // Helper for transforming a point
   LayoutDeviceIntPoint TransformPoint(

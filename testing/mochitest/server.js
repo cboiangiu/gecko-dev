@@ -352,10 +352,11 @@ function serverDebug(metadata, response) {
 function regularListing(metadata, response) {
   var [links] = list(metadata.path, metadata.getProperty("directory"), false);
   response.write(
-    HTML(
-      HEAD(TITLE("mochitest index ", metadata.path)),
-      BODY(BR(), A({ href: ".." }, "Up a level"), UL(linksToListItems(links)))
-    )
+    "<!DOCTYPE html>\n" +
+      HTML(
+        HEAD(TITLE("mochitest index ", metadata.path)),
+        BODY(BR(), A({ href: ".." }, "Up a level"), UL(linksToListItems(links)))
+      )
   );
 }
 
@@ -483,7 +484,12 @@ function testListing(metadata, response) {
           DIV({ class: "clear" }),
           DIV(
             { class: "frameholder" },
-            IFRAME({ scrolling: "no", id: "testframe", allowfullscreen: true })
+            IFRAME({
+              scrolling: "no",
+              id: "testframe",
+              allow: "geolocation 'src'",
+              allowfullscreen: true,
+            })
           ),
           DIV({ class: "clear" }),
           DIV(

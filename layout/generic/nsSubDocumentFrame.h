@@ -44,12 +44,6 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
 
   NS_DECL_QUERYFRAME
 
-  bool IsFrameOfType(uint32_t aFlags) const override {
-    return nsAtomicContainerFrame::IsFrameOfType(
-        aFlags & ~(nsIFrame::eReplaced | nsIFrame::eReplacedSizing |
-                   nsIFrame::eReplacedContainsBlock));
-  }
-
   void Init(nsIContent* aContent, nsContainerFrame* aParent,
             nsIFrame* aPrevInFlow) override;
 
@@ -132,11 +126,6 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
   void ResetFrameLoader(RetainPaintData);
   void ClearRetainedPaintData();
 
-  void MaybeUpdateEmbedderColorScheme();
-
-  void MaybeUpdateRemoteStyle(ComputedStyle* aOldComputedStyle = nullptr);
-  void PropagateIsUnderHiddenEmbedderElement(bool aValue);
-
   void ClearDisplayItems();
 
   void SubdocumentIntrinsicSizeOrRatioChanged();
@@ -151,6 +140,11 @@ class nsSubDocumentFrame final : public nsAtomicContainerFrame,
 
  protected:
   friend class AsyncFrameInit;
+
+  void MaybeUpdateEmbedderColorScheme();
+  void MaybeUpdateRemoteStyle(ComputedStyle* aOldComputedStyle = nullptr);
+  void PropagateIsUnderHiddenEmbedderElement(bool aValue);
+  void UpdateEmbeddedBrowsingContextDependentData();
 
   bool IsInline() { return mIsInline; }
 

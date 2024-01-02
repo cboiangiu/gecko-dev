@@ -63,7 +63,6 @@ using DNSPromise = MozPromise<nsCOMPtr<nsIDNSRecord>, nsresult, false>;
 
 class nsHttpChannel final : public HttpBaseChannel,
                             public HttpAsyncAborter<nsHttpChannel>,
-                            public nsIStreamListener,
                             public nsICachingChannel,
                             public nsICacheEntryOpenCallback,
                             public nsITransportEventSink,
@@ -801,6 +800,8 @@ class nsHttpChannel final : public HttpBaseChannel,
   nsresult LogConsoleError(const char* aTag);
 
   void SetHTTPSSVCRecord(already_AddRefed<nsIDNSHTTPSSVCRecord>&& aRecord);
+
+  void RecordOnStartTelemetry(nsresult aStatus, bool aIsNavigation);
 
   // Timer used to delay the network request, or to trigger the network
   // request if retrieving the cache entry takes too long.

@@ -257,8 +257,7 @@ def write_test_settings_json(args, test_details, oskey):
 
     # if Gecko profiling is enabled, write profiling settings for webext
     if test_details.get("gecko_profile", False):
-        threads = ["GeckoMain", "Compositor"]
-        threads.extend(["Renderer", "WR"])
+        threads = ["GeckoMain", "Compositor", "Renderer"]
 
         if test_details.get("gecko_profile_threads"):
             # pylint --py3k: W1639
@@ -579,9 +578,10 @@ def get_raptor_test_list(args, oskey):
             and next_test.get("type") == "pageload"
         ):
             next_test["measure"] = (
-                "fnbpaint, fcp, dcf, loadtime,"
-                "ContentfulSpeedIndex, PerceptualSpeedIndex,"
-                "SpeedIndex, FirstVisualChange, LastVisualChange"
+                "fnbpaint, fcp, dcf, loadtime, "
+                "ContentfulSpeedIndex, PerceptualSpeedIndex, "
+                "SpeedIndex, FirstVisualChange, LastVisualChange, "
+                "largestContentfulPaint"
             )
 
         # convert 'measure =' test INI line to list
@@ -613,6 +613,7 @@ def get_raptor_test_list(args, oskey):
                 ).resolve()
             )
             next_test["support_class"] = support_class()
+            next_test["support_class"].setup_test(next_test, args)
 
         bool_settings = [
             "lower_is_better",
@@ -620,7 +621,7 @@ def get_raptor_test_list(args, oskey):
             "accept_zero_vismet",
             "interactive",
             "host_from_parent",
-            "expose_gecko_profiler",
+            "expose_browser_profiler",
         ]
         for setting in bool_settings:
             if next_test.get(setting, None) is not None:

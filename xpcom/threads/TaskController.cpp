@@ -9,26 +9,24 @@
 #include "nsIRunnable.h"
 #include "nsThreadUtils.h"
 #include <algorithm>
-#include <initializer_list>
 #include "GeckoProfiler.h"
-#include "mozilla/EventQueue.h"
 #include "mozilla/BackgroundHangMonitor.h"
+#include "mozilla/EventQueue.h"
 #include "mozilla/InputTaskManager.h"
 #include "mozilla/VsyncTaskManager.h"
 #include "mozilla/IOInterposer.h"
-#include "mozilla/StaticMutex.h"
+#include "mozilla/StaticPtr.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
-#include "mozilla/Unused.h"
 #include "nsIThreadInternal.h"
-#include "nsQueryObject.h"
 #include "nsThread.h"
 #include "prenv.h"
 #include "prsystem.h"
 
 namespace mozilla {
 
-std::unique_ptr<TaskController> TaskController::sSingleton;
+StaticAutoPtr<TaskController> TaskController::sSingleton;
+
 thread_local size_t mThreadPoolIndex = -1;
 std::atomic<uint64_t> Task::sCurrentTaskSeqNo = 0;
 
@@ -49,10 +47,35 @@ int32_t TaskController::GetPoolThreadCount() {
 
 #if defined(MOZ_COLLECTING_RUNNABLE_TELEMETRY)
 
-struct TaskMarker {
-  static constexpr Span<const char> MarkerTypeName() {
-    return MakeStringSpan("Task");
+struct TaskMarker : BaseMarkerType<TaskMarker> {
+  static constexpr const char* Name = "Task";
+  static constexpr const char* Description =
+      "Marker representing a task being executed in TaskController.";
+
+  using MS = MarkerSchema;
+  static constexpr MS::PayloadField PayloadFields[] = {
+      {"name", MS::InputType::CString, "Task Name", MS::Format::String,
+       MS::PayloadFlags::Searchable},
+      {"priority", MS::InputType::Uint32, "Priority level",
+       MS::Format::Integer},
+      {"priorityName", MS::InputType::CString, "Priority Name"}};
+
+  static constexpr MS::Location Locations[] = {MS::Location::MarkerChart,
+                                               MS::Location::MarkerTable};
+  static constexpr const char* ChartLabel = "{marker.data.name}";
+  static constexpr const char* TableLabel =
+      "{marker.name} - {marker.data.name} - priority: "
+      "{marker.data.priorityName} ({marker.data.priority})";
+
+  static constexpr MS::ETWMarkerGroup Group = MS::ETWMarkerGroup::Scheduling;
+
+  static void TranslateMarkerInputToSchema(void* aContext,
+                                           const nsCString& aName,
+                                           uint32_t aPriority) {
+    ETW::OutputMarkerSchema(aContext, TaskMarker{}, aName, aPriority,
+                            ProfilerStringView(""));
   }
+
   static void StreamJSONMarkerData(baseprofiler::SpliceableJSONWriter& aWriter,
                                    const nsCString& aName, uint32_t aPriority) {
     aWriter.StringProperty("name", aName);
@@ -68,27 +91,13 @@ struct TaskMarker {
       aWriter.StringProperty("priorityName", "Invalid Value");
     }
   }
-  static MarkerSchema MarkerTypeDisplay() {
-    using MS = MarkerSchema;
-    MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
-    schema.SetChartLabel("{marker.data.name}");
-    schema.SetTableLabel(
-        "{marker.name} - {marker.data.name} - priority: "
-        "{marker.data.priorityName} ({marker.data.priority})");
-    schema.AddKeyLabelFormatSearchable("name", "Task Name", MS::Format::String,
-                                       MS::Searchable::Searchable);
-    schema.AddKeyLabelFormat("priorityName", "Priority Name",
-                             MS::Format::String);
-    schema.AddKeyLabelFormat("priority", "Priority level", MS::Format::Integer);
-    return schema;
-  }
 };
 
 class MOZ_RAII AutoProfileTask {
  public:
   explicit AutoProfileTask(nsACString& aName, uint64_t aPriority)
       : mName(aName), mPriority(aPriority) {
-    if (profiler_is_active()) {
+    if (profiler_is_collecting_markers()) {
       mStartTime = TimeStamp::Now();
     }
   }
@@ -190,14 +199,9 @@ Task* Task::GetHighestPriorityDependency() {
   return currentTask == this ? nullptr : currentTask;
 }
 
-TaskController* TaskController::Get() {
-  MOZ_ASSERT(sSingleton.get());
-  return sSingleton.get();
-}
-
 void TaskController::Initialize() {
   MOZ_ASSERT(!sSingleton);
-  sSingleton = std::make_unique<TaskController>();
+  sSingleton = new TaskController();
 }
 
 void ThreadFuncPoolThread(void* aIndex) {
@@ -273,16 +277,15 @@ void TaskController::Shutdown() {
   VsyncTaskManager::Cleanup();
   if (sSingleton) {
     sSingleton->ShutdownThreadPoolInternal();
-    sSingleton->ShutdownInternal();
+    sSingleton = nullptr;
   }
   MOZ_ASSERT(!sSingleton);
 }
 
 void TaskController::ShutdownThreadPoolInternal() {
   {
-    // Prevent racecondition on mShuttingDown and wait.
+    // Prevent race condition on mShuttingDown and wait.
     MutexAutoLock lock(mGraphMutex);
-
     mShuttingDown = true;
     mThreadPoolCV.NotifyAll();
   }
@@ -290,8 +293,6 @@ void TaskController::ShutdownThreadPoolInternal() {
     PR_JoinThread(thread.mThread);
   }
 }
-
-void TaskController::ShutdownInternal() { sSingleton = nullptr; }
 
 void TaskController::RunPoolThread() {
   IOInterposer::RegisterCurrentThread();
@@ -354,7 +355,7 @@ void TaskController::RunPoolThread() {
           MutexAutoUnlock unlock(mGraphMutex);
           lastTask = nullptr;
           AUTO_PROFILE_FOLLOWING_TASK(task);
-          taskCompleted = task->Run();
+          taskCompleted = task->Run() == Task::TaskResult::Complete;
           ranTask = true;
         }
 
@@ -456,7 +457,15 @@ void TaskController::AddTask(already_AddRefed<Task>&& aTask) {
       insertion;
   switch (task->GetKind()) {
     case Task::Kind::MainThreadOnly:
-      insertion = mMainThreadTasks.insert(std::move(task));
+      if (task->GetPriority() >=
+              static_cast<uint32_t>(EventQueuePriority::Normal) &&
+          !mMainThreadTasks.empty()) {
+        insertion = std::pair(
+            mMainThreadTasks.insert(--mMainThreadTasks.end(), std::move(task)),
+            true);
+      } else {
+        insertion = mMainThreadTasks.insert(std::move(task));
+      }
       break;
     case Task::Kind::OffMainThreadOnly:
       insertion = mThreadableTasks.insert(std::move(task));
@@ -555,10 +564,10 @@ class RunnableTask : public Task {
                Kind aKind)
       : Task(aKind, aPriority), mRunnable(aRunnable) {}
 
-  virtual bool Run() override {
+  virtual TaskResult Run() override {
     mRunnable->Run();
     mRunnable = nullptr;
-    return true;
+    return TaskResult::Complete;
   }
 
   void SetIdleDeadline(TimeStamp aDeadline) override {
@@ -883,7 +892,7 @@ bool TaskController::DoExecuteNextTaskOnlyMainThreadInternal(
           AutoSetMainThreadRunnableName nameGuard(name);
 #endif
           AUTO_PROFILE_FOLLOWING_TASK(task);
-          result = task->Run();
+          result = task->Run() == Task::TaskResult::Complete;
         }
 
         // Task itself should keep manager alive.

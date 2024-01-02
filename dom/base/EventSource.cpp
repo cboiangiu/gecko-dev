@@ -73,7 +73,6 @@ static LazyLogModule gEventSourceLog("EventSource");
   PR_IntervalToMilliseconds(DELAY_INTERVAL_LIMIT)
 
 class EventSourceImpl final : public nsIObserver,
-                              public nsIStreamListener,
                               public nsIChannelEventSink,
                               public nsIInterfaceRequestor,
                               public nsSupportsWeakReference,
@@ -379,7 +378,7 @@ EventSourceImpl::EventSourceImpl(EventSource* aEventSource,
       mIsShutDown(false),
       mSharedData(SharedData{aEventSource}, "EventSourceImpl::mSharedData"),
       mScriptLine(0),
-      mScriptColumn(0),
+      mScriptColumn(1),
       mInnerWindowID(0),
       mCookieJarSettings(aCookieJarSettings),
       mTargetThread(NS_GetCurrentThread()) {
@@ -713,8 +712,8 @@ EventSourceImpl::OnStartRequest(nsIRequest* aRequest) {
 
   if (NS_FAILED(status)) {
     // EventSource::OnStopRequest will evaluate if it shall either reestablish
-    // or fail the connection
-    return NS_ERROR_ABORT;
+    // or fail the connection, based on the status.
+    return status;
   }
 
   uint32_t httpStatus;
@@ -1826,7 +1825,7 @@ class WorkerRunnableDispatcher final : public WorkerRunnable {
   WorkerRunnableDispatcher(RefPtr<EventSourceImpl>&& aImpl,
                            WorkerPrivate* aWorkerPrivate,
                            already_AddRefed<nsIRunnable> aEvent)
-      : WorkerRunnable(aWorkerPrivate, WorkerThreadUnchangedBusyCount),
+      : WorkerRunnable(aWorkerPrivate, WorkerThread),
         mEventSourceImpl(std::move(aImpl)),
         mEvent(std::move(aEvent)) {}
 
@@ -1950,6 +1949,10 @@ EventSourceImpl::CheckListenerChain() {
   MOZ_ASSERT(NS_IsMainThread(), "Should be on the main thread!");
   return NS_OK;
 }
+
+NS_IMETHODIMP
+EventSourceImpl::OnDataFinished(nsresult) { return NS_OK; }
+
 ////////////////////////////////////////////////////////////////////////////////
 // EventSource
 ////////////////////////////////////////////////////////////////////////////////

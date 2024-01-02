@@ -4,7 +4,8 @@
 "use strict";
 
 ChromeUtils.defineESModuleGetters(this, {
-  SearchEngineSelector: "resource://gre/modules/SearchEngineSelector.sys.mjs",
+  SearchEngineSelectorOld:
+    "resource://gre/modules/SearchEngineSelectorOld.sys.mjs",
 });
 
 const TEST_CONFIG = [
@@ -44,7 +45,14 @@ const TEST_CONFIG = [
       {
         override: true,
         experiment: "experiment1",
-        sendAttributionRequest: true,
+        params: {
+          searchUrlGetParams: [
+            {
+              name: "experiment-params",
+              value: "{searchTerms}",
+            },
+          ],
+        },
       },
     ],
     default: "yes",
@@ -77,10 +85,10 @@ const TEST_CONFIG = [
   },
 ];
 
-const engineSelector = new SearchEngineSelector();
+const engineSelector = new SearchEngineSelectorOld();
 
 add_setup(async function () {
-  const settings = await RemoteSettings(SearchUtils.SETTINGS_KEY);
+  const settings = await RemoteSettings(SearchUtils.OLD_SETTINGS_KEY);
   sinon.stub(settings, "get").returns(TEST_CONFIG);
 });
 
@@ -95,14 +103,14 @@ add_task(async function test_engine_selector_defaults() {
 
   Assert.ok(
     !("params" in engine),
-    "Should not have overriden the parameters of the engine."
+    "Should not have overriden the parameters of the aol engine."
   );
 
   engine = engines.find(e => e.webExtension.id == "lycos@example.com");
 
   Assert.ok(
-    !("sendAttributionRequest" in engine),
-    "Should have overriden the sendAttributionRequest field of the engine."
+    !("params" in engine),
+    "Should not have overriden the parameters of the lycos engine."
   );
 });
 
@@ -138,10 +146,17 @@ add_task(async function test_engine_selector_override_experiments() {
 
   let engine = engines.find(e => e.webExtension.id == "lycos@example.com");
 
-  Assert.equal(
-    engine.sendAttributionRequest,
-    true,
-    "Should have overriden the sendAttributionRequest field of the engine."
+  Assert.deepEqual(
+    engine.params,
+    {
+      searchUrlGetParams: [
+        {
+          name: "experiment-params",
+          value: "{searchTerms}",
+        },
+      ],
+    },
+    "Should have overriden the parameters of the engine."
   );
 });
 

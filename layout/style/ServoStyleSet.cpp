@@ -8,7 +8,6 @@
 #include "mozilla/ServoStyleSetInlines.h"
 
 #include "gfxPlatformFontList.h"
-#include "mozilla/AutoRestyleTimelineMarker.h"
 #include "mozilla/DocumentStyleRootIterator.h"
 #include "mozilla/AttributeStyles.h"
 #include "mozilla/EffectCompositor.h"
@@ -103,16 +102,11 @@ class MOZ_RAII AutoSetInServoTraversal {
 class MOZ_RAII AutoPrepareTraversal {
  public:
   explicit AutoPrepareTraversal(ServoStyleSet* aSet)
-      // For markers for animations, we have already set the markers in
-      // RestyleManager::PostRestyleEventForAnimations so that we don't need
-      // to care about animation restyles here.
-      : mTimelineMarker(aSet->mDocument->GetDocShell(), false),
-        mSetInServoTraversal(aSet) {
+      : mSetInServoTraversal(aSet) {
     MOZ_ASSERT(!aSet->StylistNeedsUpdate());
   }
 
  private:
-  AutoRestyleTimelineMarker mTimelineMarker;
   AutoSetInServoTraversal mSetInServoTraversal;
 };
 
@@ -668,11 +662,11 @@ StyleSheet* ServoStyleSet::SheetAt(Origin aOrigin, size_t aIndex) const {
       Servo_StyleSet_GetSheetAt(mRawData.get(), aOrigin, aIndex));
 }
 
-ServoStyleSet::FirstPageSizeAndOrientation
-ServoStyleSet::GetFirstPageSizeAndOrientation(const nsAtom* aFirstPageName) {
-  FirstPageSizeAndOrientation retval;
+ServoStyleSet::PageSizeAndOrientation
+ServoStyleSet::GetDefaultPageSizeAndOrientation() {
+  PageSizeAndOrientation retval;
   const RefPtr<ComputedStyle> style =
-      ResolvePageContentStyle(aFirstPageName, StylePagePseudoClassFlags::FIRST);
+      ResolvePageContentStyle(nullptr, StylePagePseudoClassFlags::NONE);
   const StylePageSize& pageSize = style->StylePage()->mSize;
 
   if (pageSize.IsSize()) {
@@ -817,9 +811,9 @@ bool ServoStyleSet::StyleDocument(ServoTraversalFlags aFlags) {
                   !parent->HasAnyOfFlags(Element::kAllServoDescendantBits));
 
     postTraversalRequired |=
-        Servo_TraverseSubtree(root, mRawData.get(), &snapshots, aFlags);
-    postTraversalRequired |= root->HasAnyOfFlags(
-        Element::kAllServoDescendantBits | NODE_NEEDS_FRAME);
+        Servo_TraverseSubtree(root, mRawData.get(), &snapshots, aFlags) ||
+        root->HasAnyOfFlags(Element::kAllServoDescendantBits |
+                            NODE_NEEDS_FRAME);
 
     {
       uint32_t existingBits = mDocument->GetServoRestyleRootDirtyBits();
@@ -857,14 +851,13 @@ bool ServoStyleSet::StyleDocument(ServoTraversalFlags aFlags) {
   // traversal caused, for example, the font-size to change, the SMIL style
   // won't be updated until the next tick anyway.
   if (GetPresContext()->EffectCompositor()->PreTraverse(aFlags)) {
-    nsINode* styleRoot = mDocument->GetServoRestyleRoot();
-    Element* root =
-        styleRoot->IsElement() ? styleRoot->AsElement() : rootElement;
-
-    postTraversalRequired |=
-        Servo_TraverseSubtree(root, mRawData.get(), &snapshots, aFlags);
-    postTraversalRequired |= root->HasAnyOfFlags(
-        Element::kAllServoDescendantBits | NODE_NEEDS_FRAME);
+    DocumentStyleRootIterator iter(mDocument->GetServoRestyleRoot());
+    while (Element* root = iter.GetNextStyleRoot()) {
+      postTraversalRequired |=
+          Servo_TraverseSubtree(root, mRawData.get(), &snapshots, aFlags) ||
+          root->HasAnyOfFlags(Element::kAllServoDescendantBits |
+                              NODE_NEEDS_FRAME);
+    }
   }
 
   return postTraversalRequired;
@@ -1017,6 +1010,9 @@ void ServoStyleSet::RuleChangedInternal(StyleSheet& aSheet, css::Rule& aRule,
       // FIXME: We should probably just forward to the parent @keyframes rule? I
       // think that'd do the right thing, but meanwhile...
       return MarkOriginsDirty(ToOriginFlags(aSheet.GetOrigin()));
+    case StyleCssRuleType::Margin:
+      // Margin rules not implemented yet, see bug 1864737
+      break;
   }
 
 #undef CASE_FOR
@@ -1508,6 +1504,12 @@ void ServoStyleSet::RegisterProperty(const PropertyDefinition& aDefinition,
                                             : nullptr);
   switch (result) {
     case Result::SuccessfullyRegistered:
+      if (Element* root = mDocument->GetRootElement()) {
+        if (nsPresContext* pc = GetPresContext()) {
+          pc->RestyleManager()->PostRestyleEvent(
+              root, RestyleHint::RecascadeSubtree(), nsChangeHint(0));
+        }
+      }
       break;
     case Result::InvalidName:
       return aRv.ThrowSyntaxError("Invalid name");

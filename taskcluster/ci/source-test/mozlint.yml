@@ -187,6 +187,7 @@ license:
             - '**/*.ftl'
             - '**/*.h'
             - '**/*.html'
+            - '**/*.idl'
             - '**/*.js'
             - '**/*.jsm'
             - '**/*.jsx'
@@ -197,6 +198,7 @@ license:
             - '**/*.py'
             - '**/*.rs'
             - '**/*.svg'
+            - '**/*.webidl'
             - '**/*.xhtml'
             - '**/*.xml'
             - '**/*.xul'
@@ -213,7 +215,6 @@ lintpref:
             - 'modules/libpref/init/all.js'
             - 'modules/libpref/init/StaticPrefList.yaml'
             - 'browser/app/profile/firefox.js'
-            - 'mobile/android/app/mobile.js'
             - 'devtools/client/preferences/debugger.js'
             - 'mobile/android/app/geckoview-prefs.js'
             - 'browser/branding/official/pref/firefox-branding.js'
@@ -303,7 +304,7 @@ test-manifest:
         mach: lint -v -l test-manifest-alpha -l test-manifest-disable -l test-manifest-skip-if -f treeherder -f json:/builds/worker/mozlint.json .
     when:
         files-changed:
-            - '**/*.ini'
+            - '**/*.toml'
             - 'python/mozlint/**'
             - 'tools/lint/**'
             - 'tools/lint/test-disable.yml'
@@ -440,7 +441,17 @@ clippy:
             - 'tools/lint/clippy.yml'
     fetches:
         toolchain:
+            - linux64-clang
             - linux64-rust
+            - linux64-rust-size
+            - linux64-cbindgen
+            - linux64-dump_syms
+            - linux64-sccache
+            - linux64-nasm
+            - linux64-node
+            - linux64-pkgconf
+            - sysroot-x86_64-linux-gnu
+            - sysroot-wasm32-wasi
 
 
 file-whitespace:
@@ -471,8 +482,9 @@ file-whitespace:
             - '**/*.rst'
             - '**/*.toml'
             - '**/*.webidl'
+            - '**/*.yaml'
+            - '**/*.yml'
             - '**/*.xhtml'
-            - 'tools/lint/file-whitespace.yml'
 
 
 file-perm:
@@ -516,8 +528,8 @@ file-perm:
             - '**/*.xhtml'
             - '**/*.xml'
             - '**/*.xul'
+            - '**/*.yaml'
             - '**/*.yml'
-            - 'tools/lint/file-perm.yml'
 
 
 perfdocs-verify:
@@ -538,7 +550,7 @@ perfdocs-verify:
         files-changed:
             - 'devtools/perfdocs/**'
             - 'taskcluster/**'
-            - '**/perftest.ini'
+            - '**/perftest.toml'
             - 'python/mozperftest/**'
             - 'testing/awsy/**'
             - 'testing/raptor/**'

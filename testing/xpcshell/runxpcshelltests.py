@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import pipes
+import platform
 import random
 import re
 import shutil
@@ -773,7 +774,7 @@ class XPCShellTestThread(Thread):
         expect_pass = self.test_object["expected"] == "pass"
 
         # By default self.appPath will equal the gre dir. If specified in the
-        # xpcshell.ini file, set a different app dir for this test.
+        # xpcshell.toml file, set a different app dir for this test.
         if self.app_dir_key and self.app_dir_key in self.test_object:
             rel_app_dir = self.test_object[self.app_dir_key]
             rel_app_dir = os.path.join(self.xrePath, rel_app_dir)
@@ -1032,16 +1033,16 @@ class XPCShellTests(object):
             if os.path.isfile(manifest):
                 return TestManifest([manifest], strict=True)
             else:
-                ini_path = os.path.join(manifest, "xpcshell.ini")
+                toml_path = os.path.join(manifest, "xpcshell.toml")
         else:
-            ini_path = os.path.join(SCRIPT_DIR, "tests", "xpcshell.ini")
+            toml_path = os.path.join(SCRIPT_DIR, "tests", "xpcshell.toml")
 
-        if os.path.exists(ini_path):
-            return TestManifest([ini_path], strict=True)
+        if os.path.exists(toml_path):
+            return TestManifest([toml_path], strict=True)
         else:
             self.log.error(
                 "Failed to find manifest at %s; use --manifest "
-                "to set path explicitly." % ini_path
+                "to set path explicitly." % toml_path
             )
             sys.exit(1)
 
@@ -1065,7 +1066,7 @@ class XPCShellTests(object):
         return test_object
 
     def buildTestList(self, test_tags=None, test_paths=None, verify=False):
-        """Reads the xpcshell.ini manifest and set self.alltests to an array.
+        """Reads the xpcshell.toml manifest and set self.alltests to an array.
 
         Given the parameters, this method compiles a list of tests to be run
         that matches the criteria set by parameters.
@@ -1385,6 +1386,11 @@ class XPCShellTests(object):
 
         self.log.info("Found node at %s" % (nodeBin,))
 
+        def read_streams(name, proc, pipe):
+            output = "stdout" if pipe == proc.stdout else "stderr"
+            for line in iter(pipe.readline, ""):
+                self.log.info("node %s [%s] %s" % (name, output, line))
+
         def startServer(name, serverJs):
             if not os.path.exists(serverJs):
                 error = "%s not found at %s" % (name, serverJs)
@@ -1405,6 +1411,7 @@ class XPCShellTests(object):
                         env=self.env,
                         cwd=os.getcwd(),
                         universal_newlines=True,
+                        start_new_session=True,
                     )
                 self.nodeProc[name] = process
 
@@ -1418,6 +1425,18 @@ class XPCShellTests(object):
                     if searchObj:
                         self.env["MOZHTTP2_PORT"] = searchObj.group(1)
                         self.env["MOZNODE_EXEC_PORT"] = searchObj.group(2)
+                t1 = Thread(
+                    target=read_streams,
+                    args=(name, process, process.stdout),
+                    daemon=True,
+                )
+                t1.start()
+                t2 = Thread(
+                    target=read_streams,
+                    args=(name, process, process.stderr),
+                    daemon=True,
+                )
+                t2.start()
             except OSError as e:
                 # This occurs if the subprocess couldn't be started
                 self.log.error("Could not run %s server: %s" % (name, str(e)))
@@ -1434,19 +1453,12 @@ class XPCShellTests(object):
             self.log.info("Node %s server shutting down ..." % name)
             if proc.poll() is not None:
                 self.log.info("Node server %s already dead %s" % (name, proc.poll()))
+            elif sys.platform != "win32":
+                # Kill process and all its spawned children.
+                os.killpg(proc.pid, signal.SIGTERM)
             else:
                 proc.terminate()
 
-            def dumpOutput(fd, label):
-                firstTime = True
-                for msg in fd:
-                    if firstTime:
-                        firstTime = False
-                        self.log.info("Process %s" % label)
-                    self.log.info(msg)
-
-            dumpOutput(proc.stdout, "stdout")
-            dumpOutput(proc.stderr, "stderr")
         self.nodeProc = {}
 
     def startHttp3Server(self):
@@ -1473,7 +1485,11 @@ class XPCShellTests(object):
         options["profilePath"] = dbPath
         options["isMochitest"] = False
         options["isWin"] = sys.platform == "win32"
-        self.http3Server = Http3Server(options, self.env, self.log)
+        serverEnv = self.env.copy()
+        serverLog = self.env.get("MOZHTTP3_SERVER_LOG")
+        if serverLog is not None:
+            serverEnv["RUST_LOG"] = serverLog
+        self.http3Server = Http3Server(options, serverEnv, self.log)
         self.http3Server.start()
         for key, value in self.http3Server.ports().items():
             self.env[key] = value
@@ -1543,6 +1559,8 @@ class XPCShellTests(object):
         self.mozInfo["msix"] = options.get(
             "app_binary"
         ) is not None and "WindowsApps" in options.get("app_binary", "")
+
+        self.mozInfo["is_ubuntu"] = "Ubuntu" in platform.version()
 
         mozinfo.update(self.mozInfo)
 
@@ -1686,7 +1704,7 @@ class XPCShellTests(object):
         if options.get("rerun_failures"):
             if os.path.exists(options.get("failure_manifest")):
                 rerun_manifest = os.path.join(
-                    os.path.dirname(options["failure_manifest"]), "rerun.ini"
+                    os.path.dirname(options["failure_manifest"]), "rerun.toml"
                 )
                 shutil.copyfile(options["failure_manifest"], rerun_manifest)
                 os.remove(options["failure_manifest"])

@@ -292,34 +292,28 @@ export class Region {
     return Math.min(this.#y1, this.#y2);
   }
   set top(val) {
-    this.#y1 = val > 0 ? val : 0;
+    this.#y1 = Math.min(this.#windowDimensions.scrollHeight, Math.max(0, val));
   }
 
   get left() {
     return Math.min(this.#x1, this.#x2);
   }
   set left(val) {
-    this.#x1 = val > 0 ? val : 0;
+    this.#x1 = Math.min(this.#windowDimensions.scrollWidth, Math.max(0, val));
   }
 
   get right() {
     return Math.max(this.#x1, this.#x2);
   }
   set right(val) {
-    this.#x2 =
-      val > this.#windowDimensions.scrollWidth
-        ? this.#windowDimensions.scrollWidth
-        : val;
+    this.#x2 = Math.min(this.#windowDimensions.scrollWidth, Math.max(0, val));
   }
 
   get bottom() {
     return Math.max(this.#y1, this.#y2);
   }
   set bottom(val) {
-    this.#y2 =
-      val > this.#windowDimensions.scrollHeight
-        ? this.#windowDimensions.scrollHeight
-        : val;
+    this.#y2 = Math.min(this.#windowDimensions.scrollHeight, Math.max(0, val));
   }
 
   get width() {
@@ -327,6 +321,19 @@ export class Region {
   }
   get height() {
     return Math.abs(this.#y2 - this.#y1);
+  }
+
+  get x1() {
+    return this.#x1;
+  }
+  get x2() {
+    return this.#x2;
+  }
+  get y1() {
+    return this.#y1;
+  }
+  get y2() {
+    return this.#y2;
   }
 }
 
@@ -339,31 +346,35 @@ export class WindowDimensions {
   #scrollY = null;
   #scrollMinX = null;
   #scrollMinY = null;
+  #devicePixelRatio = null;
 
   set dimensions(dimensions) {
-    if (dimensions.clientHeight) {
+    if (dimensions.clientHeight != null) {
       this.#clientHeight = dimensions.clientHeight;
     }
-    if (dimensions.clientWidth) {
+    if (dimensions.clientWidth != null) {
       this.#clientWidth = dimensions.clientWidth;
     }
-    if (dimensions.scrollHeight) {
+    if (dimensions.scrollHeight != null) {
       this.#scrollHeight = dimensions.scrollHeight;
     }
-    if (dimensions.scrollWidth) {
+    if (dimensions.scrollWidth != null) {
       this.#scrollWidth = dimensions.scrollWidth;
     }
-    if (dimensions.scrollX) {
+    if (dimensions.scrollX != null) {
       this.#scrollX = dimensions.scrollX;
     }
-    if (dimensions.scrollY) {
+    if (dimensions.scrollY != null) {
       this.#scrollY = dimensions.scrollY;
     }
-    if (dimensions.scrollMinX) {
+    if (dimensions.scrollMinX != null) {
       this.#scrollMinX = dimensions.scrollMinX;
     }
-    if (dimensions.scrollMinY) {
+    if (dimensions.scrollMinY != null) {
       this.#scrollMinY = dimensions.scrollMinY;
+    }
+    if (dimensions.devicePixelRatio != null) {
+      this.#devicePixelRatio = dimensions.devicePixelRatio;
     }
   }
 
@@ -377,6 +388,7 @@ export class WindowDimensions {
       scrollY: this.#scrollY,
       scrollMinX: this.#scrollMinX,
       scrollMinY: this.#scrollMinY,
+      devicePixelRatio: this.#devicePixelRatio,
     };
   }
 
@@ -410,5 +422,20 @@ export class WindowDimensions {
 
   get scrollMinY() {
     return this.#scrollMinY;
+  }
+
+  get devicePixelRatio() {
+    return this.#devicePixelRatio;
+  }
+
+  reset() {
+    this.#clientHeight = 0;
+    this.#clientWidth = 0;
+    this.#scrollHeight = 0;
+    this.#scrollWidth = 0;
+    this.#scrollX = 0;
+    this.#scrollY = 0;
+    this.#scrollMinX = 0;
+    this.#scrollMinY = 0;
   }
 }

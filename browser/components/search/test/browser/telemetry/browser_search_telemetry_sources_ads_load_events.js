@@ -14,7 +14,7 @@ const TEST_PROVIDER_INFO = [
     telemetryId: "slow-page-load",
     searchPageRegexp:
       /^https:\/\/example.org\/browser\/browser\/components\/search\/test\/browser\/telemetry\/slow_loading_page_with_ads(_on_load_event)?.html/,
-    queryParamName: "s",
+    queryParamNames: ["s"],
     codeParamName: "abc",
     taggedCodes: ["ff"],
     followOnParamNames: ["a"],
@@ -35,10 +35,7 @@ add_setup(async function () {
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.search.log", true],
-      ["browser.search.serpEventTelemetry.enabled", true],
-    ],
+    set: [["browser.search.serpEventTelemetry.enabled", true]],
   });
 
   registerCleanupFunction(async () => {
@@ -77,7 +74,7 @@ add_task(async function test_track_ad_on_DOMContentLoaded() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "slow-page-load",
@@ -85,8 +82,17 @@ add_task(async function test_track_ad_on_DOMContentLoaded() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 
@@ -100,6 +106,7 @@ add_task(async function test_track_ad_on_load_event() {
     gBrowser,
     getSERPUrl("slow_loading_page_with_ads_on_load_event.html")
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -109,7 +116,7 @@ add_task(async function test_track_ad_on_load_event() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "slow-page-load",
@@ -117,8 +124,17 @@ add_task(async function test_track_ad_on_load_event() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 

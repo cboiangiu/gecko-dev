@@ -355,7 +355,6 @@ let JSWINDOWACTORS = {
     child: {
       esModuleURI: "resource://gre/modules/LoginManagerChild.sys.mjs",
       events: {
-        DOMDocFetchSuccess: {},
         DOMFormBeforeSubmit: {},
         DOMFormHasPassword: {},
         DOMFormHasPossibleUsername: {},
@@ -472,6 +471,23 @@ let JSWINDOWACTORS = {
     allFrames: true,
   },
 
+  ReportBrokenSite: {
+    parent: {
+      esModuleURI: "resource://gre/actors/ReportBrokenSiteParent.sys.mjs",
+    },
+    child: {
+      esModuleURI: "resource://gre/actors/ReportBrokenSiteChild.sys.mjs",
+    },
+    matches: [
+      "http://*/*",
+      "https://*/*",
+      "about:certerror?*",
+      "about:neterror?*",
+    ],
+    messageManagerGroups: ["browsers"],
+    allFrames: true,
+  },
+
   // This actor is available for all pages that one can
   // view the source of, however it won't be created until a
   // request to view the source is made via the message
@@ -521,8 +537,8 @@ let JSWINDOWACTORS = {
     },
   },
 
-  // The newer translations feature backed by local machine learning models.
-  // See Bug 971044.
+  // Determines if a page can be translated, and coordinates communication with the
+  // translations engine.
   Translations: {
     parent: {
       esModuleURI: "resource://gre/actors/TranslationsParent.sys.mjs",
@@ -542,6 +558,22 @@ let JSWINDOWACTORS = {
       // so it needs to be allowed for it.
       "about:translations",
     ],
+    enablePreference: "browser.translations.enable",
+  },
+
+  // A single process that controls all of the translations.
+  TranslationsEngine: {
+    parent: {
+      esModuleURI: "resource://gre/actors/TranslationsEngineParent.sys.mjs",
+    },
+    child: {
+      esModuleURI: "resource://gre/actors/TranslationsEngineChild.sys.mjs",
+      events: {
+        DOMContentLoaded: { createActor: true },
+      },
+    },
+    includeChrome: true,
+    matches: ["chrome://global/content/translations/translations-engine.html"],
     enablePreference: "browser.translations.enable",
   },
 
@@ -597,22 +629,6 @@ if (!Services.prefs.getBoolPref("browser.pagedata.enabled", false)) {
 }
 
 if (AppConstants.platform != "android") {
-  // For GeckoView support see bug 1776829.
-  JSWINDOWACTORS.ClipboardReadPaste = {
-    parent: {
-      esModuleURI: "resource://gre/actors/ClipboardReadPasteParent.sys.mjs",
-    },
-
-    child: {
-      esModuleURI: "resource://gre/actors/ClipboardReadPasteChild.sys.mjs",
-      events: {
-        MozClipboardReadPaste: {},
-      },
-    },
-
-    allFrames: true,
-  };
-
   // Note that GeckoView has another implementation in mobile/android/actors.
   JSWINDOWACTORS.Select = {
     parent: {

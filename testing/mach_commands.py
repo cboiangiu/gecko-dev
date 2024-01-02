@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 import requests
-from mach.decorators import Command, CommandArgument, SettingsProvider, SubCommand
+from mach.decorators import Command, CommandArgument, SubCommand
 from mozbuild.base import BuildEnvironmentNotFoundException
 from mozbuild.base import MachCommandConditions as conditions
 
@@ -36,23 +36,6 @@ name or suite alias.
 
 The following test suites and aliases are supported: {}
 """.strip()
-
-
-@SettingsProvider
-class TestConfig(object):
-    @classmethod
-    def config_settings(cls):
-        from mozlog.commandline import log_formatters
-        from mozlog.structuredlog import log_levels
-
-        format_desc = "The default format to use when running tests with `mach test`."
-        format_choices = list(log_formatters)
-        level_desc = "The default log level to use when running tests with `mach test`."
-        level_choices = [l.lower() for l in log_levels]
-        return [
-            ("test.format", "string", format_desc, "mach", {"choices": format_choices}),
-            ("test.level", "string", level_desc, "info", {"choices": level_choices}),
-        ]
 
 
 def get_test_parser():
@@ -89,6 +72,7 @@ ADD_TEST_SUPPORTED_SUITES = [
     "mochitest-chrome",
     "mochitest-plain",
     "mochitest-browser-chrome",
+    "web-platform-tests-privatebrowsing",
     "web-platform-tests-testharness",
     "web-platform-tests-reftest",
     "xpcshell",
@@ -97,6 +81,7 @@ ADD_TEST_SUPPORTED_DOCS = ["js", "html", "xhtml", "xul"]
 
 SUITE_SYNONYMS = {
     "wpt": "web-platform-tests-testharness",
+    "wpt-privatebrowsing": "web-platform-tests-privatebrowsing",
     "wpt-testharness": "web-platform-tests-testharness",
     "wpt-reftest": "web-platform-tests-reftest",
 }
@@ -339,6 +324,13 @@ def guess_suite(abs_test):
     return guessed_suite, err
 
 
+class MachTestRunner:
+    """Adapter for mach test to simplify it's import externally."""
+
+    def test(command_context, what, extra_args, **log_args):
+        return test(command_context, what, extra_args, **log_args)
+
+
 @Command(
     "test",
     category="testing",
@@ -421,6 +413,9 @@ def test(command_context, what, extra_args, **log_args):
     for handler in log.handlers:
         if isinstance(handler, StreamHandler):
             handler.formatter.inner.summary_on_shutdown = True
+
+    if log_args.get("custom_handler", None) is not None:
+        log.add_handler(log_args.get("custom_handler"))
 
     status = None
     for suite_name in run_suites:
@@ -891,6 +886,7 @@ def test_info_tests(
     help="Do not categorize by bugzilla component.",
 )
 @CommandArgument("--output-file", help="Path to report file.")
+@CommandArgument("--runcounts-input-file", help="Optional path to report file.")
 @CommandArgument("--verbose", action="store_true", help="Enable debug logging.")
 @CommandArgument(
     "--start",
@@ -918,6 +914,7 @@ def test_report(
     start,
     end,
     show_testruns,
+    runcounts_input_file,
 ):
     import testinfo
     from mozbuild import build_commands
@@ -945,6 +942,7 @@ def test_report(
         start,
         end,
         show_testruns,
+        runcounts_input_file,
     )
 
 
@@ -1228,3 +1226,91 @@ def run_migration_tests(command_context, test_paths=None, **kwargs):
     for context in with_context:
         rv |= fmt.test_migration(command_context, obj_dir, **context)
     return rv
+
+
+@Command(
+    "manifest",
+    category="testing",
+    description="Manifest operations",
+    virtualenv_name="manifest",
+)
+def manifest(_command_context):
+    """
+    All functions implemented as subcommands.
+    """
+
+
+@SubCommand(
+    "manifest",
+    "skip-fails",
+    description="Update manifests to skip failing tests",
+)
+@CommandArgument("try_url", nargs=1, help="Treeherder URL for try (please use quotes)")
+@CommandArgument(
+    "-b", "--bugzilla", default=None, dest="bugzilla", help="Bugzilla instance"
+)
+@CommandArgument(
+    "-m", "--meta-bug-id", default=None, dest="meta_bug_id", help="Meta Bug id"
+)
+@CommandArgument(
+    "-s",
+    "--turbo",
+    action="store_true",
+    dest="turbo",
+    help="Skip all secondary failures",
+)
+@CommandArgument(
+    "-t", "--save-tasks", default=None, dest="save_tasks", help="Save tasks to file"
+)
+@CommandArgument(
+    "-T", "--use-tasks", default=None, dest="use_tasks", help="Use tasks from file"
+)
+@CommandArgument(
+    "-f",
+    "--save-failures",
+    default=None,
+    dest="save_failures",
+    help="Save failures to file",
+)
+@CommandArgument(
+    "-F",
+    "--use-failures",
+    default=None,
+    dest="use_failures",
+    help="Use failures from file",
+)
+@CommandArgument("-v", "--verbose", action="store_true", help="Verbose mode")
+@CommandArgument(
+    "-d",
+    "--dry-run",
+    action="store_true",
+    help="Determine manifest changes, but do not write them",
+)
+def skipfails(
+    command_context,
+    try_url,
+    bugzilla=None,
+    meta_bug_id=None,
+    turbo=False,
+    save_tasks=None,
+    use_tasks=None,
+    save_failures=None,
+    use_failures=None,
+    verbose=False,
+    dry_run=False,
+):
+    from skipfails import Skipfails
+
+    if meta_bug_id is not None:
+        try:
+            meta_bug_id = int(meta_bug_id)
+        except ValueError:
+            meta_bug_id = None
+
+    Skipfails(command_context, try_url, verbose, bugzilla, dry_run, turbo).run(
+        meta_bug_id,
+        save_tasks,
+        use_tasks,
+        save_failures,
+        use_failures,
+    )

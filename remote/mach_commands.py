@@ -72,7 +72,7 @@ def vendor_puppeteer(command_context, repository, commitish, install):
     # Preserve our custom mocha reporter
     shutil.move(
         os.path.join(puppeteer_dir, "json-mocha-reporter.js"),
-        remotedir(command_context),
+        os.path.join(remotedir(command_context), "json-mocha-reporter.js"),
     )
     shutil.rmtree(puppeteer_dir, ignore_errors=True)
     os.makedirs(puppeteer_dir)
@@ -133,8 +133,13 @@ def vendor_puppeteer(command_context, repository, commitish, install):
         )
 
     if install:
-        env = {"HUSKY": "0", "PUPPETEER_SKIP_DOWNLOAD": "1"}
-        npm(
+        env = {
+            "CI": "1",  # Force the quiet logger of wireit
+            "HUSKY": "0",  # Disable any hook checks
+            "PUPPETEER_SKIP_DOWNLOAD": "1",  # Don't download any build
+        }
+
+        run_npm(
             "install",
             cwd=os.path.join(command_context.topsrcdir, puppeteer_dir),
             env=env,
@@ -171,8 +176,14 @@ def git(*args, **kwargs):
     return out
 
 
-def npm(*args, **kwargs):
-    from mozprocess import processhandler
+def run_npm(*args, **kwargs):
+    from mozprocess import run_and_wait
+
+    def output_timeout_handler(proc):
+        # In some cases, we wait longer for a mocha timeout
+        print(
+            "Timed out after {} seconds of no output".format(kwargs["output_timeout"])
+        )
 
     env = None
     npm, _ = nodeutil.find_npm_executable()
@@ -180,34 +191,28 @@ def npm(*args, **kwargs):
         env = os.environ.copy()
         env.update(kwargs["env"])
 
-    proc_kwargs = {}
-    if "processOutputLine" in kwargs:
-        proc_kwargs["processOutputLine"] = kwargs["processOutputLine"]
+    proc_kwargs = {"output_timeout_handler": output_timeout_handler}
+    for kw in ["output_line_handler", "output_timeout"]:
+        if kw in kwargs:
+            proc_kwargs[kw] = kwargs[kw]
 
-    p = processhandler.ProcessHandler(
-        cmd=npm,
-        args=list(args),
+    cmd = [npm]
+    cmd.extend(list(args))
+
+    p = run_and_wait(
+        args=cmd,
         cwd=kwargs.get("cwd"),
         env=env,
-        universal_newlines=True,
+        text=True,
         **proc_kwargs,
     )
-    if not kwargs.get("wait", True):
-        return p
-
-    wait_proc(p, cmd=npm, exit_on_fail=kwargs.get("exit_on_fail", True))
+    post_wait_proc(p, cmd=npm, exit_on_fail=kwargs.get("exit_on_fail", True))
 
     return p.returncode
 
 
-def wait_proc(p, cmd=None, exit_on_fail=True, output_timeout=None):
-    try:
-        p.run(outputTimeout=output_timeout)
-        p.wait()
-        if p.timedOut:
-            # In some cases, we wait longer for a mocha timeout
-            print("Timed out after {} seconds of no output".format(output_timeout))
-    finally:
+def post_wait_proc(p, cmd=None, exit_on_fail=True):
+    if p.poll() is None:
         p.kill()
     if exit_on_fail and p.returncode > 0:
         msg = (
@@ -243,7 +248,9 @@ class MochaOutputHandler(object):
     def pid(self):
         return self.proc and self.proc.pid
 
-    def __call__(self, line):
+    def __call__(self, proc, line):
+        self.proc = proc
+        line = line.rstrip("\r\n")
         event = None
         try:
             if line.startswith("[") and line.endswith("]"):
@@ -486,29 +493,22 @@ class PuppeteerRunner(MozbuildObject):
         ]
 
         output_handler = MochaOutputHandler(logger, expectations)
-        proc = npm(
+        run_npm(
             *command,
             cwd=self.puppeteer_dir,
             env=env,
-            processOutputLine=output_handler,
-            wait=False,
+            output_line_handler=output_handler,
+            # Puppeteer unit tests don't always clean-up child processes in case of
+            # failure, so use an output_timeout as a fallback
+            output_timeout=60,
+            exit_on_fail=True,
         )
-        output_handler.proc = proc
-
-        # Puppeteer unit tests don't always clean-up child processes in case of
-        # failure, so use an output_timeout as a fallback
-        wait_proc(proc, "npm", output_timeout=60, exit_on_fail=False)
 
         output_handler.after_end()
 
-        # Non-zero return codes are non-fatal for now since we have some
-        # issues with unresolved promises that shouldn't otherwise block
-        # running the tests
-        if proc.returncode != 0:
-            logger.warning("npm exited with code %s" % proc.returncode)
-
         if output_handler.has_unexpected:
-            exit(1, "Got unexpected results")
+            logger.error("Got unexpected results")
+            exit(1)
 
 
 def create_parser_puppeteer():
@@ -704,7 +704,11 @@ def puppeteer_test(
 
 def install_puppeteer(command_context, product, ci):
     setup()
-    env = {"HUSKY": "0"}
+
+    env = {
+        "CI": "1",  # Force the quiet logger of wireit
+        "HUSKY": "0",  # Disable any hook checks
+    }
 
     puppeteer_dir = os.path.join("remote", "test", "puppeteer")
     puppeteer_dir_full_path = os.path.join(command_context.topsrcdir, puppeteer_dir)
@@ -718,7 +722,7 @@ def install_puppeteer(command_context, product, ci):
         env["PUPPETEER_SKIP_DOWNLOAD"] = "1"
 
     if not ci:
-        npm(
+        run_npm(
             "run",
             "clean",
             cwd=puppeteer_dir_full_path,
@@ -726,9 +730,9 @@ def install_puppeteer(command_context, product, ci):
             exit_on_fail=False,
         )
 
-    command = "ci" if ci else "install"
-    npm(command, cwd=puppeteer_dir_full_path, env=env)
-    npm(
+    # Always use the `ci` command to not get updated sub-dependencies installed.
+    run_npm("ci", cwd=puppeteer_dir_full_path, env=env)
+    run_npm(
         "run",
         "build",
         cwd=os.path.join(command_context.topsrcdir, puppeteer_test_dir),

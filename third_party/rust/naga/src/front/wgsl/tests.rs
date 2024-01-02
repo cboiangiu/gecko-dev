@@ -76,7 +76,7 @@ fn parse_type_cast() {
     assert!(parse_str(
         "
         fn main() {
-            let x: vec2<f32> = vec2<f32>(0);
+            let x: vec2<f32> = vec2<f32>(0i, 0i);
         }
     ",
     )
@@ -313,7 +313,7 @@ fn parse_texture_load() {
         "
         var t: texture_3d<u32>;
         fn foo() {
-            let r: vec4<u32> = textureLoad(t, vec3<u32>(0.0, 1.0, 2.0), 1);
+            let r: vec4<u32> = textureLoad(t, vec3<u32>(0u, 1u, 2u), 1);
         }
     ",
     )
@@ -402,9 +402,8 @@ fn binary_expression_mixed_scalar_and_vector_operands() {
     ] {
         let module = parse_str(&format!(
             "
-            const some_vec = vec3<f32>(1.0, 1.0, 1.0);
             @fragment
-            fn main() -> @location(0) vec4<f32> {{
+            fn main(@location(0) some_vec: vec3<f32>) -> @location(0) vec4<f32> {{
                 if (all(1.0 {operand} some_vec)) {{
                     return vec4(0.0);
                 }}
@@ -431,7 +430,12 @@ fn binary_expression_mixed_scalar_and_vector_operands() {
             })
             .count();
 
-        assert_eq!(found_expressions, 1);
+        assert_eq!(
+            found_expressions,
+            1,
+            "expected `{operand}` expression {} splat",
+            if expect_splat { "with" } else { "without" }
+        );
     }
 
     let module = parse_str(

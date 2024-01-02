@@ -193,7 +193,7 @@ def env_options():
             "supports_debugger": True}
 
 
-def run_info_extras(**kwargs):
+def run_info_extras(logger, **kwargs):
 
     def get_bool_pref_if_exists(pref):
         for key, value in kwargs.get('extra_prefs', []):
@@ -213,7 +213,8 @@ def run_info_extras(**kwargs):
           "fission": not kwargs.get("disable_fission"),
           "sessionHistoryInParent": (not kwargs.get("disable_fission") or
                                      not get_bool_pref("fission.disableSessionHistoryInParent")),
-          "swgl": get_bool_pref("gfx.webrender.software")}
+          "swgl": get_bool_pref("gfx.webrender.software"),
+          "privateBrowsing": (kwargs["tags"] is not None and ("privatebrowsing" in kwargs["tags"]))}
 
     rv.update(run_info_browser_version(**kwargs))
 
@@ -567,6 +568,7 @@ class FirefoxOutputHandler(OutputHandler):
         if self.lsan_handler:
             self.lsan_handler.process()
         if self.leak_report_file is not None:
+            processed_files = None
             if not clean_shutdown:
                 # If we didn't get a clean shutdown there probably isn't a leak report file
                 self.logger.warning("Firefox didn't exit cleanly, not processing leak logs")
@@ -575,7 +577,7 @@ class FirefoxOutputHandler(OutputHandler):
                 # content process crashed and in that case we don't want the test to fail.
                 # Ideally we would record which content process crashed and just skip those.
                 self.logger.info("PROCESS LEAKS %s" % self.leak_report_file)
-                mozleak.process_leak_log(
+                processed_files = mozleak.process_leak_log(
                     self.leak_report_file,
                     leak_thresholds=self.mozleak_thresholds,
                     ignore_missing_leaks=["tab", "gmplugin"],
@@ -583,6 +585,11 @@ class FirefoxOutputHandler(OutputHandler):
                     stack_fixer=self.stack_fixer,
                     scope=self.group_metadata.get("scope"),
                     allowed=self.mozleak_allowed)
+            if processed_files:
+                for path in processed_files:
+                    if os.path.exists(path):
+                        os.unlink(path)
+            # Fallback for older versions of mozleak, or if we didn't shutdown cleanly
             if os.path.exists(self.leak_report_file):
                 os.unlink(self.leak_report_file)
 
@@ -606,7 +613,7 @@ class FirefoxOutputHandler(OutputHandler):
 
 
 class GeckodriverOutputHandler(FirefoxOutputHandler):
-    PORT_RE = re.compile(b".*Listening on [^ :]*:(\d+)")
+    PORT_RE = re.compile(rb".*Listening on [^ :]*:(\d+)")
 
     def __init__(self, logger, command, symbols_path=None, stackfix_dir=None, asan=False,
                  leak_report_file=None, init_deadline=None):
@@ -680,20 +687,13 @@ class ProfileCreator:
                     elif name != 'unittest-features':
                         pref_paths.append(os.path.join(self.prefs_root, name, 'user.js'))
         else:
-            # Old preference files used before the creation of profiles.json (remove when no longer supported)
-            legacy_pref_paths = (
-                os.path.join(self.prefs_root, 'prefs_general.js'),   # Used in Firefox 60 and below
-                os.path.join(self.prefs_root, 'common', 'user.js'),  # Used in Firefox 61
-            )
-            for path in legacy_pref_paths:
-                if os.path.isfile(path):
-                    pref_paths.append(path)
+            self.logger.warning(f"Failed to load profiles from {profiles}")
 
         for path in pref_paths:
             if os.path.exists(path):
                 prefs.add(Preferences.read_prefs(path))
             else:
-                self.logger.warning("Failed to find base prefs file in %s" % path)
+                self.logger.warning(f"Failed to find prefs file in {path}")
 
         # Add any custom preferences
         prefs.add(self.extra_prefs, cast=True)
@@ -722,17 +722,6 @@ class ProfileCreator:
 
         if self.test_type in ("reftest", "print-reftest"):
             profile.set_preferences({"layout.interruptible-reflow.enabled": False})
-
-        if self.test_type == "testharness":
-            # Allow only touch and wheel events for now to be routed via the
-            # parent process. This is a workaround for tests using testdriver.js
-            # until bug 1773393 is done.
-            #
-            # Note that we don't set it for wdspec tests since it isn't suitable
-            # to ship to WebDriver users.
-            profile.set_preferences({"test.events.async.enabled": True})
-            profile.set_preferences({"test.events.async.key.enabled": False})
-            profile.set_preferences({"test.events.async.mouse.enabled": False})
 
         if self.test_type == "print-reftest":
             profile.set_preferences({"print.always_print_silent": True})

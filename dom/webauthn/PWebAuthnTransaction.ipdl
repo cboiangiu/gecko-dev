@@ -121,6 +121,7 @@ struct WebAuthnGetAssertionInfo {
   WebAuthnScopedCredential[] AllowList;
   WebAuthnExtension[] Extensions;
   nsString userVerificationRequirement;
+  bool ConditionallyMediated;
   uint64_t BrowsingContextId;
 };
 
@@ -141,6 +142,7 @@ async protocol PWebAuthnTransaction {
   parent:
     async RequestRegister(uint64_t aTransactionId, WebAuthnMakeCredentialInfo aTransactionInfo);
     async RequestSign(uint64_t aTransactionId, WebAuthnGetAssertionInfo aTransactionInfo);
+    async RequestIsUVPAA() returns (bool available);
     [Tainted] async RequestCancel(uint64_t aTransactionId);
     async DestroyMe();
 

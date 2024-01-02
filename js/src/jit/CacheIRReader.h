@@ -50,7 +50,8 @@ class MOZ_RAII CacheIRReader {
 
   bool more() const { return buffer_.more(); }
 
-  CacheOp readOp() { return CacheOp(buffer_.readUnsigned15Bit()); }
+  CacheOp readOp() { return CacheOp(buffer_.readFixedUint16_t()); }
+  CacheOp peekOp() { return CacheOp(buffer_.peekFixedUint16_t()); }
 
   // Skip data not currently used.
   void skip() { buffer_.readByte(); }
@@ -101,6 +102,9 @@ class MOZ_RAII CacheIRReader {
   }
   gc::AllocKind allocKind() { return gc::AllocKind(buffer_.readByte()); }
   CompletionKind completionKind() { return CompletionKind(buffer_.readByte()); }
+  RealmFuses::FuseIndex realmFuseIndex() {
+    return RealmFuses::FuseIndex(buffer_.readByte());
+  }
 
   Scalar::Type scalarType() { return Scalar::Type(buffer_.readByte()); }
   JSWhyMagic whyMagic() { return JSWhyMagic(buffer_.readByte()); }

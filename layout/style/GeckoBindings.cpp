@@ -497,21 +497,6 @@ bool Gecko_StyleViewTimelinesEquals(
   return *aA == *aB;
 }
 
-void Gecko_CopyAnimationNames(nsStyleAutoArray<StyleAnimation>* aDest,
-                              const nsStyleAutoArray<StyleAnimation>* aSrc) {
-  size_t srcLength = aSrc->Length();
-  aDest->EnsureLengthAtLeast(srcLength);
-
-  for (size_t index = 0; index < srcLength; index++) {
-    (*aDest)[index].SetName((*aSrc)[index].GetName());
-  }
-}
-
-void Gecko_SetAnimationName(StyleAnimation* aStyleAnimation, nsAtom* aAtom) {
-  MOZ_ASSERT(aStyleAnimation);
-  aStyleAnimation->SetName(already_AddRefed<nsAtom>(aAtom));
-}
-
 void Gecko_UpdateAnimations(const Element* aElement,
                             const ComputedStyle* aOldComputedData,
                             const ComputedStyle* aComputedData,
@@ -651,7 +636,7 @@ static CSSTransition* GetCurrentTransitionAt(const Element* aElement,
 nsCSSPropertyID Gecko_ElementTransitions_PropertyAt(const Element* aElement,
                                                     size_t aIndex) {
   CSSTransition* transition = GetCurrentTransitionAt(aElement, aIndex);
-  return transition ? transition->TransitionProperty()
+  return transition ? transition->TransitionProperty().mID
                     : nsCSSPropertyID::eCSSProperty_UNKNOWN;
 }
 
@@ -681,11 +666,11 @@ double Gecko_GetPositionInSegment(const AnimationPropertySegment* aSegment,
 }
 
 const StyleAnimationValue* Gecko_AnimationGetBaseStyle(
-    const RawServoAnimationValueTable* aBaseStyles, nsCSSPropertyID aProperty) {
-  auto base = reinterpret_cast<
-      const nsRefPtrHashtable<nsUint32HashKey, StyleAnimationValue>*>(
-      aBaseStyles);
-  return base->GetWeak(aProperty);
+    const RawServoAnimationValueTable* aBaseStyles,
+    const mozilla::AnimatedPropertyID* aProperty) {
+  const auto* base = reinterpret_cast<const nsRefPtrHashtable<
+      nsGenericHashKey<AnimatedPropertyID>, StyleAnimationValue>*>(aBaseStyles);
+  return base->GetWeak(*aProperty);
 }
 
 void Gecko_FillAllImageLayers(nsStyleImageLayers* aLayers, uint32_t aMaxLen) {
@@ -706,8 +691,11 @@ bool Gecko_IsDarkColorScheme(const Document* aDoc,
 nscolor Gecko_ComputeSystemColor(StyleSystemColor aColor, const Document* aDoc,
                                  const StyleColorScheme* aStyle) {
   auto colorScheme = LookAndFeel::ColorSchemeForStyle(*aDoc, aStyle->bits);
-
-  const auto& colors = PreferenceSheet::PrefsFor(*aDoc).ColorsFor(colorScheme);
+  const auto& prefs = PreferenceSheet::PrefsFor(*aDoc);
+  if (prefs.mMustUseLightSystemColors) {
+    colorScheme = ColorScheme::Light;
+  }
+  const auto& colors = prefs.ColorsFor(colorScheme);
   switch (aColor) {
     case StyleSystemColor::Canvastext:
       return colors.mDefault;
@@ -763,14 +751,16 @@ bool Gecko_MatchLang(const Element* aElement, nsAtom* aOverrideLang,
   // is missing as well from the preferences.
   // The content language can be a comma-separated list of
   // language codes.
-  nsAutoString language;
-  aElement->OwnerDoc()->GetContentLanguage(language);
-
-  NS_ConvertUTF16toUTF8 langString(aValue);
-  language.StripWhitespace();
-  for (auto const& lang : language.Split(char16_t(','))) {
-    if (nsStyleUtil::LangTagCompare(NS_ConvertUTF16toUTF8(lang), langString)) {
-      return true;
+  // FIXME: We're not really consistent in our treatment of comma-separated
+  // content-language values.
+  if (nsAtom* language = aElement->OwnerDoc()->GetContentLanguage()) {
+    const NS_ConvertUTF16toUTF8 langString(aValue);
+    nsAtomCString docLang(language);
+    docLang.StripWhitespace();
+    for (auto const& lang : docLang.Split(',')) {
+      if (nsStyleUtil::LangTagCompare(lang, langString)) {
+        return true;
+      }
     }
   }
   return false;
@@ -801,12 +791,6 @@ bool Gecko_IsTableBorderNonzero(const Element* aElement) {
   const nsAttrValue* val = aElement->GetParsedAttr(nsGkAtoms::border);
   return val &&
          (val->Type() != nsAttrValue::eInteger || val->GetIntegerValue() != 0);
-}
-
-bool Gecko_IsBrowserFrame(const Element* aElement) {
-  nsIMozBrowserFrame* browserFrame =
-      const_cast<Element*>(aElement)->GetAsMozBrowserFrame();
-  return browserFrame && browserFrame->GetReallyIsBrowser();
 }
 
 bool Gecko_IsSelectListBox(const Element* aElement) {
@@ -1045,13 +1029,7 @@ void Gecko_EnsureImageLayersLength(nsStyleImageLayers* aLayers, size_t aLen,
 
 template <typename StyleType>
 static void EnsureStyleAutoArrayLength(StyleType* aArray, size_t aLen) {
-  size_t oldLength = aArray->Length();
-
   aArray->EnsureLengthAtLeast(aLen);
-
-  for (size_t i = oldLength; i < aLen; ++i) {
-    (*aArray)[i].SetInitialValues();
-  }
 }
 
 void Gecko_EnsureStyleAnimationArrayLength(void* aArray, size_t aLen) {
@@ -1158,11 +1136,13 @@ Keyframe* Gecko_GetOrCreateFinalKeyframe(
 }
 
 PropertyValuePair* Gecko_AppendPropertyValuePair(
-    nsTArray<PropertyValuePair>* aProperties, nsCSSPropertyID aProperty) {
+    nsTArray<PropertyValuePair>* aProperties,
+    const mozilla::AnimatedPropertyID* aProperty) {
   MOZ_ASSERT(aProperties);
-  MOZ_ASSERT(aProperty == eCSSPropertyExtra_variable ||
-             !nsCSSProps::PropHasFlags(aProperty, CSSPropFlags::IsLogical));
-  return aProperties->AppendElement(PropertyValuePair{aProperty});
+  MOZ_ASSERT(
+      aProperty->IsCustom() ||
+      !nsCSSProps::PropHasFlags(aProperty->mID, CSSPropFlags::IsLogical));
+  return aProperties->AppendElement(PropertyValuePair{*aProperty});
 }
 
 void Gecko_GetComputedURLSpec(const StyleComputedUrl* aURL, nsCString* aOut) {
@@ -1190,7 +1170,12 @@ void Gecko_GetComputedImageURLSpec(const StyleComputedUrl* aURL,
     }
   }
 
-  aOut->AssignLiteral("about:invalid");
+  // Empty URL computes to empty, per spec:
+  if (aURL->SpecifiedSerialization().IsEmpty()) {
+    aOut->Truncate();
+  } else {
+    aOut->AssignLiteral("about:invalid");
+  }
 }
 
 bool Gecko_IsSupportedImageMimeType(const uint8_t* aMimeType,
@@ -1637,9 +1622,34 @@ const nsTArray<Element*>* Gecko_ShadowRoot_GetElementsWithId(
   return aShadowRoot->GetAllElementsForId(aId);
 }
 
-bool Gecko_GetBoolPrefValue(const char* aPrefName) {
+bool Gecko_ComputeBoolPrefMediaQuery(nsAtom* aPref) {
   MOZ_ASSERT(NS_IsMainThread());
-  return Preferences::GetBool(aPrefName);
+  // This map leaks until shutdown, but that's fine, all the values are
+  // controlled by us so it's not expected to be big.
+  static StaticAutoPtr<nsTHashMap<RefPtr<nsAtom>, bool>> sRegisteredPrefs;
+  if (!sRegisteredPrefs) {
+    if (PastShutdownPhase(ShutdownPhase::XPCOMShutdownFinal)) {
+      // Styling doesn't really matter much at this point, don't bother.
+      return false;
+    }
+    sRegisteredPrefs = new nsTHashMap<RefPtr<nsAtom>, bool>();
+    ClearOnShutdown(&sRegisteredPrefs);
+  }
+  return sRegisteredPrefs->LookupOrInsertWith(aPref, [&] {
+    nsAutoAtomCString prefName(aPref);
+    Preferences::RegisterCallback(
+        [](const char* aPrefName, void*) {
+          if (sRegisteredPrefs) {
+            RefPtr<nsAtom> name = NS_Atomize(nsDependentCString(aPrefName));
+            sRegisteredPrefs->InsertOrUpdate(name,
+                                             Preferences::GetBool(aPrefName));
+          }
+          LookAndFeel::NotifyChangedAllWindows(
+              widget::ThemeChangeKind::MediaQueriesOnly);
+        },
+        prefName);
+    return Preferences::GetBool(prefName.get());
+  });
 }
 
 bool Gecko_IsFontFormatSupported(StyleFontFaceSourceFormatKeyword aFormat) {

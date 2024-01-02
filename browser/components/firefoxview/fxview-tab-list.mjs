@@ -5,12 +5,15 @@
 import {
   html,
   ifDefined,
+  repeat,
   styleMap,
   when,
 } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
+import { escapeRegExp } from "./helpers.mjs";
 
 const NOW_THRESHOLD_MS = 91000;
+const FXVIEW_ROW_HEIGHT_PX = 32;
 const lazy = {};
 let XPCOMUtils;
 
@@ -18,6 +21,11 @@ if (!window.IS_STORYBOOK) {
   XPCOMUtils = ChromeUtils.importESModule(
     "resource://gre/modules/XPCOMUtils.sys.mjs"
   ).XPCOMUtils;
+  XPCOMUtils.defineLazyPreferenceGetter(
+    lazy,
+    "virtualListEnabledPref",
+    "browser.firefox-view.virtual-list.enabled"
+  );
   ChromeUtils.defineLazyGetter(lazy, "relativeTimeFormat", () => {
     return new Services.intl.RelativeTimeFormat(undefined, {
       style: "narrow",
@@ -37,6 +45,7 @@ if (!window.IS_STORYBOOK) {
  * @property {string} hasPopup - The aria-haspopup attribute for the secondary action, if required
  * @property {number} maxTabsLength - The max number of tabs for the list
  * @property {Array} tabItems - Items to show in the tab list
+ * @property {string} searchQuery - The query string to highlight, if provided.
  */
 export default class FxviewTabList extends MozLitElement {
   constructor() {
@@ -50,6 +59,7 @@ export default class FxviewTabList extends MozLitElement {
     this.maxTabsLength = 25;
     this.tabItems = [];
     this.compactRows = false;
+    this.updatesPaused = true;
     this.#register();
   }
 
@@ -61,10 +71,13 @@ export default class FxviewTabList extends MozLitElement {
     hasPopup: { type: String },
     maxTabsLength: { type: Number },
     tabItems: { type: Array },
+    updatesPaused: { type: Boolean },
+    searchQuery: { type: String },
   };
 
   static queries = {
     rowEls: { all: "fxview-tab-row" },
+    rootVirtualListEl: "virtual-list",
   };
 
   willUpdate(changes) {
@@ -73,15 +86,36 @@ export default class FxviewTabList extends MozLitElement {
       this.tabItems.length - 1
     );
 
-    if (changes.has("dateTimeFormat")) {
-      if (this.dateTimeFormat == "relative" && !window.IS_STORYBOOK) {
-        this.intervalID = setInterval(
-          () => this.onIntervalUpdate(),
-          this.timeMsPref
-        );
-      } else {
-        clearInterval(this.intervalID);
+    if (changes.has("dateTimeFormat") || changes.has("updatesPaused")) {
+      this.clearIntervalTimer();
+      if (
+        !this.updatesPaused &&
+        this.dateTimeFormat == "relative" &&
+        !window.IS_STORYBOOK
+      ) {
+        this.startIntervalTimer();
+        this.onIntervalUpdate();
       }
+    }
+
+    if (this.maxTabsLength > 0) {
+      // Can set maxTabsLength to -1 to have no max
+      this.tabItems = this.tabItems.slice(0, this.maxTabsLength);
+    }
+  }
+
+  startIntervalTimer() {
+    this.clearIntervalTimer();
+    this.intervalID = setInterval(
+      () => this.onIntervalUpdate(),
+      this.timeMsPref
+    );
+  }
+
+  clearIntervalTimer() {
+    if (this.intervalID) {
+      clearInterval(this.intervalID);
+      delete this.intervalID;
     }
   }
 
@@ -93,13 +127,11 @@ export default class FxviewTabList extends MozLitElement {
         "browser.tabs.firefox-view.updateTimeMs",
         NOW_THRESHOLD_MS,
         (prefName, oldVal, newVal) => {
+          this.clearIntervalTimer();
           if (!this.isConnected) {
             return;
           }
-          clearInterval(this.intervalID);
-          this.intervalID = setInterval(() => {
-            this.onIntervalUpdate();
-          }, newVal);
+          this.startIntervalTimer();
           this.requestUpdate();
         }
       );
@@ -108,19 +140,18 @@ export default class FxviewTabList extends MozLitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    if (this.dateTimeFormat === "relative" && !window.IS_STORYBOOK) {
-      this.intervalID = setInterval(
-        () => this.onIntervalUpdate(),
-        this.timeMsPref
-      );
+    if (
+      !this.updatesPaused &&
+      this.dateTimeFormat === "relative" &&
+      !window.IS_STORYBOOK
+    ) {
+      this.startIntervalTimer();
     }
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    if (this.intervalID) {
-      clearInterval(this.intervalID);
-    }
+    this.clearIntervalTimer();
   }
 
   async getUpdateComplete() {
@@ -171,35 +202,93 @@ export default class FxviewTabList extends MozLitElement {
   }
 
   focusPrevRow() {
-    // Focus link or button of item above
-    let previousIndex = this.activeIndex - 1;
-    if (previousIndex >= 0) {
-      this.rowEls[previousIndex].focus();
-      this.activeIndex = previousIndex;
-    }
+    this.focusIndex(this.activeIndex - 1);
   }
 
   focusNextRow() {
-    // Focus link or button of item below
-    let nextIndex = this.activeIndex + 1;
-    if (nextIndex < this.rowEls.length) {
-      this.rowEls[nextIndex].focus();
-      this.activeIndex = nextIndex;
+    this.focusIndex(this.activeIndex + 1);
+  }
+
+  async focusIndex(index) {
+    // Focus link or button of item
+    if (lazy.virtualListEnabledPref) {
+      let row = this.rootVirtualListEl.getItem(index);
+      if (!row) {
+        return;
+      }
+      let subList = this.rootVirtualListEl.getSubListForItem(index);
+      if (!subList) {
+        return;
+      }
+      this.activeIndex = index;
+
+      // In Bug 1866845, these manual updates to the sublists should be removed
+      // and scrollIntoView() should also be iterated on so that we aren't constantly
+      // moving the focused item to the center of the viewport
+      for (const sublist of Array.from(this.rootVirtualListEl.children)) {
+        await sublist.requestUpdate();
+        await sublist.updateComplete;
+      }
+      row.scrollIntoView({ block: "center" });
+      row.focus();
+    } else if (index >= 0 && index < this.rowEls?.length) {
+      this.rowEls[index].focus();
+      this.activeIndex = index;
     }
   }
 
-  render() {
-    if (this.maxTabsLength > 0) {
-      // Can set maxTabsLength to -1 to have no max
-      this.tabItems = this.tabItems.slice(0, this.maxTabsLength);
+  shouldUpdate(changes) {
+    if (changes.has("updatesPaused")) {
+      if (this.updatesPaused) {
+        this.clearIntervalTimer();
+      }
     }
-    const {
-      activeIndex,
-      currentActiveElementId,
-      dateTimeFormat,
-      hasPopup,
-      tabItems,
-    } = this;
+    return !this.updatesPaused;
+  }
+
+  itemTemplate = (tabItem, i) => {
+    let time;
+    if (tabItem.time || tabItem.closedAt) {
+      let stringTime = (tabItem.time || tabItem.closedAt).toString();
+      // Different APIs return time in different units, so we use
+      // the length to decide if it's milliseconds or nanoseconds.
+      if (stringTime.length === 16) {
+        time = (tabItem.time || tabItem.closedAt) / 1000;
+      } else {
+        time = tabItem.time || tabItem.closedAt;
+      }
+    }
+    return html`
+      <fxview-tab-row
+        exportparts="secondary-button"
+        ?active=${i == this.activeIndex}
+        ?compact=${this.compactRows}
+        .hasPopup=${this.hasPopup}
+        .currentActiveElementId=${this.currentActiveElementId}
+        .dateTimeFormat=${this.dateTimeFormat}
+        .favicon=${tabItem.icon}
+        .primaryL10nId=${tabItem.primaryL10nId}
+        .primaryL10nArgs=${ifDefined(tabItem.primaryL10nArgs)}
+        role="listitem"
+        .secondaryL10nId=${tabItem.secondaryL10nId}
+        .secondaryL10nArgs=${ifDefined(tabItem.secondaryL10nArgs)}
+        .sourceClosedId=${ifDefined(tabItem.sourceClosedId)}
+        .sourceWindowId=${ifDefined(tabItem.sourceWindowId)}
+        .closedId=${ifDefined(tabItem.closedId || tabItem.closedId)}
+        .searchQuery=${ifDefined(this.searchQuery)}
+        .tabElement=${ifDefined(tabItem.tabElement)}
+        .time=${ifDefined(time)}
+        .timeMsPref=${ifDefined(this.timeMsPref)}
+        .title=${tabItem.title}
+        .url=${tabItem.url}
+      ></fxview-tab-row>
+    `;
+  };
+
+  render() {
+    if (this.searchQuery && this.tabItems.length === 0) {
+      return this.#emptySearchResultsTemplate();
+    }
     return html`
       <link
         rel="stylesheet"
@@ -211,47 +300,35 @@ export default class FxviewTabList extends MozLitElement {
         role="list"
         @keydown=${this.handleFocusElementInRow}
       >
-        ${tabItems.map((tabItem, i) => {
-          let time;
-          if (tabItem.time || tabItem.closedAt) {
-            let stringTime = (tabItem.time || tabItem.closedAt).toString();
-            // Different APIs return time in different units, so we use
-            // the length to decide if it's milliseconds or nanoseconds.
-            if (stringTime.length === 16) {
-              time = (tabItem.time || tabItem.closedAt) / 1000;
-            } else {
-              time = tabItem.time || tabItem.closedAt;
-            }
-          }
-          return html`
-            <fxview-tab-row
-              exportparts="secondary-button"
-              ?active=${i == activeIndex}
-              ?compact=${this.compactRows}
-              .hasPopup=${hasPopup}
-              .currentActiveElementId=${currentActiveElementId}
-              .dateTimeFormat=${dateTimeFormat}
-              .favicon=${tabItem.icon}
-              .primaryL10nId=${ifDefined(tabItem.primaryL10nId)}
-              .primaryL10nArgs=${ifDefined(tabItem.primaryL10nArgs)}
-              role="listitem"
-              .secondaryL10nId=${ifDefined(tabItem.secondaryL10nId)}
-              .secondaryL10nArgs=${ifDefined(tabItem.secondaryL10nArgs)}
-              .closedId=${ifDefined(tabItem.closedId || tabItem.closedId)}
-              .sourceClosedId=${ifDefined(tabItem.sourceClosedId)}
-              .sourceWindowId==${ifDefined(tabItem.sourceWindowId)}
-              .tabElement=${ifDefined(tabItem.tabElement)}
-              .time=${ifDefined(time)}
-              .timeMsPref=${ifDefined(this.timeMsPref)}
-              .title=${tabItem.title}
-              .url=${ifDefined(tabItem.url)}
-            >
-            </fxview-tab-row>
-          `;
-        })}
+        ${when(
+          lazy.virtualListEnabledPref,
+          () => html`
+            <virtual-list
+              .activeIndex=${this.activeIndex}
+              .items=${this.tabItems}
+              .template=${this.itemTemplate}
+            ></virtual-list>
+          `
+        )}
+        ${when(
+          !lazy.virtualListEnabledPref,
+          () => html`
+            ${this.tabItems.map((tabItem, i) => this.itemTemplate(tabItem, i))}
+          `
+        )}
       </div>
       <slot name="menu"></slot>
     `;
+  }
+
+  #emptySearchResultsTemplate() {
+    return html` <fxview-empty-state
+      class="search-results"
+      headerLabel="firefoxview-search-results-empty"
+      .headerArgs=${{ query: this.searchQuery }}
+      isInnerCard
+    >
+    </fxview-empty-state>`;
   }
 }
 customElements.define("fxview-tab-list", FxviewTabList);
@@ -277,6 +354,7 @@ customElements.define("fxview-tab-list", FxviewTabList);
  * @property {string} title - The title for the tab item.
  * @property {string} url - The url for the tab item.
  * @property {number} timeMsPref - The frequency in milliseconds of updates to relative time
+ * @property {string} searchQuery - The query string to highlight, if provided.
  */
 export class FxviewTabRow extends MozLitElement {
   constructor() {
@@ -304,6 +382,7 @@ export class FxviewTabRow extends MozLitElement {
     title: { type: String },
     timeMsPref: { type: Number },
     url: { type: String },
+    searchQuery: { type: String },
   };
 
   static queries = {
@@ -313,10 +392,6 @@ export class FxviewTabRow extends MozLitElement {
 
   get currentFocusable() {
     return this.renderRoot.getElementById(this.currentActiveElementId);
-  }
-
-  connectedCallback() {
-    super.connectedCallback();
   }
 
   focus() {
@@ -462,7 +537,7 @@ export class FxviewTabRow extends MozLitElement {
         href="chrome://browser/content/firefoxview/fxview-tab-row.css"
       />
       <a
-        .href=${ifDefined(this.url)}
+        href=${ifDefined(this.url)}
         class="fxview-tab-row-main"
         id="fxview-tab-row-main"
         tabindex=${this.active &&
@@ -481,15 +556,31 @@ export class FxviewTabRow extends MozLitElement {
             backgroundImage: `url(${this.getImageUrl(this.favicon, this.url)})`,
           })}
         ></span>
-        <span class="fxview-tab-row-title" id="fxview-tab-row-title">
-          ${title}
+        <span
+          class="fxview-tab-row-title text-truncated-ellipsis"
+          id="fxview-tab-row-title"
+          dir="auto"
+        >
+          ${when(
+            this.searchQuery,
+            () => this.#highlightSearchMatches(this.searchQuery, title),
+            () => title
+          )}
         </span>
         <span
-          class="fxview-tab-row-url"
+          class="fxview-tab-row-url text-truncated-ellipsis"
           id="fxview-tab-row-url"
           ?hidden=${this.compact}
         >
-          ${this.formatURIForDisplay(this.url)}
+          ${when(
+            this.searchQuery,
+            () =>
+              this.#highlightSearchMatches(
+                this.searchQuery,
+                this.formatURIForDisplay(this.url)
+              ),
+            () => this.formatURIForDisplay(this.url)
+          )}
         </span>
         <span
           class="fxview-tab-row-date"
@@ -531,6 +622,179 @@ export class FxviewTabRow extends MozLitElement {
       )}
     `;
   }
+
+  /**
+   * Find all matches of query within the given string, and compute the result
+   * to be rendered.
+   *
+   * @param {string} query
+   * @param {string} string
+   */
+  #highlightSearchMatches(query, string) {
+    const fragments = [];
+    const regex = RegExp(escapeRegExp(query), "dgi");
+    let prevIndexEnd = 0;
+    let result;
+    while ((result = regex.exec(string)) !== null) {
+      const [indexStart, indexEnd] = result.indices[0];
+      fragments.push(string.substring(prevIndexEnd, indexStart));
+      fragments.push(
+        html`<strong>${string.substring(indexStart, indexEnd)}</strong>`
+      );
+      prevIndexEnd = regex.lastIndex;
+    }
+    fragments.push(string.substring(prevIndexEnd));
+    return fragments;
+  }
 }
 
 customElements.define("fxview-tab-row", FxviewTabRow);
+
+export class VirtualList extends MozLitElement {
+  static properties = {
+    items: { type: Array },
+    template: { type: Function },
+    activeIndex: { type: Number },
+    itemOffset: { type: Number },
+    maxRenderCountEstimate: { type: Number, state: true },
+    itemHeightEstimate: { type: Number, state: true },
+    isAlwaysVisible: { type: Boolean },
+    isVisible: { type: Boolean, state: true },
+    isSubList: { type: Boolean },
+  };
+
+  createRenderRoot() {
+    return this;
+  }
+
+  constructor() {
+    super();
+    this.activeIndex = 0;
+    this.itemOffset = 0;
+    this.items = [];
+    this.subListItems = [];
+    this.itemHeightEstimate = FXVIEW_ROW_HEIGHT_PX;
+    this.maxRenderCountEstimate = Math.max(
+      40,
+      2 * Math.ceil(window.innerHeight / this.itemHeightEstimate)
+    );
+    this.isSubList = false;
+    this.isVisible = false;
+    this.intersectionObserver = new IntersectionObserver(
+      ([entry]) => (this.isVisible = entry.isIntersecting),
+      { root: this.ownerDocument }
+    );
+    this.resizeObserver = new ResizeObserver(([entry]) => {
+      if (entry.contentRect?.height > 0) {
+        // Update properties on top-level virtual-list
+        this.parentElement.itemHeightEstimate = entry.contentRect.height;
+        this.parentElement.maxRenderCountEstimate = Math.max(
+          40,
+          2 * Math.ceil(window.innerHeight / this.itemHeightEstimate)
+        );
+      }
+    });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.intersectionObserver.disconnect();
+    this.resizeObserver.disconnect();
+  }
+
+  triggerIntersectionObserver() {
+    this.intersectionObserver.unobserve(this);
+    this.intersectionObserver.observe(this);
+  }
+
+  getSubListForItem(index) {
+    if (this.isSubList) {
+      throw new Error("Cannot get sublist for item");
+    }
+    return this.children[parseInt(index / this.maxRenderCountEstimate, 10)];
+  }
+
+  getItem(index) {
+    if (!this.isSubList) {
+      return this.getSubListForItem(index)?.getItem(
+        index % this.maxRenderCountEstimate
+      );
+    }
+    return this.children[index];
+  }
+
+  willUpdate(changedProperties) {
+    if (changedProperties.has("items") && !this.isSubList) {
+      this.subListItems = [];
+      for (let i = 0; i < this.items.length; i += this.maxRenderCountEstimate) {
+        this.subListItems.push(
+          this.items.slice(i, i + this.maxRenderCountEstimate)
+        );
+      }
+      this.triggerIntersectionObserver();
+    }
+  }
+
+  recalculateAfterWindowResize() {
+    this.maxRenderCountEstimate = Math.max(
+      40,
+      2 * Math.ceil(window.innerHeight / this.itemHeightEstimate)
+    );
+  }
+
+  firstUpdated() {
+    this.intersectionObserver.observe(this);
+    if (this.isSubList && this.children[0]) {
+      this.resizeObserver.observe(this.children[0]);
+    }
+  }
+
+  updated(changedProperties) {
+    this.updateListHeight(changedProperties);
+  }
+
+  updateListHeight(changedProperties) {
+    if (
+      changedProperties.has("isAlwaysVisible") ||
+      changedProperties.has("isVisible")
+    ) {
+      this.style.height =
+        this.isAlwaysVisible || this.isVisible
+          ? "auto"
+          : `${this.items.length * this.itemHeightEstimate}px`;
+    }
+  }
+
+  get renderItems() {
+    return this.isSubList ? this.items : this.subListItems;
+  }
+
+  subListTemplate = (data, i) => {
+    return html`<virtual-list
+      .template=${this.template}
+      .items=${data}
+      .itemHeightEstimate=${this.itemHeightEstimate}
+      .itemOffset=${i * this.maxRenderCountEstimate}
+      .isAlwaysVisible=${i ==
+      parseInt(this.activeIndex / this.maxRenderCountEstimate, 10)}
+      isSubList
+    ></virtual-list>`;
+  };
+
+  itemTemplate = (data, i) => this.template(data, this.itemOffset + i);
+
+  render() {
+    if (this.isAlwaysVisible || this.isVisible) {
+      return html`
+        ${repeat(
+          this.renderItems,
+          (data, i) => i,
+          this.isSubList ? this.itemTemplate : this.subListTemplate
+        )}
+      `;
+    }
+    return "";
+  }
+}
+
+customElements.define("virtual-list", VirtualList);

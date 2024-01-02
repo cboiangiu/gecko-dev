@@ -6,6 +6,8 @@
 
 add_task(async function () {
   await pushPref("apz.scrollend-event.content.enabled", true);
+  await pushPref("dom.element.invokers.enabled", true);
+  await pushPref("dom.element.popover.enabled", true);
 
   const dbg = await initDebugger(
     "doc-event-breakpoints.html",
@@ -54,6 +56,7 @@ add_task(async function () {
   await waitForPaused(dbg);
   assertPausedAtSourceAndLine(dbg, findSource(dbg, "eval-test.js").id, 2);
   await resume(dbg);
+  await toggleEventBreakpoint(dbg, "Script", "script.source.firstStatement");
 
   await toggleEventBreakpoint(dbg, "Control", "event.control.focusin");
   await toggleEventBreakpoint(dbg, "Control", "event.control.focusout");
@@ -72,6 +75,25 @@ add_task(async function () {
   // focus breakpoints to fire.
   await toggleEventBreakpoint(dbg, "Control", "event.control.focusin");
   await toggleEventBreakpoint(dbg, "Control", "event.control.focusout");
+
+  await toggleEventBreakpoint(dbg, "Control", "event.control.invoke");
+  invokeOnElement("#invoker", "click");
+  await waitForPaused(dbg);
+  assertPausedAtSourceAndLine(dbg, eventBreakpointsSource.id, 73);
+  await resume(dbg);
+
+  info("Enable beforetoggle and toggle events");
+  await toggleEventBreakpoint(dbg, "Control", "event.control.beforetoggle");
+  await toggleEventBreakpoint(dbg, "Control", "event.control.toggle");
+  invokeOnElement("#popover-toggle", "click");
+  info("Wait for pause in beforetoggle event listener");
+  await waitForPaused(dbg);
+  assertPausedAtSourceAndLine(dbg, eventBreakpointsSource.id, 89);
+  await resume(dbg);
+  info("And wait for pause in toggle event listener after resuming");
+  await waitForPaused(dbg);
+  assertPausedAtSourceAndLine(dbg, eventBreakpointsSource.id, 93);
+  await resume(dbg);
 
   await toggleEventBreakpoint(
     dbg,
@@ -185,6 +207,24 @@ add_task(async function () {
   // Cleanup - unblackbox the source
   await clickElement(dbg, "blackbox");
   await waitForDispatch(dbg.store, "UNBLACKBOX_WHOLE_SOURCES");
+
+  info(`Check that breakpoint can be set on "beforeUnload" event`);
+  await toggleEventBreakpoint(dbg, "Load", "event.load.beforeunload");
+  let onReload = reload(dbg);
+  await waitForPaused(dbg);
+  assertPausedAtSourceAndLine(dbg, eventBreakpointsSource.id, 78);
+  await resume(dbg);
+  await onReload;
+  await toggleEventBreakpoint(dbg, "Load", "event.load.beforeunload");
+
+  info(`Check that breakpoint can be set on "unload" event`);
+  await toggleEventBreakpoint(dbg, "Load", "event.load.unload");
+  onReload = reload(dbg);
+  await waitForPaused(dbg);
+  assertPausedAtSourceAndLine(dbg, eventBreakpointsSource.id, 83);
+  await resume(dbg);
+  await onReload;
+  await toggleEventBreakpoint(dbg, "Load", "event.load.unload");
 });
 
 add_task(async function checkUnavailableEvents() {
@@ -224,8 +264,15 @@ async function toggleEventBreakpoint(
     dbg.store,
     "UPDATE_EVENT_LISTENERS"
   );
+  const checked = eventCheckbox.checked;
   eventCheckbox.click();
   await onEventListenersUpdate;
+
+  info("Wait for the event breakpoint checkbox to be toggled");
+  // Wait for he UI to be toggled, otherwise, the reducer may not be fully updated
+  await waitFor(() => {
+    return eventCheckbox.checked == !checked;
+  });
 }
 
 async function getEventBreakpointCheckbox(
@@ -234,10 +281,10 @@ async function getEventBreakpointCheckbox(
   eventBreakpointName
 ) {
   if (!getEventListenersPanel(dbg)) {
-    // Event listeners panel is collapse, expand it
+    // Event listeners panel is collapsed, expand it
     findElementWithSelector(
       dbg,
-      `.event-listeners-pane ._header .arrow`
+      `.event-listeners-pane ._header .header-label`
     ).click();
     await waitFor(() => getEventListenersPanel(dbg));
   }

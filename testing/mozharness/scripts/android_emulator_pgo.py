@@ -25,6 +25,7 @@ from mozharness.mozilla.testing.testbase import TestingMixin, testing_config_opt
 
 PAGES = [
     "js-input/webkit/PerformanceTests/Speedometer/index.html",
+    "js-input/webkit/PerformanceTests/Speedometer3/index.html?startAutomatically=true",
     "blueprint/sample.html",
     "blueprint/forms.html",
     "blueprint/grid.html",
@@ -255,8 +256,8 @@ class AndroidProfileRun(TestingMixin, BaseScript, MozbaseMixin, AndroidMixin):
             for page in PAGES:
                 driver.navigate("http://%s:%d/%s" % (IP, PORT, page))
                 timeout = 2
-                if "Speedometer/index.html" in page:
-                    # The Speedometer test actually runs many tests internally in
+                if "Speedometer" in page:
+                    # The Speedometer[23] test actually runs many tests internally in
                     # javascript, so it needs extra time to run through them. The
                     # emulator doesn't get very far through the whole suite, but
                     # this extra time at least lets some of them process.
@@ -298,6 +299,10 @@ class AndroidProfileRun(TestingMixin, BaseScript, MozbaseMixin, AndroidMixin):
         profraw_files = glob.glob("/builds/worker/workspace/*.profraw")
         if not profraw_files:
             self.fatal("Could not find any profraw files in /builds/worker/workspace")
+        elif len(profraw_files) == 1:
+            self.fatal(
+                "Only found 1 profraw file. Did child processes terminate early?"
+            )
         merge_cmd = [
             os.path.join(os.environ["MOZ_FETCHES_DIR"], "clang/bin/llvm-profdata"),
             "merge",

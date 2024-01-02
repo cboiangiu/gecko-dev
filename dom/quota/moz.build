@@ -29,6 +29,7 @@ EXPORTS.mozilla.dom.quota += [
     "AssertionsImpl.h",
     "CachingDatabaseConnection.h",
     "CheckedUnsafePtr.h",
+    "CipherKeyManager.h",
     "CipherStrategy.h",
     "Client.h",
     "ClientImpl.h",
@@ -68,6 +69,7 @@ EXPORTS.mozilla.dom.quota += [
     "SerializationHelpers.h",
     "StorageHelpers.h",
     "StreamUtils.h",
+    "StringifyUtils.h",
     "UsageInfo.h",
 ]
 
@@ -116,6 +118,7 @@ UNIFIED_SOURCES += [
     "StorageHelpers.cpp",
     "StorageManager.cpp",
     "StreamUtils.cpp",
+    "StringifyUtils.cpp",
 ]
 
 IPDL_SOURCES += [

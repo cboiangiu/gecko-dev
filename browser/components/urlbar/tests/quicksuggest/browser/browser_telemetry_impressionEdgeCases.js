@@ -40,12 +40,7 @@ const REMOTE_SETTINGS_RESULTS = [
 
 const SPONSORED_RESULT = REMOTE_SETTINGS_RESULTS[0];
 
-// Spy for the custom impression/click sender
-let spy;
-
 add_setup(async function () {
-  ({ spy } = QuickSuggestTestUtils.createTelemetryPingSpy());
-
   await PlacesUtils.history.clear();
   await PlacesUtils.bookmarks.eraseEverything();
   await UrlbarTestUtils.formHistory.clear();
@@ -57,7 +52,7 @@ add_setup(async function () {
   await SearchTestUtils.installSearchExtension({}, { setAsDefault: true });
 
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
-    remoteSettingsResults: [
+    remoteSettingsRecords: [
       {
         type: "data",
         attachment: REMOTE_SETTINGS_RESULTS,
@@ -84,7 +79,6 @@ add_task(async function abandonment() {
   });
   QuickSuggestTestUtils.assertScalars({});
   QuickSuggestTestUtils.assertEvents([]);
-  QuickSuggestTestUtils.assertPings(spy, []);
 });
 
 // Makes sure impression telemetry is not recorded when a quick suggest result
@@ -103,7 +97,6 @@ add_task(async function noQuickSuggestResult() {
     });
     QuickSuggestTestUtils.assertScalars({});
     QuickSuggestTestUtils.assertEvents([]);
-    QuickSuggestTestUtils.assertPings(spy, []);
   });
   await PlacesUtils.history.clear();
 });
@@ -239,7 +232,6 @@ add_task(async function hiddenRow() {
   // view. No impression telemetry should be recorded for it.
   QuickSuggestTestUtils.assertScalars({});
   QuickSuggestTestUtils.assertEvents([]);
-  QuickSuggestTestUtils.assertPings(spy, []);
 
   BrowserTestUtils.removeTab(tab);
   UrlbarProvidersManager.unregisterProvider(provider);
@@ -275,7 +267,6 @@ add_task(async function notAddedToView() {
     // impression telemetry should be recorded.
     QuickSuggestTestUtils.assertScalars({});
     QuickSuggestTestUtils.assertEvents([]);
-    QuickSuggestTestUtils.assertPings(spy, []);
   });
 });
 
@@ -351,20 +342,6 @@ add_task(async function previousResultStillVisible() {
         },
       },
     ]);
-    QuickSuggestTestUtils.assertPings(spy, [
-      {
-        type: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
-        payload: {
-          improve_suggest_experience_checked: false,
-          block_id: firstSuggestion.id,
-          is_clicked: false,
-          match_type: "firefox-suggest",
-          position: index + 1,
-          suggested_index: -1,
-          suggested_index_relative_to_group: true,
-        },
-      },
-    ]);
     Assert.ok(pingSubmitted, "Glean ping was submitted");
   });
 });
@@ -387,16 +364,10 @@ async function doEngagementWithoutAddingResultToView(
   // Set the timeout of the chunk timer to a really high value so that it will
   // not fire. The view updates when the timer fires, which we specifically want
   // to avoid here.
-  let originalHeuristicTimeout =
-    UrlbarProvidersManager.CHUNK_HEURISTIC_RESULTS_DELAY_MS;
-  UrlbarProvidersManager.CHUNK_HEURISTIC_RESULTS_DELAY_MS = 30000;
-  let originalOtherTimeout =
-    UrlbarProvidersManager.CHUNK_OTHER_RESULTS_DELAY_MS;
-  UrlbarProvidersManager.CHUNK_OTHER_RESULTS_DELAY_MS = 30000;
+  let originalChunkTimeout = UrlbarProvidersManager.CHUNK_RESULTS_DELAY_MS;
+  UrlbarProvidersManager.CHUNK_RESULTS_DELAY_MS = 30000;
   const cleanup = () => {
-    UrlbarProvidersManager.CHUNK_HEURISTIC_RESULTS_DELAY_MS =
-      originalHeuristicTimeout;
-    UrlbarProvidersManager.CHUNK_OTHER_RESULTS_DELAY_MS = originalOtherTimeout;
+    UrlbarProvidersManager.CHUNK_RESULTS_DELAY_MS = originalChunkTimeout;
   };
   registerCleanupFunction(cleanup);
 

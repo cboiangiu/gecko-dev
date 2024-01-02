@@ -542,6 +542,8 @@ class VideoData : public MediaData {
             const media::TimeUnit& aTimecode, IntSize aDisplay,
             uint32_t aFrameID);
 
+  nsCString ToString() const;
+
   void MarkSentToCompositor() { mSentToCompositor = true; }
   bool IsSentToCompositor() { return mSentToCompositor; }
 
@@ -570,6 +572,8 @@ enum class CryptoScheme : uint8_t {
   Cenc,
   Cbcs,
 };
+
+const char* CryptoSchemeToString(const CryptoScheme& aScheme);
 
 class CryptoTrack {
  public:

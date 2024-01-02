@@ -404,8 +404,7 @@ class ReleasingTimerHolder final : public Runnable,
     // but we need at least to be able to dispatch to the main thread here.
     auto raii = MakeScopeExit([holder] { holder->CancelTimerAndRevokeURI(); });
 
-    nsresult rv =
-        SchedulerGroup::Dispatch(TaskCategory::Other, holder.forget());
+    nsresult rv = SchedulerGroup::Dispatch(holder.forget());
     NS_ENSURE_SUCCESS_VOID(rv);
 
     raii.release();
@@ -821,7 +820,7 @@ void BlobURLProtocolHandler::Traverse(
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(
       aCallback, "BlobURLProtocolHandler mozilla::dom::DataInfo.mMediaSource");
-  aCallback.NoteXPCOMChild(res->mMediaSource);
+  aCallback.NoteXPCOMChild(static_cast<EventTarget*>(res->mMediaSource));
 }
 
 NS_IMPL_ISUPPORTS(BlobURLProtocolHandler, nsIProtocolHandler,

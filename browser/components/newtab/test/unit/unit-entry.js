@@ -627,6 +627,11 @@ const TEST_GLOBAL = {
         set() {},
       },
     },
+    newtabHandoffPreference: {
+      enabled: {
+        set() {},
+      },
+    },
     pocket: {
       enabled: {
         set() {},
@@ -649,6 +654,9 @@ const TEST_GLOBAL = {
       topicClick: {
         record() {},
       },
+      shim: {
+        set() {},
+      },
     },
     topsites: {
       enabled: {
@@ -665,6 +673,15 @@ const TEST_GLOBAL = {
       },
       rows: {
         set() {},
+      },
+      showPrivacyClick: {
+        record() {},
+      },
+      dismiss: {
+        record() {},
+      },
+      prefChanged: {
+        record() {},
       },
     },
     topSites: {
@@ -696,6 +713,9 @@ const TEST_GLOBAL = {
       submit() {},
     },
     topSites: {
+      submit() {},
+    },
+    spoc: {
       submit() {},
     },
   },

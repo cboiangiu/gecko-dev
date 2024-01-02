@@ -42,4 +42,3 @@ export class LogMessageWithStack extends Error {
 export function prettyPrintLog(log) {
   return '  - ' + log.toJSON().replace(/\n/g, '\n    ');
 }
-//# sourceMappingURL=log_message.js.map

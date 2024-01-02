@@ -9,10 +9,10 @@
 
 #include <deque>
 #include <functional>
+#include <list>
 #include <map>
 #include <memory>
 #include <queue>
-#include <stack>
 #include <unordered_set>
 #include <utility>
 
@@ -111,6 +111,29 @@ class SharedResourceWrapper {
   }
 };
 
+class RemoteTextureRecycleBin final {
+ public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(RemoteTextureRecycleBin)
+
+  explicit RemoteTextureRecycleBin(bool aIsShared);
+
+ private:
+  friend class RemoteTextureMap;
+
+  ~RemoteTextureRecycleBin();
+
+  struct RecycledTextureHolder {
+    gfx::IntSize mSize;
+    gfx::SurfaceFormat mFormat = gfx::SurfaceFormat::UNKNOWN;
+    SurfaceDescriptor::Type mType = SurfaceDescriptor::Tnull_t;
+    UniquePtr<TextureData> mTextureData;
+    UniquePtr<SharedResourceWrapper> mResourceWrapper;
+  };
+
+  bool mIsShared = false;
+  std::list<RecycledTextureHolder> mRecycledTextures;
+};
+
 /**
  * A class provides API for remote texture owners.
  */
@@ -122,33 +145,45 @@ class RemoteTextureOwnerClient final {
 
   bool IsRegistered(const RemoteTextureOwnerId aOwnerId);
   void RegisterTextureOwner(const RemoteTextureOwnerId aOwnerId,
-                            bool aIsSyncMode);
+                            bool aIsSyncMode, bool aSharedRecycling = false);
   void UnregisterTextureOwner(const RemoteTextureOwnerId aOwnerId);
   void UnregisterAllTextureOwners();
+  void ClearRecycledTextures();
   void NotifyContextLost();
+  void NotifyContextRestored();
   void PushTexture(const RemoteTextureId aTextureId,
                    const RemoteTextureOwnerId aOwnerId,
                    UniquePtr<TextureData>&& aTextureData);
   void PushTexture(const RemoteTextureId aTextureId,
                    const RemoteTextureOwnerId aOwnerId,
-                   UniquePtr<TextureData>&& aTextureData,
-                   const std::shared_ptr<gl::SharedSurface>& aSharedSurface);
+                   const std::shared_ptr<gl::SharedSurface>& aSharedSurface,
+                   const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+                   const SurfaceDescriptor& aDesc);
   void PushTexture(
       const RemoteTextureId aTextureId, const RemoteTextureOwnerId aOwnerId,
-      UniquePtr<TextureData>&& aTextureData,
-      const std::shared_ptr<webgpu::ExternalTexture>& aExternalTexture);
+      const std::shared_ptr<webgpu::ExternalTexture>& aExternalTexture,
+      const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+      const SurfaceDescriptor& aDesc);
   void PushDummyTexture(const RemoteTextureId aTextureId,
                         const RemoteTextureOwnerId aOwnerId);
   void GetLatestBufferSnapshot(const RemoteTextureOwnerId aOwnerId,
                                const mozilla::ipc::Shmem& aDestShmem,
                                const gfx::IntSize& aSize);
+  UniquePtr<TextureData> GetRecycledTextureData(
+      const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+      TextureType aTextureType,
+      RemoteTextureOwnerId aOwnerId = RemoteTextureOwnerId());
   UniquePtr<TextureData> CreateOrRecycleBufferTextureData(
-      const RemoteTextureOwnerId aOwnerId, gfx::IntSize aSize,
-      gfx::SurfaceFormat aFormat);
+      const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+      RemoteTextureOwnerId aOwnerId = RemoteTextureOwnerId());
   std::shared_ptr<gl::SharedSurface> GetRecycledSharedSurface(
-      const RemoteTextureOwnerId aOwnerId);
+      const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+      SurfaceDescriptor::Type aType,
+      RemoteTextureOwnerId aOwnerId = RemoteTextureOwnerId());
   std::shared_ptr<webgpu::ExternalTexture> GetRecycledExternalTexture(
-      const RemoteTextureOwnerId aOwnerId);
+      const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+      SurfaceDescriptor::Type aType,
+      RemoteTextureOwnerId aOwnerId = RemoteTextureOwnerId());
 
   const base::ProcessId mForPid;
 
@@ -157,6 +192,7 @@ class RemoteTextureOwnerClient final {
 
   std::unordered_set<RemoteTextureOwnerId, RemoteTextureOwnerId::HashFn>
       mOwnerIds;
+  RefPtr<RemoteTextureRecycleBin> mSharedRecycleBin;
 };
 
 /**
@@ -184,6 +220,11 @@ class RemoteTextureMap {
                    RefPtr<TextureHost>& aTextureHost,
                    UniquePtr<SharedResourceWrapper>&& aResourceWrapper);
 
+  // Remove waiting texture that will not be used.
+  bool RemoveTexture(const RemoteTextureId aTextureId,
+                     const RemoteTextureOwnerId aOwnerId,
+                     const base::ProcessId aForPid);
+
   void GetLatestBufferSnapshot(const RemoteTextureOwnerId aOwnerId,
                                const base::ProcessId aForPid,
                                const mozilla::ipc::Shmem& aDestShmem,
@@ -191,8 +232,10 @@ class RemoteTextureMap {
 
   // aIsSyncMode defines if RemoteTextureMap::GetRemoteTextureForDisplayList()
   // works synchronously.
-  void RegisterTextureOwner(const RemoteTextureOwnerId aOwnerId,
-                            const base::ProcessId aForPid, bool aIsSyncMode);
+  void RegisterTextureOwner(
+      const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid,
+      bool aIsSyncMode,
+      const RefPtr<RemoteTextureRecycleBin>& aRecycleBin = nullptr);
   void UnregisterTextureOwner(const RemoteTextureOwnerId aOwnerIds,
                               const base::ProcessId aForPid);
   void UnregisterTextureOwners(
@@ -200,7 +243,16 @@ class RemoteTextureMap {
                                RemoteTextureOwnerId::HashFn>& aOwnerIds,
       const base::ProcessId aForPid);
 
+  void ClearRecycledTextures(
+      const std::unordered_set<RemoteTextureOwnerId,
+                               RemoteTextureOwnerId::HashFn>& aOwnerIds,
+      const base::ProcessId aForPid,
+      const RefPtr<RemoteTextureRecycleBin>& aRecycleBin = nullptr);
   void NotifyContextLost(
+      const std::unordered_set<RemoteTextureOwnerId,
+                               RemoteTextureOwnerId::HashFn>& aOwnerIds,
+      const base::ProcessId aForPid);
+  void NotifyContextRestored(
       const std::unordered_set<RemoteTextureOwnerId,
                                RemoteTextureOwnerId::HashFn>& aOwnerIds,
       const base::ProcessId aForPid);
@@ -213,7 +265,8 @@ class RemoteTextureMap {
   // return true when aReadyCallback will be called.
   bool GetRemoteTextureForDisplayList(
       RemoteTextureHostWrapper* aTextureHostWrapper,
-      std::function<void(const RemoteTextureInfo&)>&& aReadyCallback);
+      std::function<void(const RemoteTextureInfo&)>&& aReadyCallback,
+      bool aWaitForRemoteTextureOwner = false);
 
   // Get ExternalImageId of remote texture for WebRender rendering.
   wr::MaybeExternalImageId GetExternalImageIdOfRemoteTexture(
@@ -225,7 +278,7 @@ class RemoteTextureMap {
 
   RefPtr<TextureHost> GetOrCreateRemoteTextureHostWrapper(
       const RemoteTextureId aTextureId, const RemoteTextureOwnerId aOwnerId,
-      const base::ProcessId aForPid, const gfx::IntSize aSize,
+      const base::ProcessId aForPid, const gfx::IntSize& aSize,
       const TextureFlags aFlags);
 
   void UnregisterRemoteTextureHostWrapper(const RemoteTextureId aTextureId,
@@ -249,12 +302,17 @@ class RemoteTextureMap {
   void SuppressRemoteTextureReadyCheck(const RemoteTextureId aTextureId,
                                        const base::ProcessId aForPid);
 
-  UniquePtr<TextureData> GetRecycledBufferTextureData(
+  UniquePtr<TextureData> GetRecycledTextureData(
       const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid,
-      gfx::IntSize aSize, gfx::SurfaceFormat aFormat);
+      const RefPtr<RemoteTextureRecycleBin>& aRecycleBin,
+      const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+      TextureType aTextureType);
 
   UniquePtr<SharedResourceWrapper> GetRecycledSharedTexture(
-      const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid);
+      const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid,
+      const RefPtr<RemoteTextureRecycleBin>& aRecycleBin,
+      const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+      SurfaceDescriptor::Type aType);
 
   static RefPtr<TextureHost> CreateRemoteTexture(TextureData* aTextureData,
                                                  TextureFlags aTextureFlags);
@@ -297,6 +355,7 @@ class RemoteTextureMap {
     std::deque<UniquePtr<TextureDataHolder>> mWaitingTextureDataHolders;
     // Holds TextureDataHolders that are used for building wr display list.
     std::deque<UniquePtr<TextureDataHolder>> mUsingTextureDataHolders;
+    std::deque<UniquePtr<TextureDataHolder>> mReleasingTextureDataHolders;
     // Holds async RemoteTexture ready callbacks.
     std::deque<UniquePtr<RenderingReadyCallbackHolder>>
         mRenderingReadyCallbackHolders;
@@ -307,8 +366,7 @@ class RemoteTextureMap {
     // Holds compositable refs to TextureHosts of RenderTextureHosts that are
     // waiting to be released in non-RenderThread.
     std::deque<CompositableTextureHostRef> mReleasingRenderedTextureHosts;
-    std::stack<UniquePtr<TextureData>> mRecycledTextures;
-    std::queue<UniquePtr<SharedResourceWrapper>> mRecycledSharedTextures;
+    RefPtr<RemoteTextureRecycleBin> mRecycleBin;
   };
 
   // Holds data related to remote texture wrapper
@@ -339,7 +397,11 @@ class RemoteTextureMap {
 
   void KeepTextureDataAliveForTextureHostIfNecessary(
       const MonitorAutoLock& aProofOfLock,
+      RemoteTextureMap::TextureOwner* aOwner,
       std::deque<UniquePtr<TextureDataHolder>>& aHolders);
+
+  bool RecycleTexture(const RefPtr<RemoteTextureRecycleBin>& aRecycleBin,
+                      TextureDataHolder& aHolder, bool aExpireOldTextures);
 
   RemoteTextureMap::TextureOwner* GetTextureOwner(
       const MonitorAutoLock& aProofOfLock, const RemoteTextureOwnerId aOwnerId,

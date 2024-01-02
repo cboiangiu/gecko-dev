@@ -15,11 +15,13 @@
 
 #include "frontend/CompilationStencil.h"  // frontend::CompilationStencil
 #include "gc/GC.h"
+#include "jit/Ion.h"
 #include "jit/IonCompileTask.h"
 #include "jit/JitRuntime.h"
 #include "jit/JitScript.h"
 #include "js/CompileOptions.h"  // JS::PrefableCompileOptions, JS::ReadOnlyCompileOptions
-#include "js/friend/StackLimits.h"  // js::ReportOverRecursed
+#include "js/experimental/CompileScript.h"  // JS::ThreadStackQuotaForSize
+#include "js/friend/StackLimits.h"          // js::ReportOverRecursed
 #include "js/HelperThreadAPI.h"
 #include "js/Stack.h"
 #include "js/UniquePtr.h"
@@ -117,11 +119,6 @@ void JS::SetProfilingThreadCallbacks(
   HelperThreadState().unregisterThread = unregisterThread;
 }
 
-static size_t ThreadStackQuotaForSize(size_t size) {
-  // Set the stack quota to 10% less that the actual size.
-  return size_t(double(size) * 0.9);
-}
-
 // Bug 1630189: Without MOZ_NEVER_INLINE, Windows PGO builds have a linking
 // error for HelperThreadTaskCallback.
 JS_PUBLIC_API MOZ_NEVER_INLINE void JS::SetHelperThreadTaskCallback(
@@ -141,7 +138,7 @@ void GlobalHelperThreadState::setDispatchTaskCallback(
 
   dispatchTaskCallback = callback;
   this->threadCount = threadCount;
-  this->stackQuota = ThreadStackQuotaForSize(stackSize);
+  this->stackQuota = JS::ThreadStackQuotaForSize(stackSize);
 }
 
 bool js::StartOffThreadWasmCompile(wasm::CompileTask* task,
@@ -261,19 +258,54 @@ bool GlobalHelperThreadState::submitTask(
   return true;
 }
 
-bool js::StartOffThreadIonFree(jit::IonCompileTask* task,
-                               const AutoLockHelperThreadState& lock) {
-  js::UniquePtr<jit::IonFreeTask> freeTask =
-      js::MakeUnique<jit::IonFreeTask>(task);
-  if (!freeTask) {
-    return false;
+bool js::AutoStartIonFreeTask::addIonCompileToFreeTaskBatch(
+    jit::IonCompileTask* task) {
+  return jitRuntime_->addIonCompileToFreeTaskBatch(task);
+}
+
+js::AutoStartIonFreeTask::~AutoStartIonFreeTask() {
+  jitRuntime_->maybeStartIonFreeTask(force_);
+}
+
+void jit::JitRuntime::maybeStartIonFreeTask(bool force) {
+  IonFreeCompileTasks& tasks = ionFreeTaskBatch_.ref();
+  if (tasks.empty()) {
+    return;
   }
 
-  return HelperThreadState().submitTask(std::move(freeTask), lock);
+  // Start an IonFreeTask if we have at least eight tasks. If |force| is true we
+  // always start an IonFreeTask.
+  if (!force) {
+    constexpr size_t MinBatchSize = 8;
+    static_assert(IonFreeCompileTasks::InlineLength >= MinBatchSize,
+                  "Minimum batch size shouldn't require malloc");
+    if (tasks.length() < MinBatchSize) {
+      return;
+    }
+  }
+
+  auto freeTask = js::MakeUnique<jit::IonFreeTask>(std::move(tasks));
+  if (!freeTask) {
+    // Free compilation data on the main thread instead.
+    MOZ_ASSERT(!tasks.empty(), "shouldn't have moved tasks on OOM");
+    jit::FreeIonCompileTasks(tasks);
+    tasks.clearAndFree();
+    return;
+  }
+
+  AutoLockHelperThreadState lock;
+  if (!HelperThreadState().submitTask(std::move(freeTask), lock)) {
+    // If submitTask OOMs, then freeTask hasn't been moved so we can still use
+    // its task list.
+    jit::FreeIonCompileTasks(freeTask->compileTasks());
+  }
+
+  tasks.clearAndFree();
 }
 
 bool GlobalHelperThreadState::submitTask(
-    UniquePtr<jit::IonFreeTask> task, const AutoLockHelperThreadState& locked) {
+    UniquePtr<jit::IonFreeTask>&& task,
+    const AutoLockHelperThreadState& locked) {
   MOZ_ASSERT(isInitialized(locked));
 
   if (!ionFreeList(locked).append(std::move(task))) {
@@ -346,60 +378,87 @@ static bool IonCompileTaskMatches(const CompilationSelector& selector,
   return selector.match(TaskMatches{task});
 }
 
-static void CancelOffThreadIonCompileLocked(const CompilationSelector& selector,
-                                            AutoLockHelperThreadState& lock) {
-  if (!HelperThreadState().isInitialized(lock)) {
+// If we're canceling Ion compilations for a zone/runtime, force a new
+// IonFreeTask even if there are just a few tasks. This lets us free as much
+// memory as possible.
+static bool ShouldForceIonFreeTask(const CompilationSelector& selector) {
+  struct Matcher {
+    bool operator()(JSScript* script) { return false; }
+    bool operator()(Zone* zone) { return true; }
+    bool operator()(ZonesInState zbs) { return true; }
+    bool operator()(JSRuntime* runtime) { return true; }
+  };
+
+  return selector.match(Matcher());
+}
+
+void js::CancelOffThreadIonCompile(const CompilationSelector& selector) {
+  if (!JitDataStructuresExist(selector)) {
     return;
   }
 
-  MOZ_ASSERT(GetSelectorRuntime(selector)->jitRuntime() != nullptr);
-
-  /* Cancel any pending entries for which processing hasn't started. */
-  GlobalHelperThreadState::IonCompileTaskVector& worklist =
-      HelperThreadState().ionWorklist(lock);
-  for (size_t i = 0; i < worklist.length(); i++) {
-    jit::IonCompileTask* task = worklist[i];
-    if (IonCompileTaskMatches(selector, task)) {
-      // Once finished, tasks are added to a Linked list which is
-      // allocated with the IonCompileTask class. The IonCompileTask is
-      // allocated in the LifoAlloc so we need the LifoAlloc to be mutable.
-      worklist[i]->alloc().lifoAlloc()->setReadWrite();
-
-      FinishOffThreadIonCompile(task, lock);
-      HelperThreadState().remove(worklist, &i);
-    }
+  if (jit::IsPortableBaselineInterpreterEnabled()) {
+    return;
   }
 
-  /* Wait for in progress entries to finish up. */
-  bool cancelled;
-  do {
-    cancelled = false;
-    for (auto* helper : HelperThreadState().helperTasks(lock)) {
-      if (!helper->is<jit::IonCompileTask>()) {
-        continue;
-      }
+  jit::JitRuntime* jitRuntime = GetSelectorRuntime(selector)->jitRuntime();
+  MOZ_ASSERT(jitRuntime);
 
-      jit::IonCompileTask* ionCompileTask = helper->as<jit::IonCompileTask>();
-      if (IonCompileTaskMatches(selector, ionCompileTask)) {
-        ionCompileTask->mirGen().cancel();
-        cancelled = true;
+  AutoStartIonFreeTask freeTask(jitRuntime, ShouldForceIonFreeTask(selector));
+
+  {
+    AutoLockHelperThreadState lock;
+    if (!HelperThreadState().isInitialized(lock)) {
+      return;
+    }
+
+    /* Cancel any pending entries for which processing hasn't started. */
+    GlobalHelperThreadState::IonCompileTaskVector& worklist =
+        HelperThreadState().ionWorklist(lock);
+    for (size_t i = 0; i < worklist.length(); i++) {
+      jit::IonCompileTask* task = worklist[i];
+      if (IonCompileTaskMatches(selector, task)) {
+        // Once finished, tasks are added to a Linked list which is
+        // allocated with the IonCompileTask class. The IonCompileTask is
+        // allocated in the LifoAlloc so we need the LifoAlloc to be mutable.
+        worklist[i]->alloc().lifoAlloc()->setReadWrite();
+
+        FinishOffThreadIonCompile(task, lock);
+        HelperThreadState().remove(worklist, &i);
       }
     }
-    if (cancelled) {
-      HelperThreadState().wait(lock);
-    }
-  } while (cancelled);
 
-  /* Cancel code generation for any completed entries. */
-  GlobalHelperThreadState::IonCompileTaskVector& finished =
-      HelperThreadState().ionFinishedList(lock);
-  for (size_t i = 0; i < finished.length(); i++) {
-    jit::IonCompileTask* task = finished[i];
-    if (IonCompileTaskMatches(selector, task)) {
-      JSRuntime* rt = task->script()->runtimeFromAnyThread();
-      rt->jitRuntime()->numFinishedOffThreadTasksRef(lock)--;
-      jit::FinishOffThreadTask(rt, task, lock);
-      HelperThreadState().remove(finished, &i);
+    /* Wait for in progress entries to finish up. */
+    bool cancelled;
+    do {
+      cancelled = false;
+      for (auto* helper : HelperThreadState().helperTasks(lock)) {
+        if (!helper->is<jit::IonCompileTask>()) {
+          continue;
+        }
+
+        jit::IonCompileTask* ionCompileTask = helper->as<jit::IonCompileTask>();
+        if (IonCompileTaskMatches(selector, ionCompileTask)) {
+          ionCompileTask->mirGen().cancel();
+          cancelled = true;
+        }
+      }
+      if (cancelled) {
+        HelperThreadState().wait(lock);
+      }
+    } while (cancelled);
+
+    /* Cancel code generation for any completed entries. */
+    GlobalHelperThreadState::IonCompileTaskVector& finished =
+        HelperThreadState().ionFinishedList(lock);
+    for (size_t i = 0; i < finished.length(); i++) {
+      jit::IonCompileTask* task = finished[i];
+      if (IonCompileTaskMatches(selector, task)) {
+        JSRuntime* rt = task->script()->runtimeFromAnyThread();
+        rt->jitRuntime()->numFinishedOffThreadTasksRef(lock)--;
+        jit::FinishOffThreadTask(rt, freeTask, task);
+        HelperThreadState().remove(finished, &i);
+      }
     }
   }
 
@@ -410,23 +469,18 @@ static void CancelOffThreadIonCompileLocked(const CompilationSelector& selector,
   while (task) {
     jit::IonCompileTask* next = task->getNext();
     if (IonCompileTaskMatches(selector, task)) {
-      jit::FinishOffThreadTask(runtime, task, lock);
+      jit::FinishOffThreadTask(runtime, freeTask, task);
     }
     task = next;
   }
 }
 
-void js::CancelOffThreadIonCompile(const CompilationSelector& selector) {
-  if (!JitDataStructuresExist(selector)) {
-    return;
-  }
-
-  AutoLockHelperThreadState lock;
-  CancelOffThreadIonCompileLocked(selector, lock);
-}
-
 #ifdef DEBUG
 bool js::HasOffThreadIonCompile(Zone* zone) {
+  if (jit::IsPortableBaselineInterpreterEnabled()) {
+    return false;
+  }
+
   AutoLockHelperThreadState lock;
 
   if (!HelperThreadState().isInitialized(lock)) {
@@ -462,12 +516,15 @@ bool js::HasOffThreadIonCompile(Zone* zone) {
   }
 
   JSRuntime* rt = zone->runtimeFromMainThread();
-  jit::IonCompileTask* task = rt->jitRuntime()->ionLazyLinkList(rt).getFirst();
-  while (task) {
-    if (task->script()->zone() == zone) {
-      return true;
+  if (rt->hasJitRuntime()) {
+    jit::IonCompileTask* task =
+        rt->jitRuntime()->ionLazyLinkList(rt).getFirst();
+    while (task) {
+      if (task->script()->zone() == zone) {
+        return true;
+      }
+      task = task->getNext();
     }
-    task = task->getNext();
   }
 
   return false;
@@ -812,7 +869,7 @@ void GlobalHelperThreadState::finish(AutoLockHelperThreadState& lock) {
   while (!freeList.empty()) {
     UniquePtr<jit::IonFreeTask> task = std::move(freeList.back());
     freeList.popBack();
-    jit::FreeIonCompileTask(task->compileTask());
+    jit::FreeIonCompileTasks(task->compileTasks());
   }
 }
 
@@ -993,8 +1050,9 @@ void GlobalHelperThreadState::addSizeOfIncludingThis(
     htStats.ionCompileTask += task->sizeOfExcludingThis(mallocSizeOf);
   }
   for (const auto& task : ionFreeList_) {
-    htStats.ionCompileTask +=
-        task->compileTask()->sizeOfExcludingThis(mallocSizeOf);
+    for (auto* compileTask : task->compileTasks()) {
+      htStats.ionCompileTask += compileTask->sizeOfExcludingThis(mallocSizeOf);
+    }
   }
 
   // Report wasm::CompileTasks on wait lists
@@ -1017,6 +1075,12 @@ size_t GlobalHelperThreadState::maxIonCompilationThreads() const {
     return 1;
   }
   return threadCount;
+}
+
+size_t GlobalHelperThreadState::maxIonFreeThreads() const {
+  // IonFree tasks are low priority. Limit to one thread to help avoid jemalloc
+  // lock contention.
+  return 1;
 }
 
 size_t GlobalHelperThreadState::maxWasmCompilationThreads() const {
@@ -1233,7 +1297,8 @@ HelperThreadTask* GlobalHelperThreadState::maybeGetIonFreeTask(
 
 bool GlobalHelperThreadState::canStartIonFreeTask(
     const AutoLockHelperThreadState& lock) {
-  return !ionFreeList(lock).empty();
+  return !ionFreeList(lock).empty() &&
+         checkTaskThreadLimit(THREAD_TYPE_ION_FREE, maxIonFreeThreads(), lock);
 }
 
 jit::IonCompileTask* GlobalHelperThreadState::highestPriorityPendingIonCompile(

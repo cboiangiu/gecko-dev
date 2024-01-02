@@ -128,6 +128,9 @@ bool wasm::CheckRefType(JSContext* cx, RefType targetType, HandleValue v,
       return CheckFuncRefValue(cx, v, fnval);
     case RefType::Extern:
       return AnyRef::fromJSValue(cx, v, refval);
+    case RefType::Exn:
+      // Break to the non-exposable case
+      break;
     case RefType::Any:
       return CheckAnyRefValue(cx, v, refval);
     case RefType::NoFunc:
@@ -356,6 +359,8 @@ template bool wasm::ToJSValue<DebugCodegenVal>(JSContext* cx, const void* src,
                                                FieldType type,
                                                MutableHandleValue dst,
                                                CoercionLevel level);
+template bool wasm::ToJSValueMayGC<NoDebug>(FieldType type);
+template bool wasm::ToJSValueMayGC<DebugCodegenVal>(FieldType type);
 
 template bool wasm::ToWebAssemblyValue<NoDebug>(JSContext* cx, HandleValue val,
                                                 ValType type, void* loc,
@@ -373,6 +378,8 @@ template bool wasm::ToJSValue<DebugCodegenVal>(JSContext* cx, const void* src,
                                                ValType type,
                                                MutableHandleValue dst,
                                                CoercionLevel level);
+template bool wasm::ToJSValueMayGC<NoDebug>(ValType type);
+template bool wasm::ToJSValueMayGC<DebugCodegenVal>(ValType type);
 
 template <typename Debug = NoDebug>
 bool ToWebAssemblyValue_i8(JSContext* cx, HandleValue val, int8_t* loc) {
@@ -676,6 +683,9 @@ bool wasm::ToWebAssemblyValue(JSContext* cx, HandleValue val, FieldType type,
         case RefType::Extern:
           return ToWebAssemblyValue_externref<Debug>(cx, val, (void**)loc,
                                                      mustWrite64);
+        case RefType::Exn:
+          // Break to the non-exposable case
+          break;
         case RefType::Any:
           return ToWebAssemblyValue_anyref<Debug>(cx, val, (void**)loc,
                                                   mustWrite64);
@@ -836,6 +846,9 @@ bool wasm::ToJSValue(JSContext* cx, const void* src, FieldType type,
         case RefTypeHierarchy::Func:
           return ToJSValue_funcref<Debug>(
               cx, *reinterpret_cast<void* const*>(src), dst);
+        case RefTypeHierarchy::Exn:
+          // Break to the non-exposable case
+          break;
         case RefTypeHierarchy::Extern:
           return ToJSValue_externref<Debug>(
               cx, *reinterpret_cast<void* const*>(src), dst);
@@ -852,9 +865,19 @@ bool wasm::ToJSValue(JSContext* cx, const void* src, FieldType type,
 }
 
 template <typename Debug>
+bool wasm::ToJSValueMayGC(FieldType type) {
+  return type.kind() == FieldType::I64;
+}
+
+template <typename Debug>
 bool wasm::ToJSValue(JSContext* cx, const void* src, ValType type,
                      MutableHandleValue dst, CoercionLevel level) {
   return wasm::ToJSValue(cx, src, FieldType(type.packed()), dst, level);
+}
+
+template <typename Debug>
+bool wasm::ToJSValueMayGC(ValType type) {
+  return wasm::ToJSValueMayGC(FieldType(type.packed()));
 }
 
 /* static */

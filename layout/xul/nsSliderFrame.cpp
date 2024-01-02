@@ -614,6 +614,13 @@ void nsSliderFrame::Reflow(nsPresContext* aPresContext,
     thumbPos.y = NSToCoordRound(pos * mRatio);
   }
 
+  // Same to `snappedThumbLocation` in `nsSliderFrame::CurrentPositionChanged`,
+  // to avoid putting the scroll thumb at subpixel positions which cause
+  // needless invalidations
+  nscoord appUnitsPerPixel = PresContext()->AppUnitsPerDevPixel();
+  thumbPos =
+      ToAppUnits(thumbPos.ToNearestPixels(appUnitsPerPixel), appUnitsPerPixel);
+
   const LogicalPoint logicalPos(wm, thumbPos, availSize);
   // TODO: It seems like a lot of this stuff should really belong in the thumb's
   // reflow code rather than here, but since we rely on the frame tree structure
@@ -774,21 +781,11 @@ nsresult nsSliderFrame::HandleEvent(nsPresContext* aPresContext,
 
     DragThumb(true);
 
-#ifdef MOZ_WIDGET_GTK
-    RefPtr<dom::Element> thumb = thumbFrame->GetContent()->AsElement();
-    thumb->SetAttr(kNameSpaceID_None, nsGkAtoms::active, u"true"_ns, true);
-#endif
-
     if (aEvent->mClass == eTouchEventClass) {
       *aEventStatus = nsEventStatus_eConsumeNoDefault;
     }
 
-    if (isHorizontal)
-      mThumbStart = thumbFrame->GetPosition().x;
-    else
-      mThumbStart = thumbFrame->GetPosition().y;
-
-    mDragStart = pos - mThumbStart;
+    SetupDrag(aEvent, thumbFrame, pos, isHorizontal);
   }
 #ifdef MOZ_WIDGET_GTK
   else if (ShouldScrollForEvent(aEvent) && aEvent->mClass == eMouseEventClass &&
@@ -1073,6 +1070,11 @@ void nsSliderFrame::StartAPZDrag(WidgetGUIEvent* aEvent) {
     return;
   }
 
+  if (aEvent->AsMouseEvent() &&
+      aEvent->AsMouseEvent()->mButton != MouseButton::ePrimary) {
+    return;
+  }
+
   nsIFrame* scrollbarBox = Scrollbar();
   nsContainerFrame* scrollFrame = scrollbarBox->GetParent();
   if (!scrollFrame) {
@@ -1200,28 +1202,7 @@ nsresult nsSliderFrame::StartDrag(Event* aEvent) {
     return NS_OK;
   }
 
-#ifdef MOZ_WIDGET_GTK
-  RefPtr<dom::Element> thumb = thumbFrame->GetContent()->AsElement();
-  thumb->SetAttr(kNameSpaceID_None, nsGkAtoms::active, u"true"_ns, true);
-#endif
-
-  if (isHorizontal)
-    mThumbStart = thumbFrame->GetPosition().x;
-  else
-    mThumbStart = thumbFrame->GetPosition().y;
-
-  mDragStart = pos - mThumbStart;
-
-  mScrollingWithAPZ = false;
-  StartAPZDrag(event);  // sets mScrollingWithAPZ=true if appropriate
-
-#ifdef DEBUG_SLIDER
-  printf("Pressed mDragStart=%d\n", mDragStart);
-#endif
-
-  if (!mScrollingWithAPZ) {
-    SuppressDisplayport();
-  }
+  SetupDrag(event, thumbFrame, pos, isHorizontal);
 
   return NS_OK;
 }
@@ -1233,14 +1214,6 @@ nsresult nsSliderFrame::StopDrag() {
   mScrollingWithAPZ = false;
 
   UnsuppressDisplayport();
-
-#ifdef MOZ_WIDGET_GTK
-  nsIFrame* thumbFrame = mFrames.FirstChild();
-  if (thumbFrame) {
-    RefPtr<dom::Element> thumb = thumbFrame->GetContent()->AsElement();
-    thumb->UnsetAttr(kNameSpaceID_None, nsGkAtoms::active, true);
-  }
-#endif
 
   if (mRepeatDirection) {
     StopRepeat();
@@ -1577,6 +1550,28 @@ void nsSliderFrame::PageScroll(bool aClickAndHold) {
     return;
   }
   PageUpDown(changeDirection);
+}
+
+void nsSliderFrame::SetupDrag(WidgetGUIEvent* aEvent, nsIFrame* aThumbFrame,
+                              nscoord aPos, bool aIsHorizontal) {
+  if (aIsHorizontal) {
+    mThumbStart = aThumbFrame->GetPosition().x;
+  } else {
+    mThumbStart = aThumbFrame->GetPosition().y;
+  }
+
+  mDragStart = aPos - mThumbStart;
+
+  mScrollingWithAPZ = false;
+  StartAPZDrag(aEvent);  // sets mScrollingWithAPZ=true if appropriate
+
+#ifdef DEBUG_SLIDER
+  printf("Pressed mDragStart=%d\n", mDragStart);
+#endif
+
+  if (!mScrollingWithAPZ) {
+    SuppressDisplayport();
+  }
 }
 
 float nsSliderFrame::GetThumbRatio() const {

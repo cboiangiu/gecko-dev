@@ -11,11 +11,11 @@ For scalar T, the result is t * t * (3.0 - 2.0 * t), where t = clamp((x - low) /
 
 import { makeTestGroup } from '../../../../../../common/framework/test_group.js';
 import { GPUTest } from '../../../../../gpu_test.js';
-import { TypeF32 } from '../../../../../util/conversion.js';
-import { smoothStepInterval } from '../../../../../util/f32_interval.js';
-import { sparseF32Range } from '../../../../../util/math.js';
+import { TypeF32, TypeF16 } from '../../../../../util/conversion.js';
+import { FP } from '../../../../../util/floating_point.js';
+import { sparseF32Range, sparseF16Range } from '../../../../../util/math.js';
 import { makeCaseCache } from '../../case_cache.js';
-import { allInputSources, generateTernaryToF32IntervalCases, run } from '../../expression.js';
+import { allInputSources, run } from '../../expression.js';
 
 import { builtin } from './builtin.js';
 
@@ -23,21 +23,39 @@ export const g = makeTestGroup(GPUTest);
 
 export const d = makeCaseCache('smoothstep', {
   f32_const: () => {
-    return generateTernaryToF32IntervalCases(
+    return FP.f32.generateScalarTripleToIntervalCases(
       sparseF32Range(),
       sparseF32Range(),
       sparseF32Range(),
-      'f32-only',
-      smoothStepInterval
+      'finite',
+      FP.f32.smoothStepInterval
     );
   },
   f32_non_const: () => {
-    return generateTernaryToF32IntervalCases(
+    return FP.f32.generateScalarTripleToIntervalCases(
       sparseF32Range(),
       sparseF32Range(),
       sparseF32Range(),
       'unfiltered',
-      smoothStepInterval
+      FP.f32.smoothStepInterval
+    );
+  },
+  f16_const: () => {
+    return FP.f16.generateScalarTripleToIntervalCases(
+      sparseF16Range(),
+      sparseF16Range(),
+      sparseF16Range(),
+      'finite',
+      FP.f16.smoothStepInterval
+    );
+  },
+  f16_non_const: () => {
+    return FP.f16.generateScalarTripleToIntervalCases(
+      sparseF16Range(),
+      sparseF16Range(),
+      sparseF16Range(),
+      'unfiltered',
+      FP.f16.smoothStepInterval
     );
   },
 });
@@ -67,4 +85,10 @@ g.test('f16')
   .params(u =>
     u.combine('inputSource', allInputSources).combine('vectorize', [undefined, 2, 3, 4] as const)
   )
-  .unimplemented();
+  .beforeAllSubcases(t => {
+    t.selectDeviceOrSkipTestCase('shader-f16');
+  })
+  .fn(async t => {
+    const cases = await d.get(t.params.inputSource === 'const' ? 'f16_const' : 'f16_non_const');
+    await run(t, builtin('smoothstep'), [TypeF16, TypeF16, TypeF16], TypeF16, t.params, cases);
+  });

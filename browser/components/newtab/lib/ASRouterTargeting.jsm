@@ -35,6 +35,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   TargetingContext: "resource://messaging-system/targeting/Targeting.sys.mjs",
   TelemetryEnvironment: "resource://gre/modules/TelemetryEnvironment.sys.mjs",
   TelemetrySession: "resource://gre/modules/TelemetrySession.sys.mjs",
+  WindowsLaunchOnLogin: "resource://gre/modules/WindowsLaunchOnLogin.sys.mjs",
 });
 
 XPCOMUtils.defineLazyModuleGetters(lazy, {
@@ -106,12 +107,6 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "isXPIInstallEnabled",
   "xpinstall.enabled",
   true
-);
-XPCOMUtils.defineLazyPreferenceGetter(
-  lazy,
-  "snippetsUserPref",
-  "browser.newtabpage.activity-stream.feeds.snippets",
-  false
 );
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
@@ -704,7 +699,6 @@ const TargetingGetters = {
     return {
       cfrFeatures: lazy.cfrFeaturesUserPref,
       cfrAddons: lazy.cfrAddonsUserPref,
-      snippets: lazy.snippetsUserPref,
     };
   },
   get totalBlockedCount() {
@@ -841,6 +835,13 @@ const TargetingGetters = {
 
   get doesAppNeedPrivatePin() {
     return QueryCache.getters.doesAppNeedPrivatePin.get();
+  },
+
+  get launchOnLoginEnabled() {
+    if (AppConstants.platform !== "win") {
+      return false;
+    }
+    return lazy.WindowsLaunchOnLogin.getLaunchOnLoginEnabled();
   },
 
   /**
@@ -991,6 +992,51 @@ const TargetingGetters = {
     const { attributionData } = this;
 
     return attributionData?.campaign === "migration";
+  },
+
+  /**
+   * The values of the height and width available to the browser to display
+   * web content. The available height and width are each calculated taking
+   * into account the presence of menu bars, docks, and other similar OS elements
+   * @returns {Object} resolution The resolution object containing width and height
+   * @returns {string} resolution.width The available width of the primary monitor
+   * @returns {string} resolution.height The available height of the primary monitor
+   */
+  get primaryResolution() {
+    // Using hidden dom window ensures that we have a window object
+    // to grab a screen from in certain edge cases such as targeting evaluation
+    // during first startup before the browser is available, and in MacOS
+    let window = Services.appShell.hiddenDOMWindow;
+    return {
+      width: window?.screen.availWidth,
+      height: window?.screen.availHeight,
+    };
+  },
+
+  get archBits() {
+    let bits = null;
+    try {
+      bits = Services.sysinfo.getProperty("archbits", null);
+    } catch (_e) {
+      // getProperty can throw if the memsize does not exist
+    }
+    if (bits) {
+      bits = Number(bits);
+    }
+    return bits;
+  },
+
+  get memoryMB() {
+    let memory = null;
+    try {
+      memory = Services.sysinfo.getProperty("memsize", null);
+    } catch (_e) {
+      // getProperty can throw if the memsize does not exist
+    }
+    if (memory) {
+      memory = Number(memory) / 1024 / 1024;
+    }
+    return memory;
   },
 };
 

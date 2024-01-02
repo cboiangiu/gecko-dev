@@ -64,8 +64,6 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
       const dom::GPURequestAdapterOptions& aOptions);
   Maybe<DeviceRequest> AdapterRequestDevice(RawId aSelfId,
                                             const ffi::WGPUDeviceDescriptor&);
-  RawId DeviceCreateBuffer(RawId aSelfId, const dom::GPUBufferDescriptor& aDesc,
-                           ipc::UnsafeSharedMemoryHandle&& aShmem);
   RawId DeviceCreateTexture(RawId aSelfId,
                             const dom::GPUTextureDescriptor& aDesc,
                             Maybe<layers::RemoteTextureOwnerId> aOwnerId);
@@ -103,6 +101,8 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
       const RefPtr<Device>& aDevice,
       const dom::GPUShaderModuleDescriptor& aDesc,
       RefPtr<dom::Promise> aPromise);
+
+  ffi::WGPUClient* GetClient() const { return mClient.get(); }
 
   void DeviceCreateSwapChain(RawId aSelfId, const RGBDescriptor& aRgbDesc,
                              size_t maxBufferCount,
@@ -144,6 +144,8 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
   ipc::IPCResult RecvUncapturedError(Maybe<RawId> aDeviceId,
                                      const nsACString& aMessage);
   ipc::IPCResult RecvDropAction(const ipc::ByteBuf& aByteBuf);
+  ipc::IPCResult RecvDeviceLost(RawId aDeviceId, Maybe<uint8_t> aReason,
+                                const nsACString& aMessage);
   void ActorDestroy(ActorDestroyReason) override;
 };
 

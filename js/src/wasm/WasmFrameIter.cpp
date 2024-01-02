@@ -19,13 +19,13 @@
 #include "wasm/WasmFrameIter.h"
 
 #include "jit/JitFrames.h"
-#include "js/ColumnNumber.h"  // JS::WasmFunctionIndex, LimitedColumnNumberZeroOrigin, JS::TaggedColumnNumberZeroOrigin, JS::TaggedColumnNumberOneOrigin
+#include "js/ColumnNumber.h"  // JS::WasmFunctionIndex, LimitedColumnNumberOneOrigin, JS::TaggedColumnNumberOneOrigin, JS::TaggedColumnNumberOneOrigin
 #include "vm/JitActivation.h"  // js::jit::JitActivation
 #include "vm/JSContext.h"
+#include "wasm/WasmBuiltinModuleGenerated.h"
 #include "wasm/WasmDebugFrame.h"
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmInstanceData.h"
-#include "wasm/WasmIntrinsicGenerated.h"
 #include "wasm/WasmStubs.h"
 
 #include "jit/MacroAssembler-inl.h"
@@ -62,7 +62,6 @@ WasmFrameIter::WasmFrameIter(JitActivation* activation, wasm::Frame* fp)
       fp_(fp ? fp : activation->wasmExitFP()),
       instance_(nullptr),
       unwoundCallerFP_(nullptr),
-      unwoundJitFrameType_(),
       unwind_(Unwind::False),
       unwoundAddressOfReturnAddress_(nullptr),
       resumePCinCurrentFrame_(nullptr) {
@@ -285,21 +284,20 @@ uint32_t WasmFrameIter::funcIndex() const {
 }
 
 unsigned WasmFrameIter::computeLine(
-    JS::TaggedColumnNumberZeroOrigin* column) const {
+    JS::TaggedColumnNumberOneOrigin* column) const {
   if (instance()->isAsmJS()) {
     if (column) {
       *column =
-          JS::TaggedColumnNumberZeroOrigin(JS::LimitedColumnNumberZeroOrigin(
-              JS::WasmFunctionIndex::
-                  DefaultBinarySourceColumnNumberZeroOrigin));
+          JS::TaggedColumnNumberOneOrigin(JS::LimitedColumnNumberOneOrigin(
+              JS::WasmFunctionIndex::DefaultBinarySourceColumnNumberOneOrigin));
     }
     return lineOrBytecode_;
   }
 
   MOZ_ASSERT(!(codeRange_->funcIndex() &
-               JS::TaggedColumnNumberZeroOrigin::WasmFunctionTag));
+               JS::TaggedColumnNumberOneOrigin::WasmFunctionTag));
   if (column) {
-    *column = JS::TaggedColumnNumberZeroOrigin(
+    *column = JS::TaggedColumnNumberOneOrigin(
         JS::WasmFunctionIndex(codeRange_->funcIndex()));
   }
   return lineOrBytecode_;
@@ -315,14 +313,28 @@ void** WasmFrameIter::unwoundAddressOfReturnAddress() const {
 bool WasmFrameIter::debugEnabled() const {
   MOZ_ASSERT(!done());
 
-  // Only non-imported functions can have debug frames.
-  //
   // Metadata::debugEnabled is only set if debugging is actually enabled (both
   // requested, and available via baseline compilation), and Tier::Debug code
   // will be available.
-  return code_->metadata().debugEnabled &&
-         codeRange_->funcIndex() >=
-             code_->metadata(Tier::Debug).funcImports.length();
+  if (!code_->metadata().debugEnabled) {
+    return false;
+  }
+
+  // Only non-imported functions can have debug frames.
+  if (codeRange_->funcIndex() <
+      code_->metadata(Tier::Debug).funcImports.length()) {
+    return false;
+  }
+
+#ifdef ENABLE_WASM_TAIL_CALLS
+  // Debug frame is not present at the return stub.
+  const CallSite* site = code_->lookupCallSite((void*)resumePCinCurrentFrame_);
+  if (site && site->kind() == CallSite::ReturnStub) {
+    return false;
+  }
+#endif
+
+  return true;
 }
 
 DebugFrame* WasmFrameIter::debugFrame() const {
@@ -1782,11 +1794,11 @@ static const char* ThunkedNativeToDescription(SymbolicAddress func) {
       return "call to native array.init_elem function";
     case SymbolicAddress::ArrayCopy:
       return "call to native array.copy function";
-#define OP(op, export, sa_name, abitype, entry, idx) \
+#define VISIT_BUILTIN_FUNC(op, export, sa_name, ...) \
   case SymbolicAddress::sa_name:                     \
-    return "call to native " #op " intrinsic (in wasm)";
-      FOR_EACH_INTRINSIC(OP)
-#undef OP
+    return "call to native " #op " builtin (in wasm)";
+      FOR_EACH_BUILTIN_MODULE_FUNC(VISIT_BUILTIN_FUNC)
+#undef VISIT_BUILTIN_FUNC
 #ifdef WASM_CODEGEN_DEBUG
     case SymbolicAddress::PrintI32:
     case SymbolicAddress::PrintPtr:

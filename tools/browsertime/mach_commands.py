@@ -58,9 +58,10 @@ OPENCV_VERSION = "4.5.4.60"
 
 py3_minor = sys.version_info.minor
 if py3_minor > 7:
-    SCIPY_VERSION = "1.7.3"
-    NUMPY_VERSION = "1.22.0"
-    PILLOW_VERSION = "9.0.0"
+    SCIPY_VERSION = "1.9.3"
+    NUMPY_VERSION = "1.23.5"
+    PILLOW_VERSION = "9.2.0"
+    OPENCV_VERSION = "4.7.0.72"
 
 MIN_NODE_VERSION = "16.0.0"
 
@@ -81,9 +82,9 @@ def silence():
 
 def node_path(command_context):
     import platform
-    from distutils.version import StrictVersion
 
     from mozbuild.nodeutil import find_node_executable
+    from packaging.version import Version
 
     state_dir = command_context._mach_context.state_dir
     cache_path = os.path.join(state_dir, "browsertime", "node-16")
@@ -97,7 +98,7 @@ def node_path(command_context):
     )
 
     # Check standard locations first
-    node_exe = find_node_executable(min_version=StrictVersion(MIN_NODE_VERSION))
+    node_exe = find_node_executable(min_version=Version(MIN_NODE_VERSION))
     if node_exe and (node_exe[0] is not None):
         return os.path.abspath(node_exe[0])
     if not os.path.exists(cache_path):
@@ -308,7 +309,7 @@ def setup_browsertime(
 
         existing_body["devDependencies"]["browsertime"] = new_upstream_url
 
-        updated_body = json.dumps(existing_body)
+        updated_body = json.dumps(existing_body, indent=2)
 
         with open(package_json_path, "w") as f:
             f.write(updated_body)

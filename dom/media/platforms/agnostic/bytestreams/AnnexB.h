@@ -43,6 +43,9 @@ class AnnexB {
   static bool ConvertSampleToAVCC(
       mozilla::MediaRawData* aSample,
       const RefPtr<mozilla::MediaByteBuffer>& aAVCCHeader = nullptr);
+  // Convert a sample from Annex B to HVCC. An HVCC extradata must not be set.
+  static Result<mozilla::Ok, nsresult> ConvertSampleToHVCC(
+      mozilla::MediaRawData* aSample);
 
   // Covert sample to 4 bytes NALU byte stream.
   static mozilla::Result<mozilla::Ok, nsresult> ConvertAVCCTo4BytesAVCC(

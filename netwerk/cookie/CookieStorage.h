@@ -48,6 +48,8 @@ class CookieEntry : public CookieKey {
 
   size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const;
 
+  bool IsPartitioned() const;
+
  private:
   ArrayType mCookies;
 };
@@ -164,7 +166,7 @@ class CookieStorage : public nsIObserver, public nsSupportsWeakReference {
 
   void RemoveCookieFromListInternal(const CookieListIter& aIter);
 
-  virtual void RemoveCookieFromDB(const CookieListIter& aIter) = 0;
+  virtual void RemoveCookieFromDB(const Cookie& aCookie) = 0;
 
   already_AddRefed<nsIArray> PurgeCookiesWithCallbacks(
       int64_t aCurrentTimeInUsec, uint16_t aMaxNumberOfCookies,
@@ -197,6 +199,8 @@ class CookieStorage : public nsIObserver, public nsSupportsWeakReference {
   virtual already_AddRefed<nsIArray> PurgeCookies(int64_t aCurrentTimeInUsec,
                                                   uint16_t aMaxNumberOfCookies,
                                                   int64_t aCookiePurgeAge) = 0;
+
+  virtual void CollectCookieJarSizeData() = 0;
 
   int64_t mCookieOldestTime{INT64_MAX};
 

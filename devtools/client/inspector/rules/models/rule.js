@@ -104,6 +104,7 @@ class Rule {
       getUniqueSelector: this.getUniqueSelector,
       matchedDesugaredSelectors: this.matchedDesugaredSelectors,
       selectors: this.domRule.selectors,
+      selectorWarnings: this.domRule.selectors,
       selectorText: this.keyframes ? this.domRule.keyText : this.selectorText,
     };
   }
@@ -576,7 +577,11 @@ class Rule {
       // However, we must keep all properties in order for rule
       // rewriting to work properly.  So, compute the "invisible"
       // property here.
-      const invisible = this.inherited && !this.cssProperties.isInherited(name);
+      const inherits = prop.isCustomProperty
+        ? prop.inherits
+        : this.cssProperties.isInherited(name);
+      const invisible = this.inherited && !inherits;
+
       const value = store.userProperties.getProperty(
         this.domRule,
         name,

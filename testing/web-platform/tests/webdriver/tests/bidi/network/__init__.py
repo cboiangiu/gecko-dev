@@ -4,7 +4,6 @@ from .. import (
     any_int,
     any_int_or_null,
     any_list,
-    any_list_or_null,
     any_string,
     any_string_or_null,
     recursive_compare,
@@ -203,6 +202,11 @@ def assert_response_data(response_data, expected_response):
         # in assert_request_data
         del expected_response["headers"]
 
+    if response_data["status"] in [401, 407]:
+        assert isinstance(response_data["authChallenges"], list)
+    else:
+        assert "authChallenges" not in response_data
+
     recursive_compare(expected_response, response_data)
 
 
@@ -231,6 +235,7 @@ def assert_response_event(
         redirect_count=redirect_count,
         expected_request=expected_request,
     )
+
 
 # Array of status and status text expected to be available in network events
 HTTP_STATUS_AND_STATUS_TEXT = [
@@ -270,3 +275,19 @@ HTTP_STATUS_AND_STATUS_TEXT = [
     (504, "Gateway Timeout"),
     (505, "HTTP Version Not Supported"),
 ]
+
+PAGE_EMPTY_HTML = "/webdriver/tests/bidi/network/support/empty.html"
+PAGE_EMPTY_IMAGE = "/webdriver/tests/bidi/network/support/empty.png"
+PAGE_EMPTY_SCRIPT = "/webdriver/tests/bidi/network/support/empty.js"
+PAGE_EMPTY_SVG = "/webdriver/tests/bidi/network/support/empty.svg"
+PAGE_EMPTY_TEXT = "/webdriver/tests/bidi/network/support/empty.txt"
+PAGE_OTHER_TEXT = "/webdriver/tests/bidi/network/support/other.txt"
+PAGE_REDIRECT_HTTP_EQUIV = (
+    "/webdriver/tests/bidi/network/support/redirect_http_equiv.html"
+)
+PAGE_REDIRECTED_HTML = "/webdriver/tests/bidi/network/support/redirected.html"
+
+AUTH_REQUIRED_EVENT = "network.authRequired"
+BEFORE_REQUEST_SENT_EVENT = "network.beforeRequestSent"
+RESPONSE_COMPLETED_EVENT = "network.responseCompleted"
+RESPONSE_STARTED_EVENT = "network.responseStarted"

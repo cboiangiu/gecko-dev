@@ -608,17 +608,17 @@ class InitializeVirtualDesktopManagerTask : public Task {
   }
 #endif
 
-  virtual bool Run() override {
+  virtual TaskResult Run() override {
     RefPtr<IVirtualDesktopManager> desktopManager;
     HRESULT hr = ::CoCreateInstance(
         CLSID_VirtualDesktopManager, NULL, CLSCTX_INPROC_SERVER,
         __uuidof(IVirtualDesktopManager), getter_AddRefs(desktopManager));
     if (FAILED(hr)) {
-      return true;
+      return TaskResult::Complete;
     }
 
     gVirtualDesktopManager = desktopManager;
-    return true;
+    return TaskResult::Complete;
   }
 };
 
@@ -2185,13 +2185,13 @@ void nsWindow::AsyncUpdateWorkspaceID(Desktop& aDesktop) {
         : Task(Kind::OffMainThreadOnly, EventQueuePriority::Normal),
           mSelf(aSelf) {}
 
-    bool Run() override {
+    TaskResult Run() override {
       auto desktop = mSelf->mDesktopId.Lock();
       if (desktop->mUpdateIsQueued) {
         DoGetWorkspaceID(mSelf->mWnd, &desktop->mID);
         desktop->mUpdateIsQueued = false;
       }
-      return true;
+      return TaskResult::Complete;
     }
 
 #ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
@@ -2565,8 +2565,8 @@ void nsWindow::UpdateGetWindowInfoCaptionStatus(bool aActiveCaption) {
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 
 void nsWindow::UpdateDarkModeToolbar() {
-  LookAndFeel::EnsureColorSchemesInitialized();
-  BOOL dark = LookAndFeel::ColorSchemeForChrome() == ColorScheme::Dark;
+  PreferenceSheet::EnsureInitialized();
+  BOOL dark = PreferenceSheet::ColorSchemeForChrome() == ColorScheme::Dark;
   DwmSetWindowAttribute(mWnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, &dark,
                         sizeof dark);
   DwmSetWindowAttribute(mWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,

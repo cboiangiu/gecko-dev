@@ -24,6 +24,7 @@ ChromeUtils.defineESModuleGetters(this, {
   BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.sys.mjs",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   Color: "resource://gre/modules/Color.sys.mjs",
+  ContentAnalysis: "resource:///modules/ContentAnalysis.sys.mjs",
   ContextualIdentityService:
     "resource://gre/modules/ContextualIdentityService.sys.mjs",
   CustomizableUI: "resource:///modules/CustomizableUI.sys.mjs",
@@ -64,6 +65,7 @@ ChromeUtils.defineESModuleGetters(this, {
   PromptUtils: "resource://gre/modules/PromptUtils.sys.mjs",
   ReaderMode: "resource://gre/modules/ReaderMode.sys.mjs",
   ResetPBMPanel: "resource:///modules/ResetPBMPanel.sys.mjs",
+  ReportBrokenSite: "resource:///modules/ReportBrokenSite.sys.mjs",
   SafeBrowsing: "resource://gre/modules/SafeBrowsing.sys.mjs",
   Sanitizer: "resource:///modules/Sanitizer.sys.mjs",
   SaveToPocket: "chrome://pocket/content/SaveToPocket.sys.mjs",
@@ -72,7 +74,7 @@ ChromeUtils.defineESModuleGetters(this, {
   SessionStartup: "resource:///modules/sessionstore/SessionStartup.sys.mjs",
   SessionStore: "resource:///modules/sessionstore/SessionStore.sys.mjs",
   ShoppingSidebarParent: "resource:///actors/ShoppingSidebarParent.sys.mjs",
-  ShoppingUtils: "resource:///modules/ShoppingUtils.sys.mjs",
+  ShoppingSidebarManager: "resource:///actors/ShoppingSidebarParent.sys.mjs",
   ShortcutUtils: "resource://gre/modules/ShortcutUtils.sys.mjs",
   SiteDataManager: "resource:///modules/SiteDataManager.sys.mjs",
   SitePermissions: "resource:///modules/SitePermissions.sys.mjs",
@@ -1570,7 +1572,7 @@ var gBrowserInit = {
     updateBookmarkToolbarVisibility();
 
     // Set a sane starting width/height for all resolutions on new profiles.
-    if (ChromeUtils.shouldResistFingerprinting("RoundWindowSize")) {
+    if (ChromeUtils.shouldResistFingerprinting("RoundWindowSize", null)) {
       // When the fingerprinting resistance is enabled, making sure that we don't
       // have a maximum window to interfere with generating rounded window dimensions.
       document.documentElement.setAttribute("sizemode", "normal");
@@ -1755,8 +1757,6 @@ var gBrowserInit = {
 
       // Stop the about:blank load
       gBrowser.stop();
-      // make sure it has a docshell
-      gBrowser.docShell;
 
       // Remove the speculative focus from the urlbar to let the url be formatted.
       gURLBar.removeAttribute("focused");
@@ -1871,12 +1871,14 @@ var gBrowserInit = {
     BrowserOffline.init();
     CanvasPermissionPromptHelper.init();
     WebAuthnPromptHelper.init();
+    ContentAnalysis.initialize();
 
     // Initialize the full zoom setting.
     // We do this before the session restore service gets initialized so we can
     // apply full zoom settings to tabs restored by the session restore service.
     FullZoom.init();
     PanelUI.init(shouldSuppressPopupNotifications);
+    ReportBrokenSite.init(gBrowser);
 
     UpdateUrlbarSearchSplitterState();
 
@@ -2079,7 +2081,7 @@ var gBrowserInit = {
 
     CaptivePortalWatcher.delayedStartup();
 
-    ShoppingSidebarManager.init();
+    ShoppingSidebarManager.ensureInitialized();
 
     SessionStore.promiseAllWindowsRestored.then(() => {
       this._schedulePerWindowIdleTasks();
@@ -2203,6 +2205,7 @@ var gBrowserInit = {
         let globalHistoryOptions = undefined;
         let triggeringRemoteType = undefined;
         let forceAllowDataURI = false;
+        let wasSchemelessInput = false;
         if (window.arguments[1]) {
           if (!(window.arguments[1] instanceof Ci.nsIPropertyBag2)) {
             throw new Error(
@@ -2241,6 +2244,10 @@ var gBrowserInit = {
             forceAllowDataURI =
               extraOptions.getPropertyAsBool("forceAllowDataURI");
           }
+          if (extraOptions.hasKey("wasSchemelessInput")) {
+            wasSchemelessInput =
+              extraOptions.getPropertyAsBool("wasSchemelessInput");
+          }
         }
 
         try {
@@ -2264,6 +2271,7 @@ var gBrowserInit = {
             fromExternal,
             globalHistoryOptions,
             triggeringRemoteType,
+            wasSchemelessInput,
           });
         } catch (e) {
           console.error(e);
@@ -2499,8 +2507,6 @@ var gBrowserInit = {
     NewTabPagePreloading.removePreloadedBrowser(window);
 
     FirefoxViewHandler.uninit();
-
-    ShoppingSidebarManager.uninit();
 
     // Now either cancel delayedStartup, or clean up the services initialized from
     // it.
@@ -4190,7 +4196,7 @@ const BrowserSearch = {
       inBackground = !inBackground;
     }
 
-    let { engine, url } = await BrowserSearch._loadSearch(
+    let { engine } = await BrowserSearch._loadSearch(
       terms,
       where,
       usePrivate,
@@ -4206,8 +4212,7 @@ const BrowserSearch = {
       BrowserSearchTelemetry.recordSearch(
         gBrowser.selectedBrowser,
         engine,
-        "contextmenu",
-        { url }
+        "contextmenu"
       );
     }
   },
@@ -4216,7 +4221,7 @@ const BrowserSearch = {
    * Perform a search initiated from the command line.
    */
   async loadSearchFromCommandLine(terms, usePrivate, triggeringPrincipal, csp) {
-    let { engine, url } = await BrowserSearch._loadSearch(
+    let { engine } = await BrowserSearch._loadSearch(
       terms,
       "current",
       usePrivate,
@@ -4228,8 +4233,7 @@ const BrowserSearch = {
       BrowserSearchTelemetry.recordSearch(
         gBrowser.selectedBrowser,
         engine,
-        "system",
-        { url }
+        "system"
       );
     }
   },
@@ -4259,8 +4263,7 @@ const BrowserSearch = {
     BrowserSearchTelemetry.recordSearch(
       gBrowser.selectedBrowser,
       result.engine,
-      "webextension",
-      { url: result.url }
+      "webextension"
     );
   },
 
@@ -4975,7 +4978,16 @@ var XULBrowserWindow = {
     StatusPanel.update();
   },
 
-  setOverLink(url) {
+  /**
+   * Tells the UI what link we are currently over.
+   *
+   * @param {String} url
+   *   The URL of the link.
+   * @param {Object} [options]
+   *   This is an extension of nsIXULBrowserWindow for JS callers, will be
+   *   passed on to LinkTargetDisplay.
+   */
+  setOverLink(url, options = undefined) {
     if (url) {
       url = Services.textToSubURI.unEscapeURIForUI(url);
 
@@ -4992,7 +5004,14 @@ var XULBrowserWindow = {
     }
 
     this.overLink = url;
-    LinkTargetDisplay.update();
+    LinkTargetDisplay.update(options);
+  },
+
+  onEnterDOMFullscreen() {
+    // Clear the status panel.
+    this.status = "";
+    this.setDefaultStatus("");
+    this.setOverLink("", { hideStatusPanelImmediately: true });
   },
 
   showTooltip(xDevPix, yDevPix, tooltip, direction, browser) {
@@ -5075,7 +5094,10 @@ var XULBrowserWindow = {
 
       this.isBusy = true;
 
-      if (!(aStateFlags & nsIWebProgressListener.STATE_RESTORING)) {
+      if (
+        !(aStateFlags & nsIWebProgressListener.STATE_RESTORING) &&
+        aWebProgress.isTopLevel
+      ) {
         this.busyUI = true;
 
         // XXX: This needs to be based on window activity...
@@ -5142,7 +5164,7 @@ var XULBrowserWindow = {
 
       this.isBusy = false;
 
-      if (this.busyUI) {
+      if (this.busyUI && aWebProgress.isTopLevel) {
         this.busyUI = false;
 
         this.stopCommand.setAttribute("disabled", "true");
@@ -5189,9 +5211,7 @@ var XULBrowserWindow = {
       return;
     }
 
-    this.hideOverLinkImmediately = true;
-    this.setOverLink("");
-    this.hideOverLinkImmediately = false;
+    this.setOverLink("", { hideStatusPanelImmediately: true });
 
     let isSameDocument =
       aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT;
@@ -5377,19 +5397,17 @@ var XULBrowserWindow = {
       }
     }
 
-    if (TranslationsParent.isRestrictedPage(gBrowser.currentURI.scheme)) {
+    if (TranslationsParent.isRestrictedPage(gBrowser)) {
       this._menuItemForTranslations.setAttribute("disabled", "true");
     } else {
       this._menuItemForTranslations.removeAttribute("disabled");
     }
     if (gTranslationsEnabled) {
-      TranslationsParent.onIsTranslationsEngineSupported(isSupported => {
-        if (isSupported) {
-          this._menuItemForTranslations.removeAttribute("hidden");
-        } else {
-          this._menuItemForTranslations.setAttribute("hidden", "true");
-        }
-      });
+      if (TranslationsParent.getIsTranslationsEngineSupported()) {
+        this._menuItemForTranslations.removeAttribute("hidden");
+      } else {
+        this._menuItemForTranslations.setAttribute("hidden", "true");
+      }
     } else {
       this._menuItemForTranslations.setAttribute("hidden", "true");
     }
@@ -5423,6 +5441,53 @@ var XULBrowserWindow = {
       win.gBrowser.contentTitle,
       baseWin
     );
+  },
+
+  /**
+   * Potentially gets a URI for a MozBrowser to be shown to the user in the
+   * identity panel. For browsers whose content does not have a principal,
+   * this tries the precursor. If this is null, we should not override the
+   * browser's currentURI.
+   * @param {MozBrowser} browser
+   *   The browser that we need a URI to show the user in the
+   *   identity panel.
+   * @return nsIURI of the principal for the browser's content if
+   *   the browser's currentURI should not be used, null otherwise.
+   */
+  _securityURIOverride(browser) {
+    let uri = browser.currentURI;
+    if (!uri) {
+      return null;
+    }
+
+    // If the browser's currentURI is sufficiently good that we
+    // do not require an override, bail out here.
+    // browser.currentURI should be used.
+    let { URI_INHERITS_SECURITY_CONTEXT } = Ci.nsIProtocolHandler;
+    if (
+      !(doGetProtocolFlags(uri) & URI_INHERITS_SECURITY_CONTEXT) &&
+      !(uri.scheme == "about" && uri.filePath == "srcdoc") &&
+      !(uri.scheme == "about" && uri.filePath == "blank")
+    ) {
+      return null;
+    }
+
+    let principal = browser.contentPrincipal;
+
+    if (principal.isNullPrincipal) {
+      principal = principal.precursorPrincipal;
+    }
+
+    if (!principal) {
+      return null;
+    }
+
+    // Can't get the original URI for a PDF viewer principal yet.
+    if (principal.originNoSuffix == "resource://pdf.js") {
+      return null;
+    }
+
+    return principal.URI;
   },
 
   asyncUpdateUI() {
@@ -5512,6 +5577,14 @@ var XULBrowserWindow = {
     // depending on the current mixed active content blocking state.
     gURLBar.formatValue();
 
+    // Update the identity panel, making sure we use the precursorPrincipal's
+    // URI where appropriate, for example about:blank windows.
+    let uriOverride = this._securityURIOverride(gBrowser.selectedBrowser);
+    if (uriOverride) {
+      uri = uriOverride;
+      this._state |= Ci.nsIWebProgressListener.STATE_IDENTITY_ASSOCIATED;
+    }
+
     try {
       uri = Services.io.createExposableURI(uri);
     } catch (e) {}
@@ -5577,7 +5650,7 @@ var LinkTargetDisplay = {
     ));
   },
 
-  update() {
+  update({ hideStatusPanelImmediately = false } = {}) {
     if (
       this._contextMenu.state == "open" ||
       this._contextMenu.state == "showing"
@@ -5592,7 +5665,7 @@ var LinkTargetDisplay = {
     window.removeEventListener("mousemove", this, true);
 
     if (!XULBrowserWindow.overLink) {
-      if (XULBrowserWindow.hideOverLinkImmediately) {
+      if (hideStatusPanelImmediately) {
         this._hide();
       } else {
         this._timer = setTimeout(this._hide.bind(this), this.DELAY_HIDE);
@@ -8456,9 +8529,17 @@ var gPrivateBrowsingUI = {
  *        the one from the new URI.
  *        - 'adoptIntoActiveWindow' boolean property to be set to true to adopt the tab
  *        into the current window.
+ * @param aUserContextId
+ *        If not null, will switch to the first found tab having the provided
+ *        userContextId.
  * @return True if an existing tab was found, false otherwise
  */
-function switchToTabHavingURI(aURI, aOpenNew, aOpenParams = {}) {
+function switchToTabHavingURI(
+  aURI,
+  aOpenNew,
+  aOpenParams = {},
+  aUserContextId = null
+) {
   // Certain URLs can be switched to irrespective of the source or destination
   // window being in private browsing mode:
   const kPrivateBrowsingWhitelist = new Set(["about:addons"]);
@@ -8526,6 +8607,10 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams = {}) {
         ignoreQueryString || replaceQueryString,
         ignoreFragmentWhenComparing
       );
+      let browserUserContextId = browser.getAttribute("usercontextid");
+      if (aUserContextId != null && aUserContextId != browserUserContextId) {
+        continue;
+      }
       if (requestedCompare == browserCompare) {
         // If adoptIntoActiveWindow is set, and this is a cross-window switch,
         // adopt the tab into the current window, after the active tab.
@@ -8587,6 +8672,12 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams = {}) {
 
   // No opened tab has that url.
   if (aOpenNew) {
+    if (
+      UrlbarPrefs.get("switchTabs.searchAllContainers") &&
+      aUserContextId != null
+    ) {
+      aOpenParams.userContextId = aUserContextId;
+    }
     if (isBrowserWindow && gBrowser.selectedTab.isEmpty) {
       openTrustedLinkIn(aURI.spec, "current", aOpenParams);
     } else {
@@ -8849,12 +8940,6 @@ var ToolbarIconColor = {
     if (!this._initialized) {
       return;
     }
-    function parseRGB(aColorString) {
-      let rgb = aColorString.match(/^rgba?\((\d+), (\d+), (\d+)/);
-      rgb.shift();
-      return rgb.map(x => parseInt(x));
-    }
-
     switch (reason) {
       case "activate": // falls through
       case "deactivate":
@@ -8892,7 +8977,9 @@ var ToolbarIconColor = {
       // lookup cached luminance value for this toolbar in this window state
       let luminance = cacheKey && cachedLuminances.get(cacheKey);
       if (isNaN(luminance)) {
-        let [r, g, b] = parseRGB(getComputedStyle(toolbar).color);
+        let { r, g, b } = InspectorUtils.colorToRGBA(
+          getComputedStyle(toolbar).color
+        );
         luminance = 0.2125 * r + 0.7154 * g + 0.0721 * b;
         if (cacheKey) {
           cachedLuminances.set(cacheKey, luminance);
@@ -9964,13 +10051,10 @@ var FirefoxViewHandler = {
         this.button?.setAttribute("aria-pressed", selected);
         this._recordViewIfTabSelected();
         this._onTabForegrounded();
-        if (e.target == this.tab) {
-          // If Fx View is opened, add temporary style to make first available tab focusable
-          gBrowser.visibleTabs[0].style["-moz-user-focus"] = "normal";
-        } else {
-          // When Fx View is closed, remove temporary -moz-user-focus style from first available tab
-          gBrowser.visibleTabs[0].style.removeProperty("-moz-user-focus");
-        }
+        // If Fx View is opened, add temporary style to make first available tab focusable
+        // When Fx View is closed, remove temporary -moz-user-focus style from first available tab
+        gBrowser.visibleTabs[0].style.MozUserFocus =
+          e.target == this.tab ? "normal" : "";
         break;
       case "TabClose":
         this.tab = null;
@@ -10057,210 +10141,5 @@ var FirefoxViewHandler = {
   },
   _toggleNotificationDot(shouldShow) {
     this.button?.toggleAttribute("attention", shouldShow);
-  },
-};
-
-var ShoppingSidebarManager = {
-  init() {
-    this._updateVisibility = this._updateVisibility.bind(this);
-    NimbusFeatures.shopping2023.onUpdate(this._updateVisibility);
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "optedInPref",
-      "browser.shopping.experience2023.optedIn",
-      null,
-      this._updateVisibility
-    );
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "isActive",
-      ShoppingSidebarParent.SHOPPING_ACTIVE_PREF,
-      true,
-      this._updateVisibility
-    );
-    this._updateVisibility();
-
-    gBrowser.tabContainer.addEventListener("TabSelect", this);
-    window.addEventListener("visibilitychange", this);
-  },
-
-  uninit() {
-    NimbusFeatures.shopping2023.offUpdate(this._updateVisibility);
-  },
-
-  _updateVisibility() {
-    if (window.closed) {
-      return;
-    }
-    let isPBM = PrivateBrowsingUtils.isWindowPrivate(window);
-
-    // We are forced to cache this value because otherwise we access the pref
-    // too many times.
-    this.inEnabledBranch = NimbusFeatures.shopping2023.getVariable("enabled");
-    this._enabled = this.inEnabledBranch && !isPBM;
-
-    if (!this.isActive) {
-      document.querySelectorAll("shopping-sidebar").forEach(sidebar => {
-        sidebar.hidden = true;
-      });
-    }
-
-    this._maybeToggleButton();
-
-    if (!this._enabled) {
-      document.querySelectorAll("shopping-sidebar").forEach(sidebar => {
-        sidebar.remove();
-      });
-      return;
-    }
-
-    let { selectedBrowser, currentURI } = gBrowser;
-    this._maybeToggleSidebar(selectedBrowser, currentURI, 0);
-  },
-
-  /**
-   * Called by TabsProgressListener whenever any browser navigates from one
-   * URL to another.
-   * Note that this includes hash changes / pushState navigations, because
-   * those can be significant for us.
-   */
-  onLocationChange(aBrowser, aLocationURI, aFlags) {
-    ShoppingUtils.maybeRecordExposure(aLocationURI, aFlags);
-
-    this._maybeToggleButton();
-    this._maybeToggleSidebar(aBrowser, aLocationURI, aFlags);
-  },
-
-  // The strange signature is because this function was formerly the
-  // onLocationChange function, but we needed to differentiate between
-  // calls triggered by actual location changes and calls triggered by
-  // TabSelect. We will refactor this code in bug 1845842.
-  _maybeToggleSidebar(aBrowser, aLocationURI, aFlags) {
-    if (!this._enabled) {
-      return;
-    }
-
-    let browserPanel = gBrowser.getPanel(aBrowser);
-    let sidebar = browserPanel.querySelector("shopping-sidebar");
-    let actor;
-    if (sidebar) {
-      let { browsingContext } = sidebar.querySelector("browser");
-      let global = browsingContext.currentWindowGlobal;
-      actor = global.getExistingActor("ShoppingSidebar");
-    }
-    let isProduct = isProductURL(aLocationURI);
-    if (isProduct && this.isActive) {
-      if (!sidebar) {
-        sidebar = document.createXULElement("shopping-sidebar");
-        sidebar.setAttribute("style", "width: 320px");
-        sidebar.hidden = false;
-        browserPanel.appendChild(sidebar);
-      } else {
-        actor?.updateProductURL(aLocationURI, aFlags);
-        sidebar.hidden = false;
-      }
-    } else if (sidebar && !sidebar.hidden) {
-      actor?.updateProductURL(null);
-      sidebar.hidden = true;
-    }
-
-    this._updateBCActiveness(aBrowser);
-    this._setShoppingButtonState(aBrowser);
-
-    if (
-      sidebar &&
-      !sidebar.hidden &&
-      ShoppingUtils.isProductPageNavigation(aLocationURI, aFlags)
-    ) {
-      Glean.shopping.surfaceDisplayed.record();
-    }
-
-    if (isProduct) {
-      // This is the auto-enable behavior that toggles the `active` pref. It
-      // must be at the end of this function, or 2 sidebars could be created.
-      ShoppingUtils.handleAutoActivateOnProduct();
-
-      if (!this.isActive) {
-        ShoppingUtils.sendTrigger({
-          browser: aBrowser,
-          id: "shoppingProductPageWithSidebarClosed",
-          context: { isSidebarClosing: !!sidebar },
-        });
-      }
-    }
-  },
-
-  _maybeToggleButton() {
-    let optedOut = this.optedInPref === 2;
-    let isPBM = PrivateBrowsingUtils.isWindowPrivate(window);
-    if (this.inEnabledBranch && !isPBM && optedOut) {
-      this._setShoppingButtonState(gBrowser.selectedBrowser);
-    }
-  },
-
-  _updateBCActiveness(aBrowser) {
-    let browserPanel = gBrowser.getPanel(aBrowser);
-    let sidebar = browserPanel.querySelector("shopping-sidebar");
-    if (!sidebar) {
-      return;
-    }
-    let { browsingContext } = sidebar.querySelector("browser");
-    try {
-      // Tell Gecko when the sidebar visibility changes to avoid background
-      // sidebars taking more CPU / energy than needed.
-      browsingContext.isActive =
-        !document.hidden &&
-        aBrowser == gBrowser.selectedBrowser &&
-        !sidebar.hidden;
-    } catch (ex) {
-      // The setter can throw and we do need to run the rest of this
-      // code in that case.
-      console.error(ex);
-    }
-  },
-
-  _setShoppingButtonState(aBrowser) {
-    if (aBrowser !== gBrowser.selectedBrowser) {
-      return;
-    }
-
-    let button = document.getElementById("shopping-sidebar-button");
-
-    let isCurrentBrowserProduct = isProductURL(
-      gBrowser.selectedBrowser.currentURI
-    );
-
-    // Only record if the state of the icon will change from hidden to visible.
-    if (button.hidden && isCurrentBrowserProduct) {
-      Glean.shopping.addressBarIconDisplayed.record();
-    }
-
-    button.hidden = !isCurrentBrowserProduct;
-    button.setAttribute("shoppingsidebaropen", !!this.isActive);
-    let l10nId = this.isActive
-      ? "shopping-sidebar-close-button2"
-      : "shopping-sidebar-open-button2";
-    document.l10n.setAttributes(button, l10nId);
-  },
-
-  handleEvent(event) {
-    switch (event.type) {
-      case "TabSelect": {
-        if (!this._enabled) {
-          return;
-        }
-        this._updateVisibility();
-        if (event.detail?.previousTab.linkedBrowser) {
-          this._updateBCActiveness(event.detail.previousTab.linkedBrowser);
-        }
-        break;
-      }
-      case "visibilitychange": {
-        if (!this._enabled) {
-          return;
-        }
-        this._updateBCActiveness(gBrowser.selectedBrowser);
-      }
-    }
   },
 };

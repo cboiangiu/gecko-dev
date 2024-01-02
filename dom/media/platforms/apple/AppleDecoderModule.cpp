@@ -13,7 +13,6 @@
 #include "MP4Decoder.h"
 #include "VideoUtils.h"
 #include "VPXDecoder.h"
-#include "mozilla/DebugOnly.h"
 #include "mozilla/Logging.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/gfx/gfxVars.h"
@@ -151,6 +150,12 @@ bool AppleDecoderModule::IsVideoSupported(
           CreateDecoderParams::Option::HardwareDecoderNotAllowed)) {
     return false;
   }
+  if (VPXDecoder::IsVP9(aConfig.mMimeType) &&
+      aOptions.contains(CreateDecoderParams::Option::LowLatency)) {
+    // SVC layers are unsupported, and may be used in low latency use cases
+    // (WebRTC).
+    return false;
+  }
   if (aConfig.HasAlpha()) {
     return false;
   }
@@ -168,11 +173,7 @@ bool AppleDecoderModule::IsVideoSupported(
   }
   int profile = aConfig.mExtraData->ElementAt(4);
 
-  if (profile != 0 && profile != 2) {
-    return false;
-  }
-
-  return true;
+  return profile == 0 || profile == 2;
 }
 
 /* static */

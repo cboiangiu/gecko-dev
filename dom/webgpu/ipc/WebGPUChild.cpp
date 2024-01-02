@@ -292,16 +292,6 @@ Maybe<DeviceRequest> WebGPUChild::AdapterRequestDevice(
   return Some(std::move(request));
 }
 
-RawId WebGPUChild::DeviceCreateBuffer(RawId aSelfId,
-                                      const dom::GPUBufferDescriptor& aDesc,
-                                      ipc::UnsafeSharedMemoryHandle&& aShmem) {
-  RawId bufferId = ffi::wgpu_client_make_buffer_id(mClient.get(), aSelfId);
-  if (!SendCreateBuffer(aSelfId, bufferId, aDesc, std::move(aShmem))) {
-    MOZ_CRASH("IPC failure");
-  }
-  return bufferId;
-}
-
 RawId WebGPUChild::DeviceCreateTexture(
     RawId aSelfId, const dom::GPUTextureDescriptor& aDesc,
     Maybe<layers::RemoteTextureOwnerId> aOwnerId) {
@@ -441,13 +431,22 @@ RawId WebGPUChild::DeviceCreateCommandEncoder(
 RawId WebGPUChild::CommandEncoderFinish(
     RawId aSelfId, RawId aDeviceId,
     const dom::GPUCommandBufferDescriptor& aDesc) {
-  if (!SendCommandEncoderFinish(aSelfId, aDeviceId, aDesc)) {
-    MOZ_CRASH("IPC failure");
-  }
   // We rely on knowledge that `CommandEncoderId` == `CommandBufferId`
   // TODO: refactor this to truly behave as if the encoder is being finished,
   // and a new command buffer ID is being created from it. Resolve the ID
   // type aliasing at the place that introduces it: `wgpu-core`.
+
+  if (!IsOpen()) {
+    // The GPU process went down. This will be handled elsewhere so pretend
+    // the message was sent successfully. There is nothing we can do with
+    // the produced handle so all we need is to make sure it isn't invalid
+    // (it must not be zero).
+    return aSelfId;
+  }
+
+  if (!SendCommandEncoderFinish(aSelfId, aDeviceId, aDesc)) {
+    MOZ_CRASH("IPC failure");
+  }
   return aSelfId;
 }
 
@@ -635,15 +634,23 @@ RawId WebGPUChild::DeviceCreateBindGroup(
     e.binding = entry.mBinding;
     if (entry.mResource.IsGPUBufferBinding()) {
       const auto& bufBinding = entry.mResource.GetAsGPUBufferBinding();
+      if (!bufBinding.mBuffer->mId) {
+        NS_WARNING("Buffer binding has no id -- ignoring.");
+        continue;
+      }
       e.buffer = bufBinding.mBuffer->mId;
       e.offset = bufBinding.mOffset;
       e.size = bufBinding.mSize.WasPassed() ? bufBinding.mSize.Value() : 0;
-    }
-    if (entry.mResource.IsGPUTextureView()) {
+    } else if (entry.mResource.IsGPUTextureView()) {
       e.texture_view = entry.mResource.GetAsGPUTextureView()->mId;
-    }
-    if (entry.mResource.IsGPUSampler()) {
+    } else if (entry.mResource.IsGPUSampler()) {
       e.sampler = entry.mResource.GetAsGPUSampler()->mId;
+    } else {
+      // Not a buffer, nor a texture view, nor a sampler. If we pass
+      // this to wgpu_client, it'll panic. Log a warning instead and
+      // ignore this entry.
+      NS_WARNING("Bind group entry has unknown type.");
+      continue;
     }
     entries.AppendElement(e);
   }
@@ -1128,6 +1135,29 @@ ipc::IPCResult WebGPUChild::RecvDropAction(const ipc::ByteBuf& aByteBuf) {
   return IPC_OK();
 }
 
+ipc::IPCResult WebGPUChild::RecvDeviceLost(RawId aDeviceId,
+                                           Maybe<uint8_t> aReason,
+                                           const nsACString& aMessage) {
+  RefPtr<Device> device;
+  const auto itr = mDeviceMap.find(aDeviceId);
+  if (itr != mDeviceMap.end()) {
+    device = itr->second.get();
+    MOZ_ASSERT(device);
+  }
+
+  if (device) {
+    auto message = NS_ConvertUTF8toUTF16(aMessage);
+    if (aReason.isSome()) {
+      dom::GPUDeviceLostReason reason =
+          static_cast<dom::GPUDeviceLostReason>(*aReason);
+      device->ResolveLost(Some(reason), message);
+    } else {
+      device->ResolveLost(Nothing(), message);
+    }
+  }
+  return IPC_OK();
+}
+
 void WebGPUChild::DeviceCreateSwapChain(
     RawId aSelfId, const RGBDescriptor& aRgbDesc, size_t maxBufferCount,
     const layers::RemoteTextureOwnerId& aOwnerId,
@@ -1168,7 +1198,7 @@ void WebGPUChild::RegisterDevice(Device* const aDevice) {
 void WebGPUChild::UnregisterDevice(RawId aId) {
   mDeviceMap.erase(aId);
   if (IsOpen()) {
-    SendDeviceDestroy(aId);
+    SendDeviceDrop(aId);
   }
 }
 
@@ -1192,17 +1222,7 @@ void WebGPUChild::ActorDestroy(ActorDestroyReason) {
       continue;
     }
 
-    RefPtr<dom::Promise> promise = device->MaybeGetLost();
-    if (!promise) {
-      continue;
-    }
-
-    auto info = MakeRefPtr<DeviceLostInfo>(device->GetParentObject(),
-                                           u"WebGPUChild destroyed"_ns);
-
-    // We have strong references to both the Device and the DeviceLostInfo and
-    // the Promise objects on the stack which keeps them alive for long enough.
-    promise->MaybeResolve(info);
+    device->ResolveLost(Nothing(), u"WebGPUChild destroyed"_ns);
   }
 }
 

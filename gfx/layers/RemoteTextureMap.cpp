@@ -15,6 +15,7 @@
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/RemoteTextureHostWrapper.h"
+#include "mozilla/layers/TextureClientSharedSurface.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
 #include "mozilla/StaticPrefs_webgl.h"
 #include "mozilla/webgpu/ExternalTexture.h"
@@ -22,6 +23,11 @@
 #include "SharedSurface.h"
 
 namespace mozilla::layers {
+
+RemoteTextureRecycleBin::RemoteTextureRecycleBin(bool aIsShared)
+    : mIsShared(aIsShared) {}
+
+RemoteTextureRecycleBin::~RemoteTextureRecycleBin() = default;
 
 RemoteTextureOwnerClient::RemoteTextureOwnerClient(
     const base::ProcessId aForPid)
@@ -39,10 +45,19 @@ bool RemoteTextureOwnerClient::IsRegistered(
 }
 
 void RemoteTextureOwnerClient::RegisterTextureOwner(
-    const RemoteTextureOwnerId aOwnerId, bool aIsSyncMode) {
+    const RemoteTextureOwnerId aOwnerId, bool aIsSyncMode,
+    bool aSharedRecycling) {
   MOZ_ASSERT(mOwnerIds.find(aOwnerId) == mOwnerIds.end());
   mOwnerIds.emplace(aOwnerId);
-  RemoteTextureMap::Get()->RegisterTextureOwner(aOwnerId, mForPid, aIsSyncMode);
+  RefPtr<RemoteTextureRecycleBin> recycleBin;
+  if (aSharedRecycling) {
+    if (!mSharedRecycleBin) {
+      mSharedRecycleBin = new RemoteTextureRecycleBin(true);
+    }
+    recycleBin = mSharedRecycleBin;
+  }
+  RemoteTextureMap::Get()->RegisterTextureOwner(aOwnerId, mForPid, aIsSyncMode,
+                                                recycleBin);
 }
 
 void RemoteTextureOwnerClient::UnregisterTextureOwner(
@@ -61,6 +76,12 @@ void RemoteTextureOwnerClient::UnregisterAllTextureOwners() {
   }
   RemoteTextureMap::Get()->UnregisterTextureOwners(mOwnerIds, mForPid);
   mOwnerIds.clear();
+  mSharedRecycleBin = nullptr;
+}
+
+void RemoteTextureOwnerClient::ClearRecycledTextures() {
+  RemoteTextureMap::Get()->ClearRecycledTextures(mOwnerIds, mForPid,
+                                                 mSharedRecycleBin);
 }
 
 void RemoteTextureOwnerClient::NotifyContextLost() {
@@ -68,6 +89,13 @@ void RemoteTextureOwnerClient::NotifyContextLost() {
     return;
   }
   RemoteTextureMap::Get()->NotifyContextLost(mOwnerIds, mForPid);
+}
+
+void RemoteTextureOwnerClient::NotifyContextRestored() {
+  if (mOwnerIds.empty()) {
+    return;
+  }
+  RemoteTextureMap::Get()->NotifyContextRestored(mOwnerIds, mForPid);
 }
 
 void RemoteTextureOwnerClient::PushTexture(
@@ -89,37 +117,43 @@ void RemoteTextureOwnerClient::PushTexture(
 
 void RemoteTextureOwnerClient::PushTexture(
     const RemoteTextureId aTextureId, const RemoteTextureOwnerId aOwnerId,
-    UniquePtr<TextureData>&& aTextureData,
-    const std::shared_ptr<gl::SharedSurface>& aSharedSurface) {
+    const std::shared_ptr<gl::SharedSurface>& aSharedSurface,
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    const SurfaceDescriptor& aDesc) {
   MOZ_ASSERT(IsRegistered(aOwnerId));
 
+  UniquePtr<TextureData> textureData =
+      MakeUnique<SharedSurfaceTextureData>(aDesc, aFormat, aSize);
   RefPtr<TextureHost> textureHost = RemoteTextureMap::CreateRemoteTexture(
-      aTextureData.get(), TextureFlags::DEFAULT);
+      textureData.get(), TextureFlags::DEFAULT);
   if (!textureHost) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
     return;
   }
 
   RemoteTextureMap::Get()->PushTexture(
-      aTextureId, aOwnerId, mForPid, std::move(aTextureData), textureHost,
+      aTextureId, aOwnerId, mForPid, std::move(textureData), textureHost,
       SharedResourceWrapper::SharedSurface(aSharedSurface));
 }
 
 void RemoteTextureOwnerClient::PushTexture(
     const RemoteTextureId aTextureId, const RemoteTextureOwnerId aOwnerId,
-    UniquePtr<TextureData>&& aTextureData,
-    const std::shared_ptr<webgpu::ExternalTexture>& aExternalTexture) {
+    const std::shared_ptr<webgpu::ExternalTexture>& aExternalTexture,
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    const SurfaceDescriptor& aDesc) {
   MOZ_ASSERT(IsRegistered(aOwnerId));
 
+  UniquePtr<TextureData> textureData =
+      MakeUnique<SharedSurfaceTextureData>(aDesc, aFormat, aSize);
   RefPtr<TextureHost> textureHost = RemoteTextureMap::CreateRemoteTexture(
-      aTextureData.get(), TextureFlags::DEFAULT);
+      textureData.get(), TextureFlags::DEFAULT);
   if (!textureHost) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
     return;
   }
 
   RemoteTextureMap::Get()->PushTexture(
-      aTextureId, aOwnerId, mForPid, std::move(aTextureData), textureHost,
+      aTextureId, aOwnerId, mForPid, std::move(textureData), textureHost,
       SharedResourceWrapper::ExternalTexture(aExternalTexture));
 }
 
@@ -159,12 +193,19 @@ void RemoteTextureOwnerClient::GetLatestBufferSnapshot(
                                                    aDestShmem, aSize);
 }
 
+UniquePtr<TextureData> RemoteTextureOwnerClient::GetRecycledTextureData(
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    TextureType aTextureType, RemoteTextureOwnerId aOwnerId) {
+  return RemoteTextureMap::Get()->GetRecycledTextureData(
+      aOwnerId, mForPid, mSharedRecycleBin, aSize, aFormat, aTextureType);
+}
+
 UniquePtr<TextureData>
 RemoteTextureOwnerClient::CreateOrRecycleBufferTextureData(
-    const RemoteTextureOwnerId aOwnerId, gfx::IntSize aSize,
-    gfx::SurfaceFormat aFormat) {
-  auto texture = RemoteTextureMap::Get()->GetRecycledBufferTextureData(
-      aOwnerId, mForPid, aSize, aFormat);
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    RemoteTextureOwnerId aOwnerId) {
+  auto texture =
+      GetRecycledTextureData(aSize, aFormat, TextureType::Unknown, aOwnerId);
   if (texture) {
     return texture;
   }
@@ -178,10 +219,11 @@ RemoteTextureOwnerClient::CreateOrRecycleBufferTextureData(
 
 std::shared_ptr<gl::SharedSurface>
 RemoteTextureOwnerClient::GetRecycledSharedSurface(
-    const RemoteTextureOwnerId aOwnerId) {
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    SurfaceDescriptor::Type aType, RemoteTextureOwnerId aOwnerId) {
   UniquePtr<SharedResourceWrapper> wrapper =
       RemoteTextureMap::Get()->RemoteTextureMap::GetRecycledSharedTexture(
-          aOwnerId, mForPid);
+          aOwnerId, mForPid, mSharedRecycleBin, aSize, aFormat, aType);
   if (!wrapper) {
     return nullptr;
   }
@@ -191,10 +233,11 @@ RemoteTextureOwnerClient::GetRecycledSharedSurface(
 
 std::shared_ptr<webgpu::ExternalTexture>
 RemoteTextureOwnerClient::GetRecycledExternalTexture(
-    const RemoteTextureOwnerId aOwnerId) {
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    SurfaceDescriptor::Type aType, RemoteTextureOwnerId aOwnerId) {
   UniquePtr<SharedResourceWrapper> wrapper =
       RemoteTextureMap::Get()->RemoteTextureMap::GetRecycledSharedTexture(
-          aOwnerId, mForPid);
+          aOwnerId, mForPid, mSharedRecycleBin, aSize, aFormat, aType);
   if (!wrapper) {
     return nullptr;
   }
@@ -217,9 +260,51 @@ void RemoteTextureMap::Shutdown() {
   }
 }
 
-RemoteTextureMap::RemoteTextureMap() : mMonitor("D3D11TextureMap::mMonitor") {}
+RemoteTextureMap::RemoteTextureMap() : mMonitor("RemoteTextureMap::mMonitor") {}
 
 RemoteTextureMap::~RemoteTextureMap() = default;
+
+bool RemoteTextureMap::RecycleTexture(
+    const RefPtr<RemoteTextureRecycleBin>& aRecycleBin,
+    TextureDataHolder& aHolder, bool aExpireOldTextures) {
+  if (!aHolder.mTextureData ||
+      (aHolder.mTextureHost &&
+       aHolder.mTextureHost->GetFlags() & TextureFlags::DUMMY_TEXTURE)) {
+    return false;
+  }
+
+  // Expire old textures so they don't sit in the list forever if unused.
+  constexpr size_t kSharedTextureLimit = 21;
+  constexpr size_t kTextureLimit = 7;
+  while (aRecycleBin->mRecycledTextures.size() >=
+         (aRecycleBin->mIsShared ? kSharedTextureLimit : kTextureLimit)) {
+    if (!aExpireOldTextures) {
+      // There are too many textures, and we can't expire any to make room.
+      return false;
+    }
+    aRecycleBin->mRecycledTextures.pop_front();
+  }
+
+  TextureData::Info info;
+  aHolder.mTextureData->FillInfo(info);
+  RemoteTextureRecycleBin::RecycledTextureHolder recycled{info.size,
+                                                          info.format};
+  if (aHolder.mResourceWrapper) {
+    // Recycle shared texture
+    SurfaceDescriptor desc;
+    if (!aHolder.mTextureData->Serialize(desc)) {
+      return false;
+    }
+    recycled.mType = desc.type();
+    recycled.mResourceWrapper = std::move(aHolder.mResourceWrapper);
+  } else {
+    // Recycle texture data
+    recycled.mTextureData = std::move(aHolder.mTextureData);
+  }
+  aRecycleBin->mRecycledTextures.push_back(std::move(recycled));
+
+  return true;
+}
 
 void RemoteTextureMap::PushTexture(
     const RemoteTextureId aTextureId, const RemoteTextureOwnerId aOwnerId,
@@ -314,17 +399,7 @@ void RemoteTextureMap::PushTexture(
       // used by WebRender anymore.
       if (front->mTextureHost &&
           front->mTextureHost->NumCompositableRefs() == 0) {
-        // Recycle SharedTexture
-        if (front->mResourceWrapper) {
-          owner->mRecycledSharedTextures.push(
-              std::move(front->mResourceWrapper));
-        }
-        // Recycle BufferTextureData
-        if (!(front->mTextureHost->GetFlags() & TextureFlags::DUMMY_TEXTURE) &&
-            (front->mTextureData &&
-             front->mTextureData->AsBufferTextureData())) {
-          owner->mRecycledTextures.push(std::move(front->mTextureData));
-        }
+        owner->mReleasingTextureDataHolders.push_back(std::move(front));
         owner->mUsingTextureDataHolders.pop_front();
       } else if (front->mTextureHost &&
                  front->mTextureHost->NumCompositableRefs() >= 0) {
@@ -335,6 +410,11 @@ void RemoteTextureMap::PushTexture(
         owner->mUsingTextureDataHolders.pop_front();
       }
     }
+    while (!owner->mReleasingTextureDataHolders.empty()) {
+      RecycleTexture(owner->mRecycleBin,
+                     *owner->mReleasingTextureDataHolders.front(), true);
+      owner->mReleasingTextureDataHolders.pop_front();
+    }
   }
 
   const auto info = RemoteTextureInfo(aTextureId, aOwnerId, aForPid);
@@ -343,12 +423,42 @@ void RemoteTextureMap::PushTexture(
   }
 }
 
+bool RemoteTextureMap::RemoveTexture(const RemoteTextureId aTextureId,
+                                     const RemoteTextureOwnerId aOwnerId,
+                                     const base::ProcessId aForPid) {
+  MonitorAutoLock lock(mMonitor);
+
+  auto* owner = GetTextureOwner(lock, aOwnerId, aForPid);
+  if (!owner) {
+    return false;
+  }
+
+  for (auto it = owner->mWaitingTextureDataHolders.begin();
+       it != owner->mWaitingTextureDataHolders.end(); it++) {
+    auto& data = *it;
+    if (data->mTextureId == aTextureId) {
+      if (mRemoteTextureHostWrapperHolders.find(std::pair(
+              aForPid, aTextureId)) != mRemoteTextureHostWrapperHolders.end()) {
+        return false;
+      }
+      if (!RecycleTexture(owner->mRecycleBin, *data, false)) {
+        owner->mReleasingTextureDataHolders.push_back(std::move(data));
+      }
+      owner->mWaitingTextureDataHolders.erase(it);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void RemoteTextureMap::GetLatestBufferSnapshot(
     const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid,
     const mozilla::ipc::Shmem& aDestShmem, const gfx::IntSize& aSize) {
   // The compositable ref of remote texture should be updated in mMonitor lock.
   CompositableTextureHostRef textureHostRef;
   RefPtr<TextureHost> releasingTexture;  // Release outside the monitor
+  std::shared_ptr<webgpu::ExternalTexture> externalTexture;
   {
     MonitorAutoLock lock(mMonitor);
 
@@ -360,18 +470,14 @@ void RemoteTextureMap::GetLatestBufferSnapshot(
 
     // Get latest TextureHost of remote Texture.
     if (owner->mWaitingTextureDataHolders.empty() &&
-        !owner->mLatestTextureHost) {
+        owner->mUsingTextureDataHolders.empty()) {
       return;
     }
-    TextureHost* textureHost =
-        !owner->mWaitingTextureDataHolders.empty()
-            ? owner->mWaitingTextureDataHolders.back()->mTextureHost
-            : owner->mLatestTextureHost;
-    if (!textureHost->AsBufferTextureHost()) {
-      // Only BufferTextureHost is supported for now.
-      MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-      return;
-    }
+    const auto* holder = !owner->mWaitingTextureDataHolders.empty()
+                             ? owner->mWaitingTextureDataHolders.back().get()
+                             : owner->mUsingTextureDataHolders.back().get();
+    TextureHost* textureHost = holder->mTextureHost;
+
     if (textureHost->GetSize() != aSize) {
       MOZ_ASSERT_UNREACHABLE("unexpected to be called");
       return;
@@ -381,17 +487,29 @@ void RemoteTextureMap::GetLatestBufferSnapshot(
       MOZ_ASSERT_UNREACHABLE("unexpected to be called");
       return;
     }
-    // Increment compositable ref to prevent that TextureHost is removed during
-    // memcpy.
-    textureHostRef = textureHost;
+    if (holder->mResourceWrapper &&
+        holder->mResourceWrapper->mExternalTexture) {
+      // Increment compositable ref to prevent that TextureDataHolder is removed
+      // during memcpy.
+      textureHostRef = textureHost;
+      externalTexture = holder->mResourceWrapper->mExternalTexture;
+    } else if (textureHost->AsBufferTextureHost()) {
+      // Increment compositable ref to prevent that TextureDataHolder is removed
+      // during memcpy.
+      textureHostRef = textureHost;
+    } else {
+      MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+      return;
+    }
   }
 
   if (!textureHostRef) {
     return;
   }
 
-  auto* bufferTextureHost = textureHostRef->AsBufferTextureHost();
-  if (bufferTextureHost) {
+  if (externalTexture) {
+    externalTexture->GetSnapshot(aDestShmem, aSize);
+  } else if (auto* bufferTextureHost = textureHostRef->AsBufferTextureHost()) {
     uint32_t stride = ImageDataSerializer::ComputeRGBStride(
         bufferTextureHost->GetFormat(), aSize.width);
     uint32_t bufferSize = stride * aSize.height;
@@ -411,9 +529,9 @@ void RemoteTextureMap::GetLatestBufferSnapshot(
   }
 }
 
-void RemoteTextureMap::RegisterTextureOwner(const RemoteTextureOwnerId aOwnerId,
-                                            const base::ProcessId aForPid,
-                                            bool aIsSyncMode) {
+void RemoteTextureMap::RegisterTextureOwner(
+    const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid,
+    bool aIsSyncMode, const RefPtr<RemoteTextureRecycleBin>& aRecycleBin) {
   MonitorAutoLock lock(mMonitor);
 
   const auto key = std::pair(aForPid, aOwnerId);
@@ -423,21 +541,25 @@ void RemoteTextureMap::RegisterTextureOwner(const RemoteTextureOwnerId aOwnerId,
     return;
   }
   auto owner = MakeUnique<TextureOwner>();
+  if (aRecycleBin) {
+    owner->mRecycleBin = aRecycleBin;
+  } else {
+    owner->mRecycleBin = new RemoteTextureRecycleBin(false);
+  }
   owner->mIsSyncMode = aIsSyncMode;
 
   mTextureOwners.emplace(key, std::move(owner));
 }
 
 void RemoteTextureMap::KeepTextureDataAliveForTextureHostIfNecessary(
-    const MonitorAutoLock& aProofOfLock,
+    const MonitorAutoLock& aProofOfLock, RemoteTextureMap::TextureOwner* aOwner,
     std::deque<UniquePtr<TextureDataHolder>>& aHolders) {
   for (auto& holder : aHolders) {
     // If remote texture of TextureHost still exist, keep
     // SharedResourceWrapper/TextureData alive while the TextureHost is alive.
     if (holder->mTextureHost &&
-        holder->mTextureHost->NumCompositableRefs() >= 0) {
-      RefPtr<nsISerialEventTarget> eventTarget =
-          MessageLoop::current()->SerialEventTarget();
+        holder->mTextureHost->NumCompositableRefs() > 0) {
+      RefPtr<nsISerialEventTarget> eventTarget = GetCurrentSerialEventTarget();
       RefPtr<Runnable> runnable = NS_NewRunnableFunction(
           "RemoteTextureMap::UnregisterTextureOwner::Runnable",
           [data = std::move(holder->mTextureData),
@@ -449,6 +571,8 @@ void RemoteTextureMap::KeepTextureDataAliveForTextureHostIfNecessary(
       };
 
       holder->mTextureHost->SetDestroyedCallback(destroyedCallback);
+    } else {
+      RecycleTexture(aOwner->mRecycleBin, *holder, true);
     }
   }
 }
@@ -470,10 +594,11 @@ void RemoteTextureMap::UnregisterTextureOwner(
       return;
     }
 
-    if (it->second->mLatestTextureHost) {
+    auto* owner = it->second.get();
+    if (owner->mLatestTextureHost) {
       // Release CompositableRef in mMonitor
-      releasingTextures.emplace_back(it->second->mLatestTextureHost);
-      it->second->mLatestTextureHost = nullptr;
+      releasingTextures.emplace_back(owner->mLatestTextureHost);
+      owner->mLatestTextureHost = nullptr;
     }
 
     // mReleasingRenderedTextureHosts and mLatestRenderedTextureHost could
@@ -481,26 +606,28 @@ void RemoteTextureMap::UnregisterTextureOwner(
     // mUsingTextureDataHolders alive. They need to be cleared before
     // KeepTextureDataAliveForTextureHostIfNecessary() call. The function uses
     // NumCompositableRefs().
-    if (!it->second->mReleasingRenderedTextureHosts.empty()) {
+    if (!owner->mReleasingRenderedTextureHosts.empty()) {
       std::transform(
-          it->second->mReleasingRenderedTextureHosts.begin(),
-          it->second->mReleasingRenderedTextureHosts.end(),
+          owner->mReleasingRenderedTextureHosts.begin(),
+          owner->mReleasingRenderedTextureHosts.end(),
           std::back_inserter(releasingTextures),
           [](CompositableTextureHostRef& aRef) { return aRef.get(); });
-      it->second->mReleasingRenderedTextureHosts.clear();
+      owner->mReleasingRenderedTextureHosts.clear();
     }
-    if (it->second->mLatestRenderedTextureHost) {
-      it->second->mLatestRenderedTextureHost = nullptr;
+    if (owner->mLatestRenderedTextureHost) {
+      owner->mLatestRenderedTextureHost = nullptr;
     }
 
-    renderingReadyCallbacks =
-        GetAllRenderingReadyCallbacks(lock, it->second.get());
+    renderingReadyCallbacks = GetAllRenderingReadyCallbacks(lock, owner);
 
     KeepTextureDataAliveForTextureHostIfNecessary(
-        lock, it->second->mWaitingTextureDataHolders);
+        lock, owner, owner->mWaitingTextureDataHolders);
 
     KeepTextureDataAliveForTextureHostIfNecessary(
-        lock, it->second->mUsingTextureDataHolders);
+        lock, owner, owner->mUsingTextureDataHolders);
+
+    KeepTextureDataAliveForTextureHostIfNecessary(
+        lock, owner, owner->mReleasingTextureDataHolders);
 
     releasingOwner = std::move(it->second);
     mTextureOwners.erase(it);
@@ -528,7 +655,7 @@ void RemoteTextureMap::UnregisterTextureOwners(
   {
     MonitorAutoLock lock(mMonitor);
 
-    for (auto id : aOwnerIds) {
+    for (const auto& id : aOwnerIds) {
       const auto key = std::pair(aForPid, id);
       auto it = mTextureOwners.find(key);
       if (it == mTextureOwners.end()) {
@@ -536,10 +663,11 @@ void RemoteTextureMap::UnregisterTextureOwners(
         continue;
       }
 
-      if (it->second->mLatestTextureHost) {
+      auto* owner = it->second.get();
+      if (owner->mLatestTextureHost) {
         // Release CompositableRef in mMonitor
-        releasingTextures.emplace_back(it->second->mLatestTextureHost);
-        it->second->mLatestTextureHost = nullptr;
+        releasingTextures.emplace_back(owner->mLatestTextureHost);
+        owner->mLatestTextureHost = nullptr;
       }
 
       // mReleasingRenderedTextureHosts and mLatestRenderedTextureHost could
@@ -547,26 +675,28 @@ void RemoteTextureMap::UnregisterTextureOwners(
       // in mUsingTextureDataHolders alive. They need to be cleared before
       // KeepTextureDataAliveForTextureHostIfNecessary() call. The function uses
       // NumCompositableRefs().
-      if (!it->second->mReleasingRenderedTextureHosts.empty()) {
+      if (!owner->mReleasingRenderedTextureHosts.empty()) {
         std::transform(
-            it->second->mReleasingRenderedTextureHosts.begin(),
-            it->second->mReleasingRenderedTextureHosts.end(),
+            owner->mReleasingRenderedTextureHosts.begin(),
+            owner->mReleasingRenderedTextureHosts.end(),
             std::back_inserter(releasingTextures),
             [](CompositableTextureHostRef& aRef) { return aRef.get(); });
-        it->second->mReleasingRenderedTextureHosts.clear();
+        owner->mReleasingRenderedTextureHosts.clear();
       }
-      if (it->second->mLatestRenderedTextureHost) {
-        it->second->mLatestRenderedTextureHost = nullptr;
+      if (owner->mLatestRenderedTextureHost) {
+        owner->mLatestRenderedTextureHost = nullptr;
       }
 
-      renderingReadyCallbacks =
-          GetAllRenderingReadyCallbacks(lock, it->second.get());
+      renderingReadyCallbacks = GetAllRenderingReadyCallbacks(lock, owner);
 
       KeepTextureDataAliveForTextureHostIfNecessary(
-          lock, it->second->mWaitingTextureDataHolders);
+          lock, owner, owner->mWaitingTextureDataHolders);
 
       KeepTextureDataAliveForTextureHostIfNecessary(
-          lock, it->second->mUsingTextureDataHolders);
+          lock, owner, owner->mUsingTextureDataHolders);
+
+      KeepTextureDataAliveForTextureHostIfNecessary(
+          lock, owner, owner->mReleasingTextureDataHolders);
 
       releasingOwners.push_back(std::move(it->second));
       mTextureOwners.erase(it);
@@ -582,21 +712,73 @@ void RemoteTextureMap::UnregisterTextureOwners(
   }
 }
 
+void RemoteTextureMap::ClearRecycledTextures(
+    const std::unordered_set<RemoteTextureOwnerId,
+                             RemoteTextureOwnerId::HashFn>& aOwnerIds,
+    const base::ProcessId aForPid,
+    const RefPtr<RemoteTextureRecycleBin>& aRecycleBin) {
+  std::list<RemoteTextureRecycleBin::RecycledTextureHolder>
+      releasingTextures;  // Release outside the monitor
+  {
+    MonitorAutoLock lock(mMonitor);
+
+    if (aRecycleBin) {
+      releasingTextures.splice(releasingTextures.end(),
+                               aRecycleBin->mRecycledTextures);
+    }
+
+    for (const auto& id : aOwnerIds) {
+      const auto key = std::pair(aForPid, id);
+      auto it = mTextureOwners.find(key);
+      if (it == mTextureOwners.end()) {
+        MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+        continue;
+      }
+      auto& owner = it->second;
+
+      releasingTextures.splice(releasingTextures.end(),
+                               owner->mRecycleBin->mRecycledTextures);
+    }
+  }
+}
+
 void RemoteTextureMap::NotifyContextLost(
     const std::unordered_set<RemoteTextureOwnerId,
                              RemoteTextureOwnerId::HashFn>& aOwnerIds,
     const base::ProcessId aForPid) {
   MonitorAutoLock lock(mMonitor);
 
-  for (auto id : aOwnerIds) {
+  for (const auto& id : aOwnerIds) {
     const auto key = std::pair(aForPid, id);
     auto it = mTextureOwners.find(key);
     if (it == mTextureOwners.end()) {
       MOZ_ASSERT_UNREACHABLE("unexpected to be called");
       continue;
     }
-    it->second->mIsContextLost = true;
+    auto& owner = it->second;
+    owner->mIsContextLost = true;
   }
+
+  mMonitor.Notify();
+}
+
+void RemoteTextureMap::NotifyContextRestored(
+    const std::unordered_set<RemoteTextureOwnerId,
+                             RemoteTextureOwnerId::HashFn>& aOwnerIds,
+    const base::ProcessId aForPid) {
+  MonitorAutoLock lock(mMonitor);
+
+  for (const auto& id : aOwnerIds) {
+    const auto key = std::pair(aForPid, id);
+    auto it = mTextureOwners.find(key);
+    if (it == mTextureOwners.end()) {
+      MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+      continue;
+    }
+    auto& owner = it->second;
+    owner->mIsContextLost = false;
+  }
+
   mMonitor.Notify();
 }
 
@@ -648,6 +830,21 @@ void RemoteTextureMap::UpdateTexture(const MonitorAutoLock& aProofOfLock,
 
     UniquePtr<TextureDataHolder> holder = std::move(front);
     aOwner->mWaitingTextureDataHolders.pop_front();
+    // If there are textures not being used by the compositor that will be
+    // obsoleted by this new texture, then queue them for removal later on
+    // the creating thread.
+    while (!aOwner->mUsingTextureDataHolders.empty()) {
+      auto& back = aOwner->mUsingTextureDataHolders.back();
+      if (back->mTextureHost &&
+          back->mTextureHost->NumCompositableRefs() == 0) {
+        if (!RecycleTexture(aOwner->mRecycleBin, *back, false)) {
+          aOwner->mReleasingTextureDataHolders.push_back(std::move(back));
+        }
+        aOwner->mUsingTextureDataHolders.pop_back();
+        continue;
+      }
+      break;
+    }
     aOwner->mUsingTextureDataHolders.push_back(std::move(holder));
   }
 }
@@ -687,7 +884,8 @@ RemoteTextureMap::GetAllRenderingReadyCallbacks(
 
 bool RemoteTextureMap::GetRemoteTextureForDisplayList(
     RemoteTextureHostWrapper* aTextureHostWrapper,
-    std::function<void(const RemoteTextureInfo&)>&& aReadyCallback) {
+    std::function<void(const RemoteTextureInfo&)>&& aReadyCallback,
+    bool aWaitForRemoteTextureOwner) {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
   MOZ_ASSERT(aTextureHostWrapper);
 
@@ -705,8 +903,23 @@ bool RemoteTextureMap::GetRemoteTextureForDisplayList(
     MonitorAutoLock lock(mMonitor);
 
     auto* owner = GetTextureOwner(lock, ownerId, forPid);
-    if (!owner) {
-      return false;
+    // If there is no texture owner yet, then we might need to wait for one to
+    // be created, if allowed. If so, we must also wait for an initial texture
+    // host to be created so we can use it.
+    if (!owner || (aWaitForRemoteTextureOwner && !owner->mLatestTextureHost &&
+                   owner->mWaitingTextureDataHolders.empty())) {
+      if (!aWaitForRemoteTextureOwner) {
+        return false;
+      }
+      const TimeDuration timeout = TimeDuration::FromMilliseconds(10000);
+      while (!owner || (!owner->mLatestTextureHost &&
+                        owner->mWaitingTextureDataHolders.empty())) {
+        CVStatus status = mMonitor.Wait(timeout);
+        if (status == CVStatus::Timeout) {
+          return false;
+        }
+        owner = GetTextureOwner(lock, ownerId, forPid);
+      }
     }
 
     UpdateTexture(lock, owner, textureId);
@@ -859,7 +1072,7 @@ void RemoteTextureMap::ReleaseRemoteTextureHostForDisplayList(
 
 RefPtr<TextureHost> RemoteTextureMap::GetOrCreateRemoteTextureHostWrapper(
     const RemoteTextureId aTextureId, const RemoteTextureOwnerId aOwnerId,
-    const base::ProcessId aForPid, const gfx::IntSize aSize,
+    const base::ProcessId aForPid, const gfx::IntSize& aSize,
     const TextureFlags aFlags) {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
   MonitorAutoLock lock(mMonitor);
@@ -982,8 +1195,8 @@ bool RemoteTextureMap::CheckRemoteTextureReady(
 
   auto* owner = GetTextureOwner(lock, aInfo.mOwnerId, aInfo.mForPid);
   if (!owner || owner->mIsContextLost) {
-    // Owner is already removed or context lost.
-    return false;
+    // Owner is already removed or context lost. No need to wait texture ready.
+    return true;
   }
 
   const auto key = std::pair(aInfo.mForPid, aInfo.mTextureId);
@@ -1079,61 +1292,72 @@ void RemoteTextureMap::SuppressRemoteTextureReadyCheck(
   it->second->mReadyCheckSuppressed = true;
 }
 
-UniquePtr<TextureData> RemoteTextureMap::GetRecycledBufferTextureData(
+UniquePtr<TextureData> RemoteTextureMap::GetRecycledTextureData(
     const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid,
-    gfx::IntSize aSize, gfx::SurfaceFormat aFormat) {
-  std::stack<UniquePtr<TextureData>>
-      releasingTextures;  // Release outside the monitor
-  UniquePtr<TextureData> texture;
-  {
-    MonitorAutoLock lock(mMonitor);
+    const RefPtr<RemoteTextureRecycleBin>& aRecycleBin,
+    const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+    TextureType aTextureType) {
+  MonitorAutoLock lock(mMonitor);
 
-    auto* owner = GetTextureOwner(lock, aOwnerId, aForPid);
-    if (!owner) {
-      return nullptr;
+  RefPtr<RemoteTextureRecycleBin> bin;
+  if (aOwnerId.IsValid()) {
+    if (auto* owner = GetTextureOwner(lock, aOwnerId, aForPid)) {
+      bin = owner->mRecycleBin;
     }
+  } else {
+    bin = aRecycleBin;
+  }
+  if (!bin) {
+    return nullptr;
+  }
 
-    if (owner->mRecycledTextures.empty()) {
-      return nullptr;
-    }
-
-    if (!owner->mRecycledTextures.empty()) {
-      auto& top = owner->mRecycledTextures.top();
-      auto* bufferTexture = top->AsBufferTextureData();
-
-      if (bufferTexture && bufferTexture->GetSize() == aSize &&
-          bufferTexture->GetFormat() == aFormat) {
-        texture = std::move(top);
-        owner->mRecycledTextures.pop();
-      } else {
-        // If size or format are different, release all textures.
-        owner->mRecycledTextures.swap(releasingTextures);
-      }
+  for (auto it = bin->mRecycledTextures.begin();
+       it != bin->mRecycledTextures.end(); it++) {
+    auto& holder = *it;
+    if (holder.mTextureData &&
+        holder.mTextureData->GetTextureType() == aTextureType &&
+        holder.mSize == aSize && holder.mFormat == aFormat) {
+      UniquePtr<TextureData> texture = std::move(holder.mTextureData);
+      bin->mRecycledTextures.erase(it);
+      return texture;
     }
   }
-  return texture;
+
+  return nullptr;
 }
 
 UniquePtr<SharedResourceWrapper> RemoteTextureMap::GetRecycledSharedTexture(
-    const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid) {
-  UniquePtr<SharedResourceWrapper> wrapper;
-  {
-    MonitorAutoLock lock(mMonitor);
+    const RemoteTextureOwnerId aOwnerId, const base::ProcessId aForPid,
+    const RefPtr<RemoteTextureRecycleBin>& aRecycleBin,
+    const gfx::IntSize& aSize, const gfx::SurfaceFormat aFormat,
+    SurfaceDescriptor::Type aType) {
+  MonitorAutoLock lock(mMonitor);
 
-    auto* owner = GetTextureOwner(lock, aOwnerId, aForPid);
-    if (!owner) {
-      return nullptr;
+  RefPtr<RemoteTextureRecycleBin> bin;
+  if (aOwnerId.IsValid()) {
+    if (auto* owner = GetTextureOwner(lock, aOwnerId, aForPid)) {
+      bin = owner->mRecycleBin;
     }
-
-    if (owner->mRecycledSharedTextures.empty()) {
-      return nullptr;
-    }
-
-    auto& front = owner->mRecycledSharedTextures.front();
-    wrapper = std::move(front);
-    owner->mRecycledSharedTextures.pop();
+  } else {
+    bin = aRecycleBin;
   }
-  return wrapper;
+  if (!bin) {
+    return nullptr;
+  }
+
+  for (auto it = bin->mRecycledTextures.begin();
+       it != bin->mRecycledTextures.end(); it++) {
+    auto& holder = *it;
+    if (holder.mType == aType && holder.mSize == aSize &&
+        holder.mFormat == aFormat) {
+      UniquePtr<SharedResourceWrapper> wrapper =
+          std::move(holder.mResourceWrapper);
+      bin->mRecycledTextures.erase(it);
+      return wrapper;
+    }
+  }
+
+  return nullptr;
 }
 
 RemoteTextureMap::TextureOwner* RemoteTextureMap::GetTextureOwner(

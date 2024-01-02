@@ -9,11 +9,12 @@ impl FunctionTracer<'_> {
             for stmt in last {
                 use crate::Statement as St;
                 match *stmt {
-                    St::Emit(ref range) => {
-                        for expr in range.clone() {
-                            log::trace!("trace emitted expression {:?}", expr);
-                            self.trace_expression(expr);
-                        }
+                    St::Emit(ref _range) => {
+                        // If we come across a statement that actually uses an
+                        // expression in this range, it'll get traced from
+                        // there. But since evaluating expressions has no
+                        // effect, we don't need to assume that everything
+                        // emitted is live.
                     }
                     St::Block(ref block) => worklist.push(block),
                     St::If {
@@ -21,7 +22,7 @@ impl FunctionTracer<'_> {
                         ref accept,
                         ref reject,
                     } => {
-                        self.trace_expression(condition);
+                        self.expressions_used.insert(condition);
                         worklist.push(accept);
                         worklist.push(reject);
                     }
@@ -29,7 +30,7 @@ impl FunctionTracer<'_> {
                         selector,
                         ref cases,
                     } => {
-                        self.trace_expression(selector);
+                        self.expressions_used.insert(selector);
                         for case in cases {
                             worklist.push(&case.body);
                         }
@@ -40,15 +41,17 @@ impl FunctionTracer<'_> {
                         break_if,
                     } => {
                         if let Some(break_if) = break_if {
-                            self.trace_expression(break_if);
+                            self.expressions_used.insert(break_if);
                         }
                         worklist.push(body);
                         worklist.push(continuing);
                     }
-                    St::Return { value: Some(value) } => self.trace_expression(value),
+                    St::Return { value: Some(value) } => {
+                        self.expressions_used.insert(value);
+                    }
                     St::Store { pointer, value } => {
-                        self.trace_expression(pointer);
-                        self.trace_expression(value);
+                        self.expressions_used.insert(pointer);
+                        self.expressions_used.insert(value);
                     }
                     St::ImageStore {
                         image,
@@ -56,12 +59,12 @@ impl FunctionTracer<'_> {
                         array_index,
                         value,
                     } => {
-                        self.trace_expression(image);
-                        self.trace_expression(coordinate);
+                        self.expressions_used.insert(image);
+                        self.expressions_used.insert(coordinate);
                         if let Some(array_index) = array_index {
-                            self.trace_expression(array_index);
+                            self.expressions_used.insert(array_index);
                         }
-                        self.trace_expression(value);
+                        self.expressions_used.insert(value);
                     }
                     St::Atomic {
                         pointer,
@@ -69,14 +72,14 @@ impl FunctionTracer<'_> {
                         value,
                         result,
                     } => {
-                        self.trace_expression(pointer);
+                        self.expressions_used.insert(pointer);
                         self.trace_atomic_function(fun);
-                        self.trace_expression(value);
-                        self.trace_expression(result);
+                        self.expressions_used.insert(value);
+                        self.expressions_used.insert(result);
                     }
                     St::WorkGroupUniformLoad { pointer, result } => {
-                        self.trace_expression(pointer);
-                        self.trace_expression(result);
+                        self.expressions_used.insert(pointer);
+                        self.expressions_used.insert(result);
                     }
                     St::Call {
                         function: _,
@@ -84,14 +87,14 @@ impl FunctionTracer<'_> {
                         result,
                     } => {
                         for expr in arguments {
-                            self.trace_expression(*expr);
+                            self.expressions_used.insert(*expr);
                         }
                         if let Some(result) = result {
-                            self.trace_expression(result);
+                            self.expressions_used.insert(result);
                         }
                     }
                     St::RayQuery { query, ref fun } => {
-                        self.trace_expression(query);
+                        self.expressions_used.insert(query);
                         self.trace_ray_query_function(fun);
                     }
 
@@ -111,7 +114,9 @@ impl FunctionTracer<'_> {
         match *fun {
             Af::Exchange {
                 compare: Some(expr),
-            } => self.trace_expression(expr),
+            } => {
+                self.expressions_used.insert(expr);
+            }
             Af::Exchange { compare: None }
             | Af::Add
             | Af::Subtract
@@ -130,17 +135,20 @@ impl FunctionTracer<'_> {
                 acceleration_structure,
                 descriptor,
             } => {
-                self.trace_expression(acceleration_structure);
-                self.trace_expression(descriptor);
+                self.expressions_used.insert(acceleration_structure);
+                self.expressions_used.insert(descriptor);
             }
-            Qf::Proceed { result } => self.trace_expression(result),
+            Qf::Proceed { result } => {
+                self.expressions_used.insert(result);
+            }
             Qf::Terminate => {}
         }
     }
 }
 
 impl FunctionMap {
-    pub fn adjust_block(&self, block: &mut [crate::Statement]) {
+    pub fn adjust_body(&self, function: &mut crate::Function) {
+        let block = &mut function.body;
         let mut worklist: Vec<&mut [crate::Statement]> = vec![block];
         let adjust = |handle: &mut Handle<crate::Expression>| {
             self.expressions.adjust(handle);
@@ -150,17 +158,7 @@ impl FunctionMap {
                 use crate::Statement as St;
                 match *stmt {
                     St::Emit(ref mut range) => {
-                        // Fortunately, compaction doesn't arbitrarily scramble
-                        // the expressions in the arena, but instead preserves
-                        // the order of the elements while squeezing out unused
-                        // ones. That means that a contiguous range in the
-                        // pre-compacted arena always maps to a contiguous range
-                        // in the post-compacted arena. So we just need to
-                        // adjust the endpoints.
-                        let (mut first, mut last) = range.first_and_last().unwrap();
-                        self.expressions.adjust(&mut first);
-                        self.expressions.adjust(&mut last);
-                        *range = crate::arena::Range::new_from_bounds(first, last);
+                        self.expressions.adjust_range(range, &function.expressions);
                     }
                     St::Block(ref mut block) => worklist.push(block),
                     St::If {

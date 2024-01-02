@@ -126,7 +126,7 @@ config = {
                 "--symbols-path=%(symbols_path)s",
                 "--log-errorsummary=%(error_summary_file)s",
                 "--utility-path=tests/bin",
-                "--manifest=tests/xpcshell/tests/xpcshell.ini",
+                "--manifest=tests/xpcshell/tests/xpcshell.toml",
             ],
             "run_filename": "runxpcshelltests.py",
             "testsdir": "xpcshell",
@@ -246,7 +246,9 @@ config = {
                     "machine-configuration.json",
                 ),
                 "--platform=win10-vm"
-                if REQUIRE_GPU and (platform.release() == "10")
+                if REQUIRE_GPU and (platform.uname().version == "10.0.19045")
+                else "--platform=win11-hw"
+                if REQUIRE_GPU and (platform.uname().version == "10.0.22621")
                 else "--platform=win7",
             ],
             "architectures": ["32bit", "64bit"],

@@ -27,6 +27,7 @@
 #include "ImageEncoder.h"
 #include "LayerUserData.h"
 #include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/HTMLVideoElement.h"
@@ -58,7 +59,6 @@
 #include "mozilla/layers/RemoteTextureMap.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/ImageBridgeChild.h"
-#include "mozilla/layers/TextureClientSharedSurface.h"
 #include "mozilla/layers/WebRenderUserData.h"
 #include "mozilla/layers/WebRenderCanvasRenderer.h"
 
@@ -136,16 +136,18 @@ bool WebGLContext::LruPosition::IsInsertedLocked() const {
   return mItr != sLru.end();
 }
 
-WebGLContext::WebGLContext(HostWebGLContext& host,
+WebGLContext::WebGLContext(HostWebGLContext* host,
                            const webgl::InitContextDesc& desc)
     : gl(mGL_OnlyClearInDestroyResourcesAndContext),  // const reference
-      mHost(&host),
+      mHost(host),
       mResistFingerprinting(desc.resistFingerprinting),
       mOptions(desc.options),
       mPrincipalKey(desc.principalKey),
       mContextLossHandler(this),
       mRequestedSize(desc.size) {
-  host.mContext = this;
+  if (host) {
+    host->mContext = this;
+  }
   const FuncScope funcScope(*this, "<Create>");
 }
 
@@ -269,10 +271,11 @@ bool WebGLContext::CreateAndInitGL(
     }
   }
 
-  gl::CreateContextFlags flags = (gl::CreateContextFlags::NO_VALIDATION |
-                                  gl::CreateContextFlags::PREFER_ROBUSTNESS);
-  bool tryNativeGL = true;
-  bool tryANGLE = false;
+  auto flags = gl::CreateContextFlags::PREFER_ROBUSTNESS;
+
+  if (StaticPrefs::webgl_gl_khr_no_error()) {
+    flags |= gl::CreateContextFlags::NO_VALIDATION;
+  }
 
   // -
 
@@ -341,6 +344,9 @@ bool WebGLContext::CreateAndInitGL(
   // --
 
   const bool useEGL = PR_GetEnv("MOZ_WEBGL_FORCE_EGL");
+
+  bool tryNativeGL = true;
+  bool tryANGLE = false;
 
 #ifdef XP_WIN
   tryNativeGL = false;
@@ -508,7 +514,7 @@ UniquePtr<webgl::FormatUsageAuthority> WebGLContext::CreateFormatUsage(
 }
 
 /*static*/
-RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
+RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext* host,
                                           const webgl::InitContextDesc& desc,
                                           webgl::InitContextResult* const out) {
   AUTO_PROFILER_LABEL("WebGLContext::Create", GRAPHICS);
@@ -615,6 +621,15 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
   const auto UploadableSdTypes = [&]() {
     webgl::EnumMask<layers::SurfaceDescriptor::Type> types;
     types[layers::SurfaceDescriptor::TSurfaceDescriptorBuffer] = true;
+    // This is conditional on not using the Compositor thread because we may
+    // need to synchronize with the RDD process over the PVideoBridge protocol
+    // to wait for the texture to be available in the compositor process. We
+    // cannot block on the Compositor thread, so in that configuration, we would
+    // prefer to do the readback from the RDD which is guaranteed to work, and
+    // only block the owning thread for WebGL.
+    types[layers::SurfaceDescriptor::TSurfaceDescriptorGPUVideo] =
+        gfx::gfxVars::UseCanvasRenderThread() ||
+        !gfx::gfxVars::SupportsThreadsafeGL();
     if (webgl->gl->IsANGLE()) {
       types[layers::SurfaceDescriptor::TSurfaceDescriptorD3D10] = true;
       types[layers::SurfaceDescriptor::TSurfaceDescriptorDXGIYCbCr] = true;
@@ -735,7 +750,7 @@ void WebGLContext::LoseLruContextIfLimitExceeded() {
           "Exceeded %u live WebGL contexts for this principal, losing the "
           "least recently used one.",
           maxContextsPerPrincipal);
-      mHost->JsWarning(ToString(text));
+      JsWarning(ToString(text));
 
       for (const auto& context : sLru) {
         if (context->mPrincipalKey == mPrincipalKey) {
@@ -754,7 +769,7 @@ void WebGLContext::LoseLruContextIfLimitExceeded() {
         "Exceeded %u live WebGL contexts, losing the least "
         "recently used one.",
         maxContexts);
-    mHost->JsWarning(ToString(text));
+    JsWarning(ToString(text));
 
     const auto& context = sLru.front();
     MOZ_ASSERT(context != this);
@@ -1046,7 +1061,8 @@ void WebGLContext::Present(WebGLFramebuffer* const xrFb,
 
 void WebGLContext::CopyToSwapChain(WebGLFramebuffer* const srcFb,
                                    const layers::TextureType consumerType,
-                                   const webgl::SwapChainOptions& options) {
+                                   const webgl::SwapChainOptions& options,
+                                   base::ProcessId pid) {
   const FuncScope funcScope(*this, "<CopyToSwapChain>");
   if (IsContextLost()) return;
 
@@ -1069,7 +1085,7 @@ void WebGLContext::CopyToSwapChain(WebGLFramebuffer* const srcFb,
   // read back the WebGL framebuffer into and push it as a remote texture.
   if (useAsync && srcFb->mSwapChain.mFactory->GetConsumerType() ==
                       layers::TextureType::Unknown) {
-    PushRemoteTexture(srcFb, srcFb->mSwapChain, nullptr, options);
+    PushRemoteTexture(srcFb, srcFb->mSwapChain, nullptr, options, pid);
     return;
   }
 
@@ -1093,14 +1109,15 @@ void WebGLContext::CopyToSwapChain(WebGLFramebuffer* const srcFb,
 
   if (useAsync) {
     PushRemoteTexture(srcFb, srcFb->mSwapChain, srcFb->mSwapChain.FrontBuffer(),
-                      options);
+                      options, pid);
   }
 }
 
 bool WebGLContext::PushRemoteTexture(WebGLFramebuffer* fb,
                                      gl::SwapChain& swapChain,
                                      std::shared_ptr<gl::SharedSurface> surf,
-                                     const webgl::SwapChainOptions& options) {
+                                     const webgl::SwapChainOptions& options,
+                                     base::ProcessId pid) {
   const auto onFailure = [&]() -> bool {
     GenerateWarning("Remote texture creation failed.");
     LoseContext();
@@ -1114,11 +1131,12 @@ bool WebGLContext::PushRemoteTexture(WebGLFramebuffer* fb,
   if (!mRemoteTextureOwner) {
     // Ensure we have a remote texture owner client for WebGLParent.
     const auto* outOfProcess = mHost ? mHost->mOwnerData.outOfProcess : nullptr;
-    if (!outOfProcess) {
+    if (outOfProcess) {
+      pid = outOfProcess->OtherPid();
+    } else if (pid == base::kInvalidProcessId) {
       return onFailure();
     }
-    mRemoteTextureOwner =
-        MakeRefPtr<layers::RemoteTextureOwnerClient>(outOfProcess->OtherPid());
+    mRemoteTextureOwner = MakeRefPtr<layers::RemoteTextureOwnerClient>(pid);
   }
 
   layers::RemoteTextureOwnerId ownerId = options.remoteTextureOwnerId;
@@ -1134,7 +1152,8 @@ bool WebGLContext::PushRemoteTexture(WebGLFramebuffer* fb,
     swapChain.SetDestroyedCallback(destroyedCallback);
     mRemoteTextureOwner->RegisterTextureOwner(
         ownerId,
-        /* aIsSyncMode */ gfx::gfxVars::WebglOopAsyncPresentForceSync());
+        /* aIsSyncMode */ gfx::gfxVars::WebglOopAsyncPresentForceSync(),
+        /* aSharedRecycling */ !!fb);
   }
 
   MOZ_ASSERT(fb || surf);
@@ -1160,7 +1179,7 @@ bool WebGLContext::PushRemoteTexture(WebGLFramebuffer* fb,
     // If we can't serialize to a surface descriptor, then we need to create
     // a buffer to read back into that will become the remote texture.
     auto data = mRemoteTextureOwner->CreateOrRecycleBufferTextureData(
-        ownerId, size, surfaceFormat);
+        size, surfaceFormat, ownerId);
     if (!data) {
       gfxCriticalNoteOnce << "Failed to allocate BufferTextureData";
       return onFailure();
@@ -1216,11 +1235,10 @@ bool WebGLContext::PushRemoteTexture(WebGLFramebuffer* fb,
       break;
   }
 
-  auto data =
-      MakeUnique<layers::SharedSurfaceTextureData>(*desc, surfaceFormat, size);
-  mRemoteTextureOwner->PushTexture(textureId, ownerId, std::move(data),
-                                   keepAlive);
-  auto recycledSurface = mRemoteTextureOwner->GetRecycledSharedSurface(ownerId);
+  mRemoteTextureOwner->PushTexture(textureId, ownerId, keepAlive, size,
+                                   surfaceFormat, *desc);
+  auto recycledSurface = mRemoteTextureOwner->GetRecycledSharedSurface(
+      size, surfaceFormat, desc->type(), ownerId);
   if (recycledSurface) {
     swapChain.StoreRecycledSurface(recycledSurface);
   }
@@ -1270,11 +1288,12 @@ Maybe<uvec2> WebGLContext::FrontBufferSnapshotInto(
 
   front->WaitForBufferOwnership();
   front->LockProd();
-  front->ProducerReadAcquire();
-  auto reset = MakeScopeExit([&] {
-    front->ProducerReadRelease();
-    front->UnlockProd();
-  });
+  auto resetLock = MakeScopeExit([&] { front->UnlockProd(); });
+  if (NS_WARN_IF(!front->ProducerReadAcquire())) {
+    gfxCriticalNote << "SnapshotInto: failed to acquire producer";
+    return {};
+  }
+  auto resetProducer = MakeScopeExit([&] { front->ProducerReadRelease(); });
 
   // -
 
@@ -1382,6 +1401,17 @@ void WebGLContext::DummyReadFramebufferOperation() {
   }
 }
 
+dom::ContentParentId WebGLContext::GetContentId() const {
+  const auto* outOfProcess = mHost ? mHost->mOwnerData.outOfProcess : nullptr;
+  if (outOfProcess) {
+    return outOfProcess->mContentId;
+  }
+  if (XRE_IsContentProcess()) {
+    return dom::ContentChild::GetSingleton()->GetID();
+  }
+  return dom::ContentParentId();
+}
+
 bool WebGLContext::Has64BitTimestamps() const {
   // 'sync' provides glGetInteger64v either by supporting ARB_sync, GL3+, or
   // GLES3+.
@@ -1467,7 +1497,9 @@ void WebGLContext::CheckForContextLoss() {
 
 void WebGLContext::HandlePendingContextLoss() {
   mIsContextLost = true;
-  mHost->OnContextLoss(mPendingContextLossReason);
+  if (mHost) {
+    mHost->OnContextLoss(mPendingContextLossReason);
+  }
 }
 
 void WebGLContext::LoseContextLruLocked(const webgl::ContextLossReason reason) {
@@ -1872,6 +1904,17 @@ nsresult webgl::AvailabilityRunnable::Run() {
 
 // -
 
+void WebGLContext::JsWarning(const std::string& text) const {
+  if (mHost) {
+    mHost->JsWarning(text);
+  }
+#ifdef DEBUG
+  if (!mHost) {
+    NS_WARNING(text.c_str());
+  }
+#endif
+}
+
 void WebGLContext::GenerateErrorImpl(const GLenum errOrWarning,
                                      const std::string& text) const {
   auto err = errOrWarning;
@@ -1917,9 +1960,9 @@ void WebGLContext::GenerateErrorImpl(const GLenum errOrWarning,
 
   if (isPerfWarning) {
     const auto perfText = std::string("WebGL perf warning: ") + text;
-    mHost->JsWarning(perfText);
+    JsWarning(perfText);
   } else {
-    mHost->JsWarning(text);
+    JsWarning(text);
   }
   *pNumWarnings += 1;
 
@@ -1928,7 +1971,7 @@ void WebGLContext::GenerateErrorImpl(const GLenum errOrWarning,
         "After reporting %i, no further %s will be reported for this WebGL "
         "context.",
         int(*pNumWarnings), warningsType);
-    mHost->JsWarning(ToString(msg));
+    JsWarning(ToString(msg));
   }
 }
 

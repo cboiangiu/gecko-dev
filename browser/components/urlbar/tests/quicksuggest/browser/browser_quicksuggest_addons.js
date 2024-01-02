@@ -80,12 +80,10 @@ const TEST_MERINO_SUGGESTIONS = [
 add_setup(async function () {
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["browser.urlbar.quicksuggest.enabled", true],
-      ["browser.urlbar.quicksuggest.remoteSettings.enabled", false],
+      // Disable search suggestions so we don't hit the network.
+      ["browser.search.suggest.enabled", false],
     ],
   });
-
-  await SearchTestUtils.installSearchExtension({}, { setAsDefault: true });
 
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
     merinoSuggestions: TEST_MERINO_SUGGESTIONS,
@@ -119,6 +117,12 @@ add_task(async function basic() {
     Assert.equal(description.textContent, merinoSuggestion.description);
     const bottom = row.querySelector(".urlbarView-row-body-bottom");
     Assert.equal(bottom.textContent, "Recommended");
+    Assert.ok(
+      BrowserTestUtils.is_visible(
+        row.querySelector(".urlbarView-title-separator")
+      ),
+      "The title separator should be visible"
+    );
 
     Assert.equal(result.suggestedIndex, 1);
 
@@ -245,37 +249,19 @@ add_task(async function notRelevant() {
   await doDismissTest("not_relevant", false);
 });
 
+// Tests the row/group label.
 add_task(async function rowLabel() {
-  // Addon suggestions should be shown as a best match regardless of
-  // `browser.urlbar.bestMatch.enabled`.
-  const testCases = [
-    {
-      bestMatch: true,
-      expected: "Firefox extension",
-    },
-    {
-      bestMatch: false,
-      expected: "Firefox extension",
-    },
-  ];
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    value: "only match the Merino suggestion",
+  });
+  Assert.equal(UrlbarTestUtils.getResultCount(window), 2);
 
-  for (const { bestMatch, expected } of testCases) {
-    await SpecialPowers.pushPrefEnv({
-      set: [["browser.urlbar.bestMatch.enabled", bestMatch]],
-    });
+  const { element } = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
+  const row = element.row;
+  Assert.equal(row.getAttribute("label"), "Firefox extension");
 
-    await UrlbarTestUtils.promiseAutocompleteResultPopup({
-      window,
-      value: "only match the Merino suggestion",
-    });
-    Assert.equal(UrlbarTestUtils.getResultCount(window), 2);
-
-    const { element } = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
-    const row = element.row;
-    Assert.equal(row.getAttribute("label"), expected);
-
-    await SpecialPowers.popPrefEnv();
-  }
+  await UrlbarTestUtils.promisePopupClose(window);
 });
 
 async function doShowLessFrequently({ input, expected, keepViewOpen = false }) {

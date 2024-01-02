@@ -1,59 +1,64 @@
-From: Michael Froman <mfroman@mozilla.com>
-Date: Thu, 28 Sep 2023 14:12:00 +0000
-Subject: Bug 1832465 - remove libXtst usage from libwebrtc.
- r=ng,webrtc-reviewers
+From: Nico Grunbaum <na-g@nostrum.com>
+Date: Wed, 15 Nov 2023 22:33:00 +0000
+Subject: Bug 1863041 - P0 - add device filter control to
+ RTCCameraVideoCapturer;r=pehrsons,webrtc-reviewers
 
-Differential Revision: https://phabricator.services.mozilla.com/D189386
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/0ec1b33b95dbb2d39355f28b2812fe25b4ad9f20
+I have filed this bug upstream: https://bugs.chromium.org/p/webrtc/issues/detail?id=15639
+
+Differential Revision: https://phabricator.services.mozilla.com/D193172
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/91a763d768b74acc9cf4828f91a86df4a7b092ce
 ---
- modules/desktop_capture/BUILD.gn                      | 3 +++
- modules/desktop_capture/linux/x11/shared_x_display.cc | 4 ++++
- 2 files changed, 7 insertions(+)
+ .../capturer/RTCCameraVideoCapturer.h           |  5 ++++-
+ .../capturer/RTCCameraVideoCapturer.m           | 17 +++++++++++++++--
+ 2 files changed, 19 insertions(+), 3 deletions(-)
 
-diff --git a/modules/desktop_capture/BUILD.gn b/modules/desktop_capture/BUILD.gn
-index c184e2fbbc..bcea427de7 100644
---- a/modules/desktop_capture/BUILD.gn
-+++ b/modules/desktop_capture/BUILD.gn
-@@ -382,6 +382,9 @@ rtc_library("desktop_capture") {
-       "Xrandr",
-       "Xtst",
-     ]
-+    if (build_with_mozilla) {
-+      libs -= [ "Xtst" ]
-+    }
-   }
+diff --git a/sdk/objc/components/capturer/RTCCameraVideoCapturer.h b/sdk/objc/components/capturer/RTCCameraVideoCapturer.h
+index 370bfa70f0..b1f3f64f74 100644
+--- a/sdk/objc/components/capturer/RTCCameraVideoCapturer.h
++++ b/sdk/objc/components/capturer/RTCCameraVideoCapturer.h
+@@ -26,7 +26,10 @@ NS_EXTENSION_UNAVAILABLE_IOS("Camera not available in app extensions.")
+ @property(readonly, nonatomic) AVCaptureSession *captureSession;
  
-   if (!is_win && !is_mac && !rtc_use_x11_extensions && !rtc_use_pipewire &&
-diff --git a/modules/desktop_capture/linux/x11/shared_x_display.cc b/modules/desktop_capture/linux/x11/shared_x_display.cc
-index d690b0e2ba..3f3617b074 100644
---- a/modules/desktop_capture/linux/x11/shared_x_display.cc
-+++ b/modules/desktop_capture/linux/x11/shared_x_display.cc
-@@ -11,7 +11,9 @@
- #include "modules/desktop_capture/linux/x11/shared_x_display.h"
+ // Returns list of available capture devices that support video capture.
+-+ (NSArray<AVCaptureDevice *> *)captureDevices;
+++ (NSArray<AVCaptureDevice *> *)captureDevicesWithDeviceTypes:
++    (NSArray<AVCaptureDeviceType> *)deviceTypes;
++// Returns list of default capture devices types
+++ (NSArray<AVCaptureDeviceType> *)defaultCaptureDeviceTypes;
+ // Returns list of formats that are supported by this class for this device.
+ + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device;
  
- #include <X11/Xlib.h>
-+#if !defined(WEBRTC_MOZILLA_BUILD)
- #include <X11/extensions/XTest.h>
-+#endif
- 
- #include <algorithm>
- 
-@@ -95,6 +97,7 @@ void SharedXDisplay::ProcessPendingXEvents() {
+diff --git a/sdk/objc/components/capturer/RTCCameraVideoCapturer.m b/sdk/objc/components/capturer/RTCCameraVideoCapturer.m
+index e7c47b4e99..1361207faf 100644
+--- a/sdk/objc/components/capturer/RTCCameraVideoCapturer.m
++++ b/sdk/objc/components/capturer/RTCCameraVideoCapturer.m
+@@ -117,14 +117,27 @@ const int64_t kNanosecondsPerSecond = 1000000000;
+   [[NSNotificationCenter defaultCenter] removeObserver:self];
  }
  
- void SharedXDisplay::IgnoreXServerGrabs() {
-+#if !defined(WEBRTC_MOZILLA_BUILD)
-   int test_event_base = 0;
-   int test_error_base = 0;
-   int major = 0;
-@@ -103,6 +106,7 @@ void SharedXDisplay::IgnoreXServerGrabs() {
-                           &minor)) {
-     XTestGrabControl(display(), true);
-   }
-+#endif
+-+ (NSArray<AVCaptureDevice *> *)captureDevices {
+++ (NSArray<AVCaptureDevice *> *)captureDevicesWithDeviceTypes:
++    (NSArray<AVCaptureDeviceType> *)deviceTypes {
+   AVCaptureDeviceDiscoverySession *session = [AVCaptureDeviceDiscoverySession
+-      discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera ]
++      discoverySessionWithDeviceTypes:deviceTypes
+                             mediaType:AVMediaTypeVideo
+                              position:AVCaptureDevicePositionUnspecified];
+   return session.devices;
  }
  
- }  // namespace webrtc
--- 
-2.37.3
-
+++ (NSArray<AVCaptureDeviceType> *)defaultCaptureDeviceTypes {
++  NSArray *types = @[ AVCaptureDeviceTypeBuiltInWideAngleCamera ];
++#if !defined(WEBRTC_IOS)
++  if (@available(macOS 14.0, *)) {
++    types = [types arrayByAddingObject:AVCaptureDeviceTypeExternal];
++  } else {
++    types = [types arrayByAddingObject:AVCaptureDeviceTypeExternalUnknown];
++  }
++#endif
++  return types;
++}
++
+ + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device {
+   // Support opening the device in any format. We make sure it's converted to a format we
+   // can handle, if needed, in the method `-setupVideoDataOutput`.

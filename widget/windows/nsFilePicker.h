@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include "mozilla/MozPromise.h"
 #include "nsIFile.h"
 #include "nsISimpleEnumerator.h"
 #include "nsCOMArray.h"
@@ -20,6 +21,12 @@
 #undef LogSeverity  // SetupAPI.h #defines this as DWORD
 
 class nsILoadContext;
+
+namespace mozilla::widget::filedialog {
+class Command;
+class Results;
+enum class FileDialogType : uint8_t;
+}  // namespace mozilla::widget::filedialog
 
 class nsBaseWinFilePicker : public nsBaseFilePicker {
  public:
@@ -38,8 +45,19 @@ class nsBaseWinFilePicker : public nsBaseFilePicker {
  * Native Windows FileSelector wrapper
  */
 
-class nsFilePicker : public nsBaseWinFilePicker {
+class nsFilePicker final : public nsBaseWinFilePicker {
   virtual ~nsFilePicker() = default;
+
+  template <typename T>
+  using Maybe = mozilla::Maybe<T>;
+  template <typename T>
+  using Result = mozilla::Result<T, HRESULT>;
+  template <typename Res>
+  using FPPromise = RefPtr<mozilla::MozPromise<Maybe<Res>, HRESULT, true>>;
+
+  using Command = mozilla::widget::filedialog::Command;
+  using Results = mozilla::widget::filedialog::Results;
+  using FileDialogType = mozilla::widget::filedialog::FileDialogType;
 
  public:
   nsFilePicker();
@@ -62,10 +80,29 @@ class nsFilePicker : public nsBaseWinFilePicker {
   /* method from nsBaseFilePicker */
   virtual void InitNative(nsIWidget* aParent, const nsAString& aTitle) override;
   nsresult Show(nsIFilePicker::ResultCode* aReturnVal) override;
-  nsresult ShowW(nsIFilePicker::ResultCode* aReturnVal);
   void GetFilterListArray(nsString& aFilterList);
-  bool ShowFolderPicker(const nsString& aInitialDir);
-  bool ShowFilePicker(const nsString& aInitialDir);
+
+  NS_IMETHOD Open(nsIFilePickerShownCallback* aCallback) override;
+
+ private:
+  RefPtr<mozilla::MozPromise<bool, HRESULT, true>> ShowFolderPicker(
+      const nsString& aInitialDir);
+  RefPtr<mozilla::MozPromise<bool, HRESULT, true>> ShowFilePicker(
+      const nsString& aInitialDir);
+
+  // Show the dialog out-of-process.
+  static FPPromise<Results> ShowFilePickerRemote(
+      HWND aParent, FileDialogType type, nsTArray<Command> const& commands);
+  static FPPromise<nsString> ShowFolderPickerRemote(
+      HWND aParent, nsTArray<Command> const& commands);
+
+  // Show the dialog in-process.
+  static FPPromise<Results> ShowFilePickerLocal(
+      HWND aParent, FileDialogType type, nsTArray<Command> const& commands);
+  static FPPromise<nsString> ShowFolderPickerLocal(
+      HWND aParent, nsTArray<Command> const& commands);
+
+ protected:
   void RememberLastUsedDirectory();
   bool IsPrivacyModeEnabled();
   bool IsDefaultPathLink();

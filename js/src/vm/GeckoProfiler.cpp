@@ -29,11 +29,7 @@ GeckoProfilerThread::GeckoProfilerThread()
     : profilingStack_(nullptr), profilingStackIfEnabled_(nullptr) {}
 
 GeckoProfilerRuntime::GeckoProfilerRuntime(JSRuntime* rt)
-    : rt(rt),
-      strings_(),
-      slowAssertions(false),
-      enabled_(false),
-      eventMarker_(nullptr) {
+    : rt(rt), slowAssertions(false), enabled_(false), eventMarker_(nullptr) {
   MOZ_ASSERT(rt != nullptr);
 }
 
@@ -265,8 +261,8 @@ UniqueChars GeckoProfilerRuntime::allocProfileString(JSContext* cx,
   size_t nameLength = 0;
   UniqueChars nameStr;
   JSFunction* func = script->function();
-  if (func && func->displayAtom()) {
-    nameStr = StringToNewUTF8CharsZ(cx, *func->displayAtom());
+  if (func && func->fullDisplayAtom()) {
+    nameStr = StringToNewUTF8CharsZ(cx, *func->fullDisplayAtom());
     if (!nameStr) {
       return nullptr;
     }
@@ -288,7 +284,7 @@ UniqueChars GeckoProfilerRuntime::allocProfileString(JSContext* cx,
   if (hasName || script->isFunction() || script->isForEval()) {
     lineAndColumnLength =
         SprintfLiteral(lineAndColumnStr, "%u:%u", script->lineno(),
-                       script->column().zeroOriginValue());
+                       script->column().oneOriginValue());
     hasLineAndColumn = true;
   }
 

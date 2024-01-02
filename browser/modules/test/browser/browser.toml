@@ -25,13 +25,6 @@ skip-if = ["(debug && os == 'linux' && bits == 64 && os_version == '18.04')"] # 
 
 ["browser_PageActions_newWindow.js"]
 
-["browser_PartnerLinkAttribution.js"]
-support-files = [
-  "search-engines/basic/manifest.json",
-  "search-engines/simple/manifest.json",
-  "search-engines/engines.json",
-]
-
 ["browser_PermissionUI.js"]
 
 ["browser_PermissionUI_prompts.js"]

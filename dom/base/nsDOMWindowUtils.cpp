@@ -24,12 +24,12 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/DocumentInlines.h"
+#include "mozilla/dom/DocumentTimeline.h"
 #include "mozilla/dom/DOMCollectedFramesBinding.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/Touch.h"
 #include "mozilla/dom/UserActivation.h"
 #include "mozilla/EventStateManager.h"
-#include "mozilla/PendingAnimationTracker.h"
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/SharedStyleSheetCache.h"
 #include "mozilla/StaticPrefs_test.h"
@@ -133,6 +133,7 @@
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/IMEContentObserver.h"
 #include "mozilla/WheelHandlingHelper.h"
+#include "mozilla/AnimatedPropertyID.h"
 
 #ifdef XP_WIN
 #  include <direct.h>
@@ -410,12 +411,12 @@ nsDOMWindowUtils::UpdateLayerTree() {
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::GetContentViewerSize(uint32_t* aDisplayWidth,
-                                       uint32_t* aDisplayHeight) {
+nsDOMWindowUtils::GetDocumentViewerSize(uint32_t* aDisplayWidth,
+                                        uint32_t* aDisplayHeight) {
   PresShell* presShell = GetPresShell();
   LayoutDeviceIntSize displaySize;
 
-  if (!presShell || !nsLayoutUtils::GetContentViewerSize(
+  if (!presShell || !nsLayoutUtils::GetDocumentViewerSize(
                         presShell->GetPresContext(), displaySize)) {
     return NS_ERROR_FAILURE;
   }
@@ -782,8 +783,7 @@ nsDOMWindowUtils::SendWheelEvent(float aX, float aY, double aDeltaX,
   wheelEvent.mRefPoint =
       nsContentUtils::ToWidgetPoint(CSSPoint(aX, aY), offset, presContext);
 
-  if (StaticPrefs::test_events_async_enabled() &&
-      StaticPrefs::test_events_async_wheel_enabled()) {
+  if (StaticPrefs::test_events_async_enabled()) {
     widget->DispatchInputEvent(&wheelEvent);
   } else {
     nsEventStatus status = nsEventStatus_eIgnore;
@@ -935,8 +935,7 @@ nsresult nsDOMWindowUtils::SendTouchEventCommon(
     return presShell->HandleEvent(view->GetFrame(), &event, false, &status);
   }
 
-  if (StaticPrefs::test_events_async_enabled() &&
-      StaticPrefs::test_events_async_touch_enabled()) {
+  if (StaticPrefs::test_events_async_enabled()) {
     status = widget->DispatchInputEvent(&event).mContentStatus;
   } else {
     nsresult rv = widget->DispatchEvent(&event, status);
@@ -2807,16 +2806,10 @@ nsDOMWindowUtils::AdvanceTimeAndRefresh(int64_t aMilliseconds) {
   // 'ready' promise before continuing. Then we could remove the special
   // handling here and the code path followed when testing would more closely
   // match the code path during regular operation. Filed as bug 1112957.
-  nsCOMPtr<Document> doc = GetDocument();
-  if (doc) {
-    PendingAnimationTracker* tracker = doc->GetPendingAnimationTracker();
-    if (tracker) {
-      tracker->TriggerPendingAnimationsNow();
-    }
-  }
-
   nsPresContext* presContext = GetPresContext();
   if (presContext) {
+    presContext->Document()->Timeline()->TriggerAllPendingAnimationsNow();
+
     RefPtr<nsRefreshDriver> driver = presContext->RefreshDriver();
     driver->AdvanceTimeAndRefresh(aMilliseconds);
 
@@ -3214,6 +3207,9 @@ nsDOMWindowUtils::GetUnanimatedComputedStyle(Element* aElement,
       nsCSSProps::IsShorthand(propertyID)) {
     return NS_ERROR_INVALID_ARG;
   }
+  AnimatedPropertyID property = propertyID == eCSSPropertyExtra_variable
+                                    ? AnimatedPropertyID(NS_Atomize(aProperty))
+                                    : AnimatedPropertyID(propertyID);
 
   switch (aFlushType) {
     case FLUSH_NONE:
@@ -3245,7 +3241,7 @@ nsDOMWindowUtils::GetUnanimatedComputedStyle(Element* aElement,
   }
 
   RefPtr<StyleAnimationValue> value =
-      Servo_ComputedValues_ExtractAnimationValue(computedStyle, propertyID)
+      Servo_ComputedValues_ExtractAnimationValue(computedStyle, &property)
           .Consume();
   if (!value) {
     return NS_ERROR_FAILURE;
@@ -3254,7 +3250,7 @@ nsDOMWindowUtils::GetUnanimatedComputedStyle(Element* aElement,
     return NS_ERROR_FAILURE;
   }
   nsAutoCString result;
-  Servo_AnimationValue_Serialize(value, propertyID,
+  Servo_AnimationValue_Serialize(value, &property,
                                  presShell->StyleSet()->RawData(), &result);
   CopyUTF8toUTF16(result, aResult);
   return NS_OK;
@@ -3599,21 +3595,22 @@ static void PrepareForFullscreenChange(nsIDocShell* aDocShell,
     rd->ScheduleViewManagerFlush();
   }
   if (!aSize.IsEmpty()) {
-    nsCOMPtr<nsIContentViewer> cv;
-    aDocShell->GetContentViewer(getter_AddRefs(cv));
-    if (cv) {
-      nsIntRect cvBounds;
-      cv->GetBounds(cvBounds);
+    nsCOMPtr<nsIDocumentViewer> viewer;
+    aDocShell->GetDocViewer(getter_AddRefs(viewer));
+    if (viewer) {
+      nsIntRect viewerBounds;
+      viewer->GetBounds(viewerBounds);
       nscoord auPerDev = presShell->GetPresContext()->AppUnitsPerDevPixel();
       if (aOldSize) {
         *aOldSize = LayoutDeviceIntSize::ToAppUnits(
-            LayoutDeviceIntSize::FromUnknownSize(cvBounds.Size()), auPerDev);
+            LayoutDeviceIntSize::FromUnknownSize(viewerBounds.Size()),
+            auPerDev);
       }
       LayoutDeviceIntSize newSize =
           LayoutDeviceIntSize::FromAppUnitsRounded(aSize, auPerDev);
 
-      cvBounds.SizeTo(newSize.width, newSize.height);
-      cv->SetBounds(cvBounds);
+      viewerBounds.SizeTo(newSize.width, newSize.height);
+      viewer->SetBounds(viewerBounds);
     }
   }
 }
@@ -3996,32 +3993,6 @@ nsDOMWindowUtils::GetOMTAStyle(Element* aElement, const nsAString& aProperty,
     return NS_OK;
   }
   aResult.Truncate();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::IsAnimationInPendingTracker(dom::Animation* aAnimation,
-                                              bool* aRetVal) {
-  MOZ_ASSERT(aRetVal);
-
-  if (!aAnimation) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  Document* doc = GetDocument();
-  if (!doc) {
-    *aRetVal = false;
-    return NS_OK;
-  }
-
-  PendingAnimationTracker* tracker = doc->GetPendingAnimationTracker();
-  if (!tracker) {
-    *aRetVal = false;
-    return NS_OK;
-  }
-
-  *aRetVal = tracker->IsWaitingToPlay(*aAnimation) ||
-             tracker->IsWaitingToPause(*aAnimation);
   return NS_OK;
 }
 

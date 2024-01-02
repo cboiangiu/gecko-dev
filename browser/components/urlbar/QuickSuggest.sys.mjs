@@ -7,6 +7,7 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
+  rawSuggestionUrlMatches: "resource://gre/modules/RustSuggest.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
 });
@@ -148,6 +149,16 @@ class _QuickSuggest {
    */
   get weather() {
     return this.#features.Weather;
+  }
+
+  /**
+   * @returns {Iterator}
+   *   An iterator over the names of all Rust suggestion types ("Adm",
+   *   "Wikipedia", etc.) that are managed by registered features (as defined by
+   *   `feature.rustSuggestionTypes`).
+   */
+  get registeredRustSuggestionTypes() {
+    return this.#featuresByRustSuggestionType.keys();
   }
 
   get logger() {
@@ -319,6 +330,11 @@ class _QuickSuggest {
       return false;
     }
 
+    if (result.payload.source == "rust") {
+      // The Rust implementation has its own equivalence function.
+      return lazy.rawSuggestionUrlMatches(result.payload.originalUrl, url);
+    }
+
     // If the result URL doesn't have a timestamp, then do a straight string
     // comparison.
     let { urlTimestampIndex } = result.payload;
@@ -458,7 +474,10 @@ class _QuickSuggest {
       this.ensureExposureEventRecorded();
     }
 
-    if (!lazy.UrlbarPrefs.get("quickSuggestShouldShowOnboardingDialog")) {
+    if (
+      !lazy.UrlbarPrefs.get("quickSuggestShouldShowOnboardingDialog") ||
+      lazy.UrlbarPrefs.get("quicksuggest.contextualOptIn")
+    ) {
       return false;
     }
 

@@ -397,8 +397,7 @@ void AnimationInfo::AddAnimationForProperty(
     Send aSendFlag) {
   MOZ_ASSERT(aAnimation->GetEffect(),
              "Should not be adding an animation without an effect");
-  MOZ_ASSERT(!aAnimation->GetCurrentOrPendingStartTime().IsNull() ||
-                 !aAnimation->IsPlaying() ||
+  MOZ_ASSERT(!aAnimation->GetStartTime().IsNull() || !aAnimation->IsPlaying() ||
                  (aAnimation->GetTimeline() &&
                   aAnimation->GetTimeline()->TracksWallclockTime()),
              "If the animation has an unresolved start time it should either"
@@ -435,8 +434,7 @@ void AnimationInfo::AddAnimationForProperty(
           ? TimeStamp()
           : aAnimation->GetTimeline()->ToTimeStamp(TimeDuration());
 
-  dom::Nullable<TimeDuration> startTime =
-      aAnimation->GetCurrentOrPendingStartTime();
+  dom::Nullable<TimeDuration> startTime = aAnimation->GetStartTime();
   if (startTime.IsNull()) {
     animation->startTime() = Nothing();
   } else {
@@ -455,7 +453,9 @@ void AnimationInfo::AddAnimationForProperty(
       static_cast<float>(computedTiming.mIterationStart);
   animation->direction() = static_cast<uint8_t>(timing.Direction());
   animation->fillMode() = static_cast<uint8_t>(computedTiming.mFill);
-  animation->property() = aProperty.mProperty;
+  MOZ_ASSERT(!aProperty.mProperty.IsCustom(),
+             "We don't animate custom properties in the compositor");
+  animation->property() = aProperty.mProperty.mID;
   animation->playbackRate() =
       static_cast<float>(aAnimation->CurrentOrPendingPlaybackRate());
   animation->previousPlaybackRate() =
@@ -480,7 +480,7 @@ void AnimationInfo::AddAnimationForProperty(
       aAnimation->GetEffect()->AsKeyframeEffect()->BaseStyle(
           aProperty.mProperty);
   if (!baseStyle.IsNull()) {
-    SetAnimatable(aProperty.mProperty, baseStyle, aFrame, refBox,
+    SetAnimatable(aProperty.mProperty.mID, baseStyle, aFrame, refBox,
                   animation->baseStyle());
   } else {
     animation->baseStyle() = null_t();
@@ -490,9 +490,9 @@ void AnimationInfo::AddAnimationForProperty(
     const AnimationPropertySegment& segment = aProperty.mSegments[segIdx];
 
     AnimationSegment* animSegment = animation->segments().AppendElement();
-    SetAnimatable(aProperty.mProperty, segment.mFromValue, aFrame, refBox,
+    SetAnimatable(aProperty.mProperty.mID, segment.mFromValue, aFrame, refBox,
                   animSegment->startState());
-    SetAnimatable(aProperty.mProperty, segment.mToValue, aFrame, refBox,
+    SetAnimatable(aProperty.mProperty.mID, segment.mToValue, aFrame, refBox,
                   animSegment->endState());
 
     animSegment->startPortion() = segment.mFromKey;
@@ -543,14 +543,16 @@ GroupAnimationsByProperty(const nsTArray<RefPtr<dom::Animation>>& aAnimations,
     const dom::KeyframeEffect* effect = anim->GetEffect()->AsKeyframeEffect();
     MOZ_ASSERT(effect);
     for (const AnimationProperty& property : effect->Properties()) {
+      // TODO(zrhoffman, bug 1869475): Handle custom properties
       if (!aPropertySet.HasProperty(property.mProperty)) {
         continue;
       }
 
-      auto animsForPropertyPtr = groupedAnims.lookupForAdd(property.mProperty);
+      auto animsForPropertyPtr =
+          groupedAnims.lookupForAdd(property.mProperty.mID);
       if (!animsForPropertyPtr) {
         DebugOnly<bool> rv =
-            groupedAnims.add(animsForPropertyPtr, property.mProperty,
+            groupedAnims.add(animsForPropertyPtr, property.mProperty.mID,
                              nsTArray<RefPtr<dom::Animation>>());
         MOZ_ASSERT(rv, "Should have enough memory");
       }
@@ -577,7 +579,8 @@ bool AnimationInfo::AddAnimationsForProperty(
     MOZ_ASSERT(keyframeEffect,
                "A playing animation should have a keyframe effect");
     const AnimationProperty* property =
-        keyframeEffect->GetEffectiveAnimationOfProperty(aProperty, *aEffects);
+        keyframeEffect->GetEffectiveAnimationOfProperty(
+            AnimatedPropertyID(aProperty), *aEffects);
     if (!property) {
       continue;
     }

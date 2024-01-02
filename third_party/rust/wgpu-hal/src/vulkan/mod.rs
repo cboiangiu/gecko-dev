@@ -31,19 +31,28 @@ mod conv;
 mod device;
 mod instance;
 
-use std::{borrow::Borrow, ffi::CStr, fmt, num::NonZeroU32, sync::Arc};
+use std::{
+    borrow::Borrow,
+    ffi::CStr,
+    fmt,
+    num::NonZeroU32,
+    sync::{
+        atomic::{AtomicIsize, Ordering},
+        Arc,
+    },
+};
 
 use arrayvec::ArrayVec;
 use ash::{
     extensions::{ext, khr},
     vk,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 const MILLIS_TO_NANOS: u64 = 1_000_000;
 const MAX_TOTAL_ATTACHMENTS: usize = crate::MAX_COLOR_ATTACHMENTS * 2 + 1;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Api;
 
 impl crate::Api for Api {
@@ -63,6 +72,7 @@ impl crate::Api for Api {
     type Sampler = Sampler;
     type QuerySet = QuerySet;
     type Fence = Fence;
+    type AccelerationStructure = AccelerationStructure;
 
     type BindGroupLayout = BindGroupLayout;
     type BindGroup = BindGroup;
@@ -82,6 +92,12 @@ struct DebugUtils {
     /// dropping this, so the callback should never receive a dangling
     /// user data pointer.
     #[allow(dead_code)]
+    callback_data: Box<DebugUtilsMessengerUserData>,
+}
+
+pub struct DebugUtilsCreateInfo {
+    severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
     callback_data: Box<DebugUtilsMessengerUserData>,
 }
 
@@ -106,13 +122,19 @@ pub struct InstanceShared {
     raw: ash::Instance,
     extensions: Vec<&'static CStr>,
     drop_guard: Option<crate::DropGuard>,
-    flags: crate::InstanceFlags,
+    flags: wgt::InstanceFlags,
     debug_utils: Option<DebugUtils>,
     get_physical_device_properties: Option<khr::GetPhysicalDeviceProperties2>,
     entry: ash::Entry,
     has_nv_optimus: bool,
     android_sdk_version: u32,
-    driver_api_version: u32,
+    /// The instance API version.
+    ///
+    /// Which is the version of Vulkan supported for instance-level functionality.
+    ///
+    /// It is associated with a `VkInstance` and its children,
+    /// except for a `VkPhysicalDevice` and its children.
+    instance_api_version: u32,
 }
 
 pub struct Instance {
@@ -134,7 +156,7 @@ pub struct Surface {
     raw: vk::SurfaceKHR,
     functor: khr::Surface,
     instance: Arc<InstanceShared>,
-    swapchain: Option<Swapchain>,
+    swapchain: RwLock<Option<Swapchain>>,
 }
 
 #[derive(Debug)]
@@ -172,6 +194,12 @@ enum ExtensionFn<T> {
 struct DeviceExtensionFunctions {
     draw_indirect_count: Option<khr::DrawIndirectCount>,
     timeline_semaphore: Option<ExtensionFn<khr::TimelineSemaphore>>,
+    ray_tracing: Option<RayTracingDeviceExtensionFunctions>,
+}
+
+struct RayTracingDeviceExtensionFunctions {
+    acceleration_structure: khr::AccelerationStructure,
+    buffer_device_address: khr::BufferDeviceAddress,
 }
 
 /// Set of internal capabilities, which don't show up in the exposed
@@ -196,6 +224,7 @@ struct PrivateCapabilities {
     robust_buffer_access2: bool,
     robust_image_access2: bool,
     zero_initialize_workgroup_memory: bool,
+    image_format_list: bool,
 }
 
 bitflags::bitflags!(
@@ -327,13 +356,20 @@ pub struct Queue {
     /// It would be correct to use a single semaphore there, but
     /// [Intel hangs in `anv_queue_finish`](https://gitlab.freedesktop.org/mesa/mesa/-/issues/5508).
     relay_semaphores: [vk::Semaphore; 2],
-    relay_index: Option<usize>,
+    relay_index: AtomicIsize,
 }
 
 #[derive(Debug)]
 pub struct Buffer {
     raw: vk::Buffer,
     block: Option<Mutex<gpu_alloc::MemoryBlock<vk::DeviceMemory>>>,
+}
+
+#[derive(Debug)]
+pub struct AccelerationStructure {
+    raw: vk::AccelerationStructureKHR,
+    buffer: vk::Buffer,
+    block: Mutex<gpu_alloc::MemoryBlock<vk::DeviceMemory>>,
 }
 
 #[derive(Debug)]
@@ -547,7 +583,7 @@ impl Fence {
 
 impl crate::Queue<Api> for Queue {
     unsafe fn submit(
-        &mut self,
+        &self,
         command_buffers: &[&CommandBuffer],
         signal_fence: Option<(&mut Fence, crate::FenceValue)>,
     ) -> Result<(), crate::DeviceError> {
@@ -592,16 +628,17 @@ impl crate::Queue<Api> for Queue {
         }
 
         let wait_stage_mask = [vk::PipelineStageFlags::TOP_OF_PIPE];
-        let sem_index = match self.relay_index {
-            Some(old_index) => {
-                vk_info = vk_info
-                    .wait_semaphores(&self.relay_semaphores[old_index..old_index + 1])
-                    .wait_dst_stage_mask(&wait_stage_mask);
-                (old_index + 1) % self.relay_semaphores.len()
-            }
-            None => 0,
+        let old_index = self.relay_index.load(Ordering::Relaxed);
+        let sem_index = if old_index >= 0 {
+            vk_info = vk_info
+                .wait_semaphores(&self.relay_semaphores[old_index as usize..old_index as usize + 1])
+                .wait_dst_stage_mask(&wait_stage_mask);
+            (old_index as usize + 1) % self.relay_semaphores.len()
+        } else {
+            0
         };
-        self.relay_index = Some(sem_index);
+        self.relay_index
+            .store(sem_index as isize, Ordering::Relaxed);
         signal_semaphores[0] = self.relay_semaphores[sem_index];
 
         let signal_count = if signal_semaphores[1] == vk::Semaphore::null() {
@@ -621,11 +658,12 @@ impl crate::Queue<Api> for Queue {
     }
 
     unsafe fn present(
-        &mut self,
-        surface: &mut Surface,
+        &self,
+        surface: &Surface,
         texture: SurfaceTexture,
     ) -> Result<(), crate::SurfaceError> {
-        let ssc = surface.swapchain.as_ref().unwrap();
+        let mut swapchain = surface.swapchain.write();
+        let ssc = swapchain.as_mut().unwrap();
 
         let swapchains = [ssc.raw];
         let image_indices = [texture.index];
@@ -633,8 +671,11 @@ impl crate::Queue<Api> for Queue {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
 
-        if let Some(old_index) = self.relay_index.take() {
-            vk_info = vk_info.wait_semaphores(&self.relay_semaphores[old_index..old_index + 1]);
+        let old_index = self.relay_index.swap(-1, Ordering::Relaxed);
+        if old_index >= 0 {
+            vk_info = vk_info.wait_semaphores(
+                &self.relay_semaphores[old_index as usize..old_index as usize + 1],
+            );
         }
 
         let suboptimal = {

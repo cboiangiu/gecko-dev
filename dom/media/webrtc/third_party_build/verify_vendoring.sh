@@ -17,22 +17,32 @@ echo "MOZ_LIBWEBRTC_SRC: $MOZ_LIBWEBRTC_SRC"
 echo "MOZ_LIBWEBRTC_BRANCH: $MOZ_LIBWEBRTC_BRANCH"
 echo "MOZ_FASTFORWARD_BUG: $MOZ_FASTFORWARD_BUG"
 
+TIP_SHA=`hg id -r tip | awk '{ print $1; }'`
+echo "TIP_SHA: $TIP_SHA"
+
+# we grab the entire firstline description for convenient logging
 LAST_PATCHSTACK_UPDATE_COMMIT=`hg log --template "{node|short} {desc|firstline}\n" \
     --include "third_party/libwebrtc/moz-patch-stack/*.patch" | head -1`
 echo "LAST_PATCHSTACK_UPDATE_COMMIT: $LAST_PATCHSTACK_UPDATE_COMMIT"
-
-TIP_SHA=`hg id -r tip | awk '{ print $1; }'`
-echo "TIP_SHA: $TIP_SHA"
 
 LAST_PATCHSTACK_UPDATE_COMMIT_SHA=`echo $LAST_PATCHSTACK_UPDATE_COMMIT \
     | awk '{ print $1; }'`
 echo "LAST_PATCHSTACK_UPDATE_COMMIT_SHA: $LAST_PATCHSTACK_UPDATE_COMMIT_SHA"
 
-if [ "x$TIP_SHA" == "x$LAST_PATCHSTACK_UPDATE_COMMIT_SHA" ]; then
-  COMMIT_AFTER_PATCHSTACK_UPDATE="{start-commit-sha}"
-else
-  COMMIT_AFTER_PATCHSTACK_UPDATE=`hg id -r $LAST_PATCHSTACK_UPDATE_COMMIT_SHA~-1 || true`
-  echo "COMMIT_AFTER_PATCHSTACK_UPDATE: $COMMIT_AFTER_PATCHSTACK_UPDATE"
+# grab the oldest, non "Vendor from libwebrtc" line
+OLDEST_CANDIDATE_COMMIT=`hg log --template "{node|short} {desc|firstline}\n" \
+    -r $LAST_PATCHSTACK_UPDATE_COMMIT_SHA::tip \
+    | grep -v "Vendor libwebrtc from" | head -1`
+echo "OLDEST_CANDIDATE_COMMIT: $OLDEST_CANDIDATE_COMMIT"
+
+OLDEST_CANDIDATE_SHA=`echo $OLDEST_CANDIDATE_COMMIT \
+    | awk '{ print $1; }'`
+echo "OLDEST_CANDIDATE_SHA: $OLDEST_CANDIDATE_SHA"
+
+EXTRACT_COMMIT_RANGE="{start-commit-sha}::tip"
+if [ "x$TIP_SHA" != "x$OLDEST_CANDIDATE_SHA" ]; then
+  EXTRACT_COMMIT_RANGE="$OLDEST_CANDIDATE_SHA::tip"
+  echo "EXTRACT_COMMIT_RANGE: $EXTRACT_COMMIT_RANGE"
 fi
 
 # After this point:
@@ -61,12 +71,8 @@ Typically this is due to changes made in mercurial to files residing
 under third_party/libwebrtc that have not been reflected in
 moz-libwebrtc git repo's patch-stack.
 
-Frequently using 'hg log' on the files listed with 'hg status' will give
-information on commits that need to be added to the patch-stack.  After
-identifying a commit or commit range from mercurial that should be added
-to the git patch-stack, the following commands should help remedy the
-situation:
-  ./mach python $SCRIPT_DIR/extract-for-git.py $COMMIT_AFTER_PATCHSTACK_UPDATE::tip
+The following commands should help remedy the situation:
+  ./mach python $SCRIPT_DIR/extract-for-git.py $EXTRACT_COMMIT_RANGE
   mv mailbox.patch $MOZ_LIBWEBRTC_SRC
   (cd $MOZ_LIBWEBRTC_SRC && \\
    git am mailbox.patch)

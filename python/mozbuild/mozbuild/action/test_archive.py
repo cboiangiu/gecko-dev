@@ -41,6 +41,7 @@ TEST_HARNESS_BINS = [
     "crashinject",
     "geckodriver",
     "http3server",
+    "content_analysis_sdk_agent",
     "minidumpwriter",
     "pk12util",
     "screenshot",
@@ -338,8 +339,18 @@ ARCHIVE_FILES = {
         },
         {
             "source": buildconfig.topsrcdir,
+            "base": "testing/mozbase/mozsystemmonitor",
+            "pattern": "mozsystemmonitor/**",
+        },
+        {
+            "source": buildconfig.topsrcdir,
             "base": "third_party/python/six",
             "pattern": "six.py",
+        },
+        {
+            "source": buildconfig.topsrcdir,
+            "base": "third_party/python/toml",
+            "pattern": "**",
         },
         {
             "source": buildconfig.topsrcdir,
@@ -454,8 +465,10 @@ ARCHIVE_FILES = {
                 "chrome/**",
                 "chrome.manifest",
                 "components/**",
+                "content_analysis_sdk_agent",
                 "http3server",
                 "*.ini",
+                "*.toml",
                 "localization/**",
                 "modules/**",
                 "update.locale",
@@ -815,7 +828,7 @@ def find_manifest_dirs(topsrcdir, manifests):
     for p in manifests:
         p = os.path.join(topsrcdir, p)
 
-        if p.endswith(".ini"):
+        if p.endswith(".ini") or p.endswith(".toml"):
             test_manifest = TestManifest()
             test_manifest.read(p)
             dirs |= set([os.path.dirname(m) for m in test_manifest.manifests()])

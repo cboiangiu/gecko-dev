@@ -19,7 +19,7 @@ pub enum CmdListType {
     // VideoProcess = d3d12::D3D12_COMMAND_LIST_TYPE_VIDEO_PROCESS,
 }
 
-bitflags! {
+bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
     pub struct ClearFlags: u32 {
         const DEPTH = d3d12::D3D12_CLEAR_FLAG_DEPTH;
@@ -213,11 +213,11 @@ impl GraphicsCommandList {
         &self,
         num_vertices: VertexCount,
         num_instances: InstanceCount,
-        start_vertex: VertexCount,
-        start_instance: InstanceCount,
+        first_vertex: VertexCount,
+        first_instance: InstanceCount,
     ) {
         unsafe {
-            self.DrawInstanced(num_vertices, num_instances, start_vertex, start_instance);
+            self.DrawInstanced(num_vertices, num_instances, first_vertex, first_instance);
         }
     }
 
@@ -225,17 +225,17 @@ impl GraphicsCommandList {
         &self,
         num_indices: IndexCount,
         num_instances: InstanceCount,
-        start_index: IndexCount,
+        first_index: IndexCount,
         base_vertex: VertexOffset,
-        start_instance: InstanceCount,
+        first_instance: InstanceCount,
     ) {
         unsafe {
             self.DrawIndexedInstanced(
                 num_indices,
                 num_instances,
-                start_index,
+                first_index,
                 base_vertex,
-                start_instance,
+                first_instance,
             );
         }
     }
@@ -263,7 +263,7 @@ impl GraphicsCommandList {
         }
     }
 
-    pub fn set_pipeline_state(&self, pso:&PipelineState) {
+    pub fn set_pipeline_state(&self, pso: &PipelineState) {
         unsafe {
             self.SetPipelineState(pso.as_mut_ptr());
         }

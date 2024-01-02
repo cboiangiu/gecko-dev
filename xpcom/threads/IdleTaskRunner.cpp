@@ -5,7 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "IdleTaskRunner.h"
-#include "mozilla/TaskCategory.h"
 #include "mozilla/TaskController.h"
 #include "nsRefreshDriver.h"
 
@@ -37,7 +36,7 @@ class IdleTaskRunnerTask : public Task {
     SetManager(TaskController::Get()->GetIdleTaskManager());
   }
 
-  bool Run() override {
+  TaskResult Run() override {
     if (mRunner) {
       // IdleTaskRunner::Run can actually trigger the destruction of the
       // IdleTaskRunner. Make sure it doesn't get destroyed before the method
@@ -45,7 +44,7 @@ class IdleTaskRunnerTask : public Task {
       RefPtr<IdleTaskRunner> runner(mRunner);
       runner->Run();
     }
-    return true;
+    return TaskResult::Complete;
   }
 
   void SetIdleDeadline(TimeStamp aDeadline) override {
@@ -260,6 +259,11 @@ void IdleTaskRunner::SetTimerInternal(TimeDuration aDelay) {
   if (mTimerActive) {
     return;
   }
+  ResetTimer(aDelay);
+}
+
+void IdleTaskRunner::ResetTimer(TimeDuration aDelay) {
+  mTimerActive = false;
 
   if (!mTimer) {
     mTimer = NS_NewTimer();

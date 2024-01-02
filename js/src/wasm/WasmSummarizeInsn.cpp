@@ -13,6 +13,21 @@ using mozilla::Some;
 namespace js {
 namespace wasm {
 
+// Sources of documentation of instruction-set encoding:
+//
+// Documentation for the ARM instruction sets can be found at
+// https://developer.arm.com/documentation/ddi0487/latest.  The documentation
+// is vast -- more than 10000 pages.  When looking up an instruction, be sure
+// to look in the correct section for the target word size -- AArch64 (arm64)
+// and AArch32 (arm32) instructions are listed in different sections.  And for
+// AArch32, be sure to look only at the "A<digit> variant/encoding" and not at
+// the "T<digit>" ones.  The latter are for Thumb encodings, which we don't
+// generate.
+//
+// The Intel documentation is similarly comprehensive: search for "Intel® 64
+// and IA-32 Architectures Software Developer’s Manual Combined Volumes: 1,
+// 2A, 2B, 2C, 2D, 3A, 3B, 3C, 3D, and 4".  It's easy to find.
+
 #if defined(DEBUG)
 
 // ===================================================== x86_32 and x86_64 ====
@@ -705,6 +720,11 @@ Maybe<TrapMachineInsn> SummarizeTrapInstruction(const uint8_t* insnAddr) {
       // 10 111 000 10 0 imm9 00 n t = LDURSW Xt, [Xn|SP, #imm9]
       case 0b10'111'000'10'0:
         return Some(TrapMachineInsn::Load32);
+      // 01 111 000 11 0 imm9 00 n t = LDURSH Wt, [Xn|SP, #imm9]
+      // 01 111 000 10 0 imm9 00 n t = LDURSH Xt, [Xn|SP, #imm9]
+      case 0b01'111'000'11'0:
+      case 0b01'111'000'10'0:
+        return Some(TrapMachineInsn::Load16);
     }
   }
 
@@ -1146,6 +1166,275 @@ Maybe<TrapMachineInsn> SummarizeTrapInstruction(const uint8_t* insnAddr) {
   //   }
   //   fprintf(stderr, "\n");
   // }
+
+  return Nothing();
+}
+
+// =============================================================== riscv64 ====
+
+#  elif defined(JS_CODEGEN_RISCV64)
+
+Maybe<TrapMachineInsn> SummarizeTrapInstruction(const uint8_t* insnAddr) {
+  // Check instruction alignment.
+  MOZ_ASSERT(0 == (uintptr_t(insnAddr) & 3));
+
+  const uint32_t insn = *(uint32_t*)insnAddr;
+
+#    define INSN(_maxIx, _minIx) \
+      ((insn >> (_minIx)) & ((uint32_t(1) << ((_maxIx) - (_minIx) + 1)) - 1))
+  // MacroAssembler::wasmTrapInstruction uses this to create SIGILL.
+  if (insn ==
+      (RO_CSRRWI | csr_cycle << kCsrShift | kWasmTrapCode << kRs1Shift)) {
+    return Some(TrapMachineInsn::OfficialUD);
+  }
+
+  if (INSN(6, 0) == STORE) {
+    switch (INSN(14, 12)) {
+      case 0b011:
+        return Some(TrapMachineInsn::Load64);
+      case 0b010:
+        return Some(TrapMachineInsn::Load32);
+      case 0b001:
+        return Some(TrapMachineInsn::Load16);
+      case 0b000:
+        return Some(TrapMachineInsn::Load8);
+      default:
+        break;
+    }
+  }
+
+  if (INSN(6, 0) == LOAD) {
+    switch (INSN(14, 12)) {
+      case 0b011:
+        return Some(TrapMachineInsn::Store64);
+      case 0b010:
+        return Some(TrapMachineInsn::Store32);
+      case 0b001:
+        return Some(TrapMachineInsn::Store16);
+      case 0b000:
+        return Some(TrapMachineInsn::Store8);
+      default:
+        break;
+    }
+  }
+
+  if (INSN(6, 0) == LOAD_FP) {
+    switch (INSN(14, 12)) {
+      case 0b011:
+        return Some(TrapMachineInsn::Load64);
+      case 0b010:
+        return Some(TrapMachineInsn::Load32);
+      default:
+        break;
+    }
+  }
+
+  if (INSN(6, 0) == STORE_FP) {
+    switch (INSN(14, 12)) {
+      case 0b011:
+        return Some(TrapMachineInsn::Store64);
+      case 0b010:
+        return Some(TrapMachineInsn::Store32);
+      default:
+        break;
+    }
+  }
+
+  if (INSN(6, 0) == AMO && INSN(31, 27) == 00010) {
+    switch (INSN(14, 12)) {
+      case 0b011:
+        return Some(TrapMachineInsn::Load64);
+      case 0b010:
+        return Some(TrapMachineInsn::Load32);
+      default:
+        break;
+    }
+  }
+
+  if (INSN(6, 0) == AMO && INSN(31, 27) == 00011) {
+    switch (INSN(14, 12)) {
+      case 0b011:
+        return Some(TrapMachineInsn::Store64);
+      case 0b010:
+        return Some(TrapMachineInsn::Store32);
+      default:
+        break;
+    }
+  }
+
+#    undef INSN
+
+  return Nothing();
+}
+
+// =========================================================== loongarch64 ====
+
+#  elif defined(JS_CODEGEN_LOONG64)
+
+Maybe<TrapMachineInsn> SummarizeTrapInstruction(const uint8_t* insnAddr) {
+  // Check instruction alignment.
+  MOZ_ASSERT(0 == (uintptr_t(insnAddr) & 3));
+
+  const uint32_t insn = *(uint32_t*)insnAddr;
+
+#    define INSN(_maxIx, _minIx) \
+      ((insn >> (_minIx)) & ((uint32_t(1) << ((_maxIx) - (_minIx) + 1)) - 1))
+
+  // LoongArch instructions encoding document:
+  // https://loongson.github.io/LoongArch-Documentation/LoongArch-Vol1-EN#table-of-instruction-encoding
+
+  // MacroAssembler::wasmTrapInstruction uses this to create SIGILL.
+  // break 0x6
+  if (insn == 0x002A0006) {
+    return Some(TrapMachineInsn::OfficialUD);
+  }
+
+  // Loads/stores with reg + offset (si12).
+  if (INSN(31, 26) == 0b001010) {
+    switch (INSN(25, 22)) {
+      // ld.b  rd, rj, si12
+      case 0b0000:
+        return Some(TrapMachineInsn::Load8);
+      // ld.h  rd, rj, si12
+      case 0b0001:
+        return Some(TrapMachineInsn::Load16);
+      // ld.w  rd, rj, si12
+      case 0b0010:
+        return Some(TrapMachineInsn::Load32);
+      // ld.d  rd, rj, si12
+      case 0b0011:
+        return Some(TrapMachineInsn::Load64);
+      // st.b  rd, rj, si12
+      case 0b0100:
+        return Some(TrapMachineInsn::Store8);
+      // st.h  rd, rj, si12
+      case 0b0101:
+        return Some(TrapMachineInsn::Store16);
+      // st.w  rd, rj, si12
+      case 0b0110:
+        return Some(TrapMachineInsn::Store32);
+      // st.d  rd, rj, si12
+      case 0b0111:
+        return Some(TrapMachineInsn::Store64);
+      // ld.bu  rd, rj, si12
+      case 0b1000:
+        return Some(TrapMachineInsn::Load8);
+      // ld.hu  rd, rj, si12
+      case 0b1001:
+        return Some(TrapMachineInsn::Load16);
+      // ld.wu  rd, rj, si12
+      case 0b1010:
+        return Some(TrapMachineInsn::Load32);
+      // preld  hint, rj, si12
+      case 0b1011:
+        break;
+      // fld.s  fd, rj, si12
+      case 0b1100:
+        return Some(TrapMachineInsn::Load32);
+      // fst.s  fd, rj, si12
+      case 0b1101:
+        return Some(TrapMachineInsn::Store32);
+      // fld.d  fd, rj, si12
+      case 0b1110:
+        return Some(TrapMachineInsn::Load64);
+      // fst.s  fd, rj, si12
+      case 0b1111:
+        return Some(TrapMachineInsn::Store64);
+      default:
+        break;
+    }
+  }
+
+  // Loads/stores with reg + reg.
+  if (INSN(31, 22) == 0b0011100000 && INSN(17, 15) == 0b000) {
+    switch (INSN(21, 18)) {
+      // ldx.b  rd, rj, rk
+      case 0b0000:
+        return Some(TrapMachineInsn::Load8);
+      // ldx.h  rd, rj, rk
+      case 0b0001:
+        return Some(TrapMachineInsn::Load16);
+      // ldx.w  rd, rj, rk
+      case 0b0010:
+        return Some(TrapMachineInsn::Load32);
+      // ldx.d  rd, rj, rk
+      case 0b0011:
+        return Some(TrapMachineInsn::Load64);
+      // stx.b  rd, rj, rk
+      case 0b0100:
+        return Some(TrapMachineInsn::Store8);
+      // stx.h  rd, rj, rk
+      case 0b0101:
+        return Some(TrapMachineInsn::Store16);
+      // stx.w  rd, rj, rk
+      case 0b0110:
+        return Some(TrapMachineInsn::Store32);
+      // stx.d  rd, rj, rk
+      case 0b0111:
+        return Some(TrapMachineInsn::Store64);
+      // ldx.bu  rd, rj, rk
+      case 0b1000:
+        return Some(TrapMachineInsn::Load8);
+      // ldx.hu  rd, rj, rk
+      case 0b1001:
+        return Some(TrapMachineInsn::Load16);
+      // ldx.wu  rd, rj, rk
+      case 0b1010:
+        return Some(TrapMachineInsn::Load32);
+      // preldx  hint, rj, rk
+      case 0b1011:
+        break;
+      // fldx.s  fd, rj, rk
+      case 0b1100:
+        return Some(TrapMachineInsn::Load32);
+      // fldx.d  fd, rj, rk
+      case 0b1101:
+        return Some(TrapMachineInsn::Load64);
+      // fstx.s  fd, rj, rk
+      case 0b1110:
+        return Some(TrapMachineInsn::Store32);
+      // fstx.d  fd, rj, rk
+      case 0b1111:
+        return Some(TrapMachineInsn::Store64);
+      default:
+        break;
+    }
+  }
+
+  // Loads/stores with reg + offset (si14).
+  //   1. Atomics - loads/stores "exclusive" (with reservation) (LL/SC)
+  //   2. {ld/st}ptr.{w/d}
+  if (INSN(31, 27) == 0b00100) {
+    switch (INSN(26, 24)) {
+      // ll.w  rd, rj, si14
+      case 0b000:
+        return Some(TrapMachineInsn::Load32);
+      // ll.d  rd, rj, si14
+      case 0b010:
+        return Some(TrapMachineInsn::Load64);
+      // ldptr.w  rd, rj, si14
+      case 0b100:
+        return Some(TrapMachineInsn::Load32);
+      // stptr.w  rd, rj, si14
+      case 0b101:
+        return Some(TrapMachineInsn::Store32);
+      // ldptr.d  rd, rj, si14
+      case 0b110:
+        return Some(TrapMachineInsn::Load64);
+      // stptr.d  rd, rj, si14
+      case 0b111:
+        return Some(TrapMachineInsn::Store64);
+      default:
+        break;
+        // We are never asked to examine store-exclusive instructions, because
+        // any store-exclusive should be preceded by a load-exclusive
+        // instruction of the same size and for the same address.  So the
+        // TrapSite is omitted for the store-exclusive since the load-exclusive
+        // will trap first.
+    }
+  }
+
+#    undef INSN
 
   return Nothing();
 }

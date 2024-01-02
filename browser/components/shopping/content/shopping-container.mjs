@@ -40,6 +40,7 @@ export class ShoppingContainer extends MozLitElement {
     adsEnabled: { type: Boolean },
     adsEnabledByUser: { type: Boolean },
     isAnalysisInProgress: { type: Boolean },
+    analysisProgress: { type: Number },
     isOverflow: { type: Boolean },
   };
 
@@ -54,6 +55,7 @@ export class ShoppingContainer extends MozLitElement {
       shoppingMessageBarEl: "shopping-message-bar",
       recommendedAdEl: "recommended-ad",
       loadingEl: "#loading-wrapper",
+      closeButtonEl: "#close-button",
     };
   }
 
@@ -71,6 +73,7 @@ export class ShoppingContainer extends MozLitElement {
     window.document.addEventListener("adsEnabledByUserChanged", this);
     window.document.addEventListener("scroll", this);
     window.document.addEventListener("UpdateRecommendations", this);
+    window.document.addEventListener("UpdateAnalysisProgress", this);
 
     window.dispatchEvent(
       new CustomEvent("ContentReady", {
@@ -78,6 +81,12 @@ export class ShoppingContainer extends MozLitElement {
         composed: true,
       })
     );
+  }
+
+  updated() {
+    if (this.focusCloseButton) {
+      this.closeButtonEl.focus();
+    }
   }
 
   async _update({
@@ -88,13 +97,12 @@ export class ShoppingContainer extends MozLitElement {
     adsEnabled,
     adsEnabledByUser,
     isAnalysisInProgress,
+    analysisProgress,
+    focusCloseButton,
   }) {
     // If we're not opted in or there's no shopping URL in the main browser,
     // the actor will pass `null`, which means this will clear out any existing
     // content in the sidebar.
-    if (!this.productUrl && productUrl && data) {
-      this.firstAnalysis = true;
-    }
     this.data = data;
     this.showOnboarding = showOnboarding;
     this.productUrl = productUrl;
@@ -103,10 +111,16 @@ export class ShoppingContainer extends MozLitElement {
     this.isAnalysisInProgress = isAnalysisInProgress;
     this.adsEnabled = adsEnabled;
     this.adsEnabledByUser = adsEnabledByUser;
+    this.analysisProgress = analysisProgress;
+    this.focusCloseButton = focusCloseButton;
   }
 
   _updateRecommendations({ recommendationData }) {
     this.recommendationData = recommendationData;
+  }
+
+  _updateAnalysisProgress({ progress }) {
+    this.analysisProgress = progress;
   }
 
   handleEvent(event) {
@@ -117,7 +131,6 @@ export class ShoppingContainer extends MozLitElement {
       case "NewAnalysisRequested":
       case "ReanalysisRequested":
         this.isAnalysisInProgress = true;
-        this.firstAnalysis = false;
         this.analysisEvent = {
           type: event.type,
           productUrl: this.productUrl,
@@ -149,15 +162,43 @@ export class ShoppingContainer extends MozLitElement {
       case "UpdateRecommendations":
         this._updateRecommendations(event.detail);
         break;
+      case "UpdateAnalysisProgress":
+        this._updateAnalysisProgress(event.detail);
+        break;
     }
   }
 
   getAnalysisDetailsTemplate() {
+    /* At present, en is supported as the default language for reviews. As we support more sites,
+     * update `lang` accordingly if highlights need to be displayed in other languages. */
+    let lang;
+    let hostname;
+    try {
+      hostname = new URL(this.productUrl)?.hostname;
+    } catch (e) {
+      console.error(
+        `Unknown product url ${this.productUrl} for review highlights. Defaulting to en.`
+      );
+    }
+
+    switch (hostname) {
+      case "www.amazon.fr":
+        lang = "fr";
+        break;
+      case "www.amazon.de":
+        lang = "de";
+        break;
+      default:
+        lang = "en";
+    }
     return html`
       <review-reliability letter=${this.data.grade}></review-reliability>
-      <adjusted-rating rating=${this.data.adjusted_rating}></adjusted-rating>
+      <adjusted-rating
+        rating=${ifDefined(this.data.adjusted_rating)}
+      ></adjusted-rating>
       <review-highlights
         .highlights=${this.data.highlights}
+        lang=${lang}
       ></review-highlights>
     `;
   }
@@ -173,6 +214,7 @@ export class ShoppingContainer extends MozLitElement {
           type=${isReanalysis
             ? "reanalysis-in-progress"
             : "analysis-in-progress"}
+          progress=${this.analysisProgress}
         ></shopping-message-bar>
         ${isReanalysis ? this.getAnalysisDetailsTemplate() : null}`;
     }
@@ -206,22 +248,13 @@ export class ShoppingContainer extends MozLitElement {
     }
 
     if (this.data.needs_analysis) {
-      let notEnoughReviews = !this.data.grade || !this.data.adjusted_rating;
-      if (!this.data.product_id || (this.firstAnalysis && notEnoughReviews)) {
-        // Product is either new to us or (bug 1848695) it's the initial page load of a product
-        // with not enough reviews.
+      if (!this.data.product_id || typeof this.data.grade != "string") {
+        // Product is new to us.
         return html`<unanalyzed-product-card
           productUrl=${ifDefined(this.productUrl)}
         ></unanalyzed-product-card>`;
       }
 
-      if (notEnoughReviews) {
-        // We already saw and tried to analyze this product before, but there are not enough reviews
-        // to make a detailed analysis.
-        return html`<shopping-message-bar
-          type="not-enough-reviews"
-        ></shopping-message-bar>`;
-      }
       // We successfully analyzed the product before, but the current analysis is outdated and can be updated
       // via a re-analysis.
       return html`
@@ -231,6 +264,14 @@ export class ShoppingContainer extends MozLitElement {
         ></shopping-message-bar>
         ${this.getAnalysisDetailsTemplate()}
       `;
+    }
+
+    if (this.data.not_enough_reviews) {
+      // We already saw and tried to analyze this product before, but there are not enough reviews
+      // to make a detailed analysis.
+      return html`<shopping-message-bar
+        type="not-enough-reviews"
+      ></shopping-message-bar>`;
     }
 
     return this.getAnalysisDetailsTemplate();
@@ -301,12 +342,12 @@ export class ShoppingContainer extends MozLitElement {
           </header>
           <button
             id="close-button"
-            class="ghost-button"
+            class="ghost-button shopping-button"
             data-l10n-id="shopping-close-button"
             @click=${this.handleClick}
           ></button>
         </div>
-        <div id="content" aria-busy=${!this.data}>
+        <div id="content" aria-live="polite" aria-busy=${!this.data}>
           <slot name="multi-stage-message-slot"></slot>
           ${sidebarContent} ${!hideFooter ? this.getFooterTemplate() : null}
         </div>
@@ -339,6 +380,7 @@ export class ShoppingContainer extends MozLitElement {
       if (this.isAnalysisInProgress) {
         content = html`<shopping-message-bar
           type="analysis-in-progress"
+          progress=${this.analysisProgress}
         ></shopping-message-bar>`;
       } else {
         content = this.getLoadingTemplate();

@@ -14,7 +14,7 @@ const TEST_PROVIDER_INFO = [
     telemetryId: "example",
     searchPageRegexp:
       /^https:\/\/example.org\/browser\/browser\/components\/search\/test\/browser\/telemetry\/searchTelemetry(?:Ad)?.html/,
-    queryParamName: "s",
+    queryParamNames: ["s"],
     codeParamName: "abc",
     taggedCodes: ["ff"],
     followOnParamNames: ["a"],
@@ -39,10 +39,7 @@ add_setup(async function () {
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.search.log", true],
-      ["browser.search.serpEventTelemetry.enabled", true],
-    ],
+    set: [["browser.search.serpEventTelemetry.enabled", true]],
   });
 
   registerCleanupFunction(async () => {
@@ -70,7 +67,7 @@ add_task(async function test_simple_search_page_visit() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -78,7 +75,11 @@ add_task(async function test_simple_search_page_visit() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
+      },
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
       },
     },
   ]);
@@ -109,7 +110,7 @@ add_task(async function test_simple_search_page_visit_telemetry() {
       Assert.notEqual(scalars[key].example, 0, "bandwidth logged");
     }
   );
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -117,7 +118,11 @@ add_task(async function test_simple_search_page_visit_telemetry() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
+      },
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
       },
     },
   ]);
@@ -141,7 +146,7 @@ add_task(async function test_follow_on_visit() {
       );
     }
   );
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -149,7 +154,11 @@ add_task(async function test_follow_on_visit() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
+      },
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
       },
     },
     {
@@ -159,7 +168,11 @@ add_task(async function test_follow_on_visit() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
+      },
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.TAB_CLOSE,
       },
     },
   ]);
@@ -172,6 +185,7 @@ add_task(async function test_track_ad() {
     gBrowser,
     getSERPUrl("searchTelemetryAd.html")
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -181,7 +195,7 @@ add_task(async function test_track_ad() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -189,8 +203,17 @@ add_task(async function test_track_ad() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 
@@ -204,6 +227,7 @@ add_task(async function test_track_ad_organic() {
     gBrowser,
     getSERPUrl("searchTelemetryAd.html", true)
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -213,7 +237,7 @@ add_task(async function test_track_ad_organic() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -221,8 +245,17 @@ add_task(async function test_track_ad_organic() {
         partner_code: "",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 
@@ -241,6 +274,7 @@ add_task(async function test_track_ad_new_window() {
     false,
     url
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -250,7 +284,7 @@ add_task(async function test_track_ad_new_window() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -258,8 +292,17 @@ add_task(async function test_track_ad_new_window() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 
@@ -278,12 +321,15 @@ add_task(async function test_track_ad_pages_without_ads() {
       getSERPUrl("searchTelemetry.html")
     )
   );
+  await waitForPageWithAdImpressions();
+
   tabs.push(
     await BrowserTestUtils.openNewForegroundTab(
       gBrowser,
       getSERPUrl("searchTelemetryAd.html")
     )
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -293,7 +339,7 @@ add_task(async function test_track_ad_pages_without_ads() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -301,6 +347,7 @@ add_task(async function test_track_ad_pages_without_ads() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
     },
@@ -311,8 +358,17 @@ add_task(async function test_track_ad_pages_without_ads() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 

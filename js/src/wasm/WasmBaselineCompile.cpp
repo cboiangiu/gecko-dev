@@ -1316,6 +1316,15 @@ void BaseCompiler::shuffleStackResultsBeforeBranch(StackHeight srcHeight,
   fr.popStackBeforeBranch(destHeight, stackResultBytes);
 }
 
+bool BaseCompiler::insertLeaveFrame() {
+  if (!compilerEnv_.debugEnabled()) {
+    return true;
+  }
+  insertBreakablePoint(CallSiteDesc::LeaveFrame);
+  return createStackMap("debug: leave-frame breakpoint",
+                        HasDebugFrameWithLiveRefs::Maybe);
+}
+
 //////////////////////////////////////////////////////////////////////////////
 //
 // Function calls.
@@ -3795,6 +3804,12 @@ bool BaseCompiler::emitEnd() {
       }
       iter_.popEnd();
       break;
+    case LabelKind::TryTable:
+      if (!endTryTable(type)) {
+        return false;
+      }
+      iter_.popEnd();
+      break;
   }
 
   return true;
@@ -4047,6 +4062,217 @@ bool BaseCompiler::emitTry() {
       return false;
     }
   }
+
+  return true;
+}
+
+bool BaseCompiler::emitTryTable() {
+  ResultType params;
+  TryTableCatchVector catches;
+  if (!iter_.readTryTable(&params, &catches)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  // Simplifies jumping out, but it is also necessary so that control
+  // can re-enter the catch handler without restoring registers.
+  sync();
+
+  initControl(controlItem(), params);
+  // Be conservative for BCE due to complex control flow in try blocks.
+  controlItem().bceSafeOnExit = 0;
+
+  // Emit a landing pad that exceptions will jump into. Jump over it for now.
+  Label skip;
+  masm.jump(&skip);
+
+  StackHeight prePadHeight = fr.stackHeight();
+  uint32_t padOffset = masm.currentOffset();
+  uint32_t padStackHeight = masm.framePushed();
+
+  // Store the Instance that was left in InstanceReg by the exception
+  // handling mechanism, that is this frame's Instance but with the exception
+  // filled in Instance::pendingException.
+  fr.storeInstancePtr(InstanceReg);
+
+  // Ensure we don't take the result register that we'll need for passing
+  // results to the branch target. Also make sure we don't take the
+  // InstanceReg which is used for loading tags.
+  //
+  // TODO: future proof this code for multiple result registers.
+  ResultType resultRegs = ResultType::Single(RefType::extern_());
+  needIntegerResultRegisters(resultRegs);
+#ifndef RABALDR_PIN_INSTANCE
+  needPtr(RegPtr(InstanceReg));
+#endif
+
+  // Load exception and tag from instance, clearing it in the process.
+  RegRef exn;
+  RegRef exnTag;
+  consumePendingException(&exn, &exnTag);
+
+  // Get a register to hold the tags for each catch
+  RegRef catchTag = needRef();
+
+  // Release our reserved registers.
+#ifndef RABALDR_PIN_INSTANCE
+  freePtr(RegPtr(InstanceReg));
+#endif
+  freeIntegerResultRegisters(resultRegs);
+
+  MOZ_ASSERT(exn != InstanceReg);
+  MOZ_ASSERT(exnTag != InstanceReg);
+  MOZ_ASSERT(catchTag != InstanceReg);
+  bool hadCatchAll = false;
+  for (const TryTableCatch& tryTableCatch : catches) {
+    ResultType labelParams = ResultType::Vector(tryTableCatch.labelType);
+
+    Control& target = controlItem(tryTableCatch.labelRelativeDepth);
+    target.bceSafeOnExit = 0;
+
+    // Handle a catch_all by jumping to the target block
+    if (tryTableCatch.tagIndex == CatchAllIndex) {
+      // Capture the exnref if it has been requested
+      if (tryTableCatch.captureExnRef) {
+        pushRef(exn);
+      }
+      popBlockResults(labelParams, target.stackHeight, ContinuationKind::Jump);
+      masm.jump(&target.label);
+      // The registers holding the join values are free for the remainder of
+      // this block.
+      freeResultRegisters(labelParams);
+      // Free the exn register, as code assumes that it's consumed by the final
+      // catch_all.
+      if (!tryTableCatch.captureExnRef) {
+        freeRef(exn);
+      }
+
+      // Break from the loop and skip the implicit rethrow that's needed
+      // if we didn't have a catch_all
+      hadCatchAll = true;
+      break;
+    }
+
+    const TagType& tagType = *moduleEnv_.tags[tryTableCatch.tagIndex].type;
+    const TagOffsetVector& tagOffsets = tagType.argOffsets();
+    ResultType tagParams = tagType.resultType();
+
+    Label skip;
+    loadTag(RegPtr(InstanceReg), tryTableCatch.tagIndex, catchTag);
+    masm.branchPtr(Assembler::NotEqual, exnTag, catchTag, &skip);
+
+    // Get a register for unpacking exceptions. We re-use the exnTag register
+    // as it is already reserved and dead from this point until the jump to the
+    // target label.
+    RegPtr data = RegPtr(exnTag);
+
+    // Unpack the tag and jump to the block
+    masm.loadPtr(Address(exn, (int32_t)WasmExceptionObject::offsetOfData()),
+                 data);
+    // This method can increase stk_.length() by an unbounded amount, so we need
+    // to perform an allocation here to accomodate the variable number of
+    // values. There is enough headroom for the fixed number of values.  The
+    // general case is handled in emitBody.
+    if (!stk_.reserve(stk_.length() + labelParams.length())) {
+      return false;
+    }
+
+    for (uint32_t i = 0; i < tagParams.length(); i++) {
+      int32_t offset = tagOffsets[i];
+      switch (tagParams[i].kind()) {
+        case ValType::I32: {
+          RegI32 reg = needI32();
+          masm.load32(Address(data, offset), reg);
+          pushI32(reg);
+          break;
+        }
+        case ValType::I64: {
+          RegI64 reg = needI64();
+          masm.load64(Address(data, offset), reg);
+          pushI64(reg);
+          break;
+        }
+        case ValType::F32: {
+          RegF32 reg = needF32();
+          masm.loadFloat32(Address(data, offset), reg);
+          pushF32(reg);
+          break;
+        }
+        case ValType::F64: {
+          RegF64 reg = needF64();
+          masm.loadDouble(Address(data, offset), reg);
+          pushF64(reg);
+          break;
+        }
+        case ValType::V128: {
+#ifdef ENABLE_WASM_SIMD
+          RegV128 reg = needV128();
+          masm.loadUnalignedSimd128(Address(data, offset), reg);
+          pushV128(reg);
+          break;
+#else
+          MOZ_CRASH("No SIMD support");
+#endif
+        }
+        case ValType::Ref: {
+          RegRef reg = needRef();
+          masm.loadPtr(Address(data, offset), reg);
+          pushRef(reg);
+          break;
+        }
+      }
+    }
+
+    // Capture the exnref if it has been requested
+    if (tryTableCatch.captureExnRef) {
+      pushRef(exn);
+    }
+    popBlockResults(labelParams, target.stackHeight, ContinuationKind::Jump);
+    masm.jump(&target.label);
+    // The registers holding the join values are free for the remainder of this
+    // block.
+    freeResultRegisters(labelParams);
+
+    // Reset the stack height for the skip
+    fr.setStackHeight(prePadHeight);
+    masm.bind(&skip);
+
+    // Re-assert ownership of the exnref register for the next branch of the
+    // try switch.
+    if (tryTableCatch.captureExnRef) {
+      needRef(exn);
+    }
+  }
+
+  if (!hadCatchAll) {
+    // If none of the tag checks succeed and there is no catch_all,
+    // then we rethrow the exception.
+    if (!throwFrom(exn)) {
+      return false;
+    }
+  } else {
+    // `exn` should be consumed by the catch_all code so it doesn't leak
+    MOZ_ASSERT(isAvailableRef(exn));
+  }
+
+  freeRef(catchTag);
+  freeRef(exnTag);
+
+  // Reset stack height for skip.
+  fr.setStackHeight(prePadHeight);
+
+  masm.bind(&skip);
+
+  if (!startTryNote(&controlItem().tryNoteIndex)) {
+    return false;
+  }
+  // The landing pad begins at this point
+  TryNoteVector& tryNotes = masm.tryNotes();
+  TryNote& tryNote = tryNotes[controlItem().tryNoteIndex];
+  tryNote.setLandingPad(padOffset, padStackHeight);
 
   return true;
 }
@@ -4451,6 +4677,12 @@ bool BaseCompiler::endTryCatch(ResultType type) {
   return pushBlockResults(type);
 }
 
+bool BaseCompiler::endTryTable(ResultType type) {
+  // Mark the end of the try body. This may insert a nop.
+  finishTryNote(controlItem().tryNoteIndex);
+  return endBlock(type);
+}
+
 bool BaseCompiler::emitThrow() {
   uint32_t tagIndex;
   BaseNothingVector unused_argValues{};
@@ -4553,6 +4785,26 @@ bool BaseCompiler::emitThrow() {
 
   deadCode_ = true;
 
+  return throwFrom(exn);
+}
+
+bool BaseCompiler::emitThrowRef() {
+  Nothing unused{};
+
+  if (!iter_.readThrowRef(&unused)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  RegRef exn = popRef();
+  Label ok;
+  masm.branchWasmAnyRefIsNull(false, exn, &ok);
+  trap(Trap::NullPointerDereference);
+  masm.bind(&ok);
+  deadCode_ = true;
   return throwFrom(exn);
 }
 
@@ -4849,6 +5101,9 @@ bool BaseCompiler::emitReturnCall() {
   }
 
   sync();
+  if (!insertLeaveFrame()) {
+    return false;
+  }
 
   const FuncType& funcType = *moduleEnv_.funcs[funcIndex].type;
   bool import = moduleEnv_.funcIsImport(funcIndex);
@@ -4966,6 +5221,9 @@ bool BaseCompiler::emitReturnCallIndirect() {
   }
 
   sync();
+  if (!insertLeaveFrame()) {
+    return false;
+  }
 
   const FuncType& funcType = (*moduleEnv_.types)[funcTypeIndex].funcType();
 
@@ -5072,6 +5330,9 @@ bool BaseCompiler::emitReturnCallRef() {
   }
 
   sync();
+  if (!insertLeaveFrame()) {
+    return false;
+  }
 
   // Stack: ... arg1 .. argn callee
 
@@ -6964,6 +7225,83 @@ bool BaseCompiler::emitGcArraySet(RegRef object, RegPtr data, RegI32 index,
   return true;
 }
 
+// Emits allocation code for a GC struct. The struct may have an out-of-line
+// data area; if so, `isOutlineStruct` will be true and `outlineBase` will be
+// allocated and must be freed.
+template <bool ZeroFields>
+bool BaseCompiler::emitStructAlloc(uint32_t typeIndex, RegRef* object,
+                                   bool* isOutlineStruct, RegPtr* outlineBase) {
+  const TypeDef& typeDef = (*moduleEnv_.types)[typeIndex];
+  const StructType& structType = typeDef.structType();
+  gc::AllocKind allocKind = WasmStructObject::allocKindForTypeDef(&typeDef);
+
+  *isOutlineStruct = WasmStructObject::requiresOutlineBytes(structType.size_);
+
+  // Reserve this register early if we will need it so that it is not taken by
+  // any register used in this function.
+  needPtr(RegPtr(PreBarrierReg));
+
+  *object = RegRef();
+
+  // Allocate an uninitialized struct. This requires the type definition
+  // for the struct to be pushed on the stack. This will trap on OOM.
+  if (*isOutlineStruct) {
+    pushPtr(loadTypeDefInstanceData(typeIndex));
+    if (!emitInstanceCall(ZeroFields ? SASigStructNewOOL_true
+                                     : SASigStructNewOOL_false)) {
+      return false;
+    }
+    *object = popRef();
+  } else {
+    // We eagerly sync the value stack to the machine stack here so as not to
+    // confuse things with the conditional instance call below.
+    sync();
+
+    RegPtr instance;
+    *object = RegRef(ReturnReg);
+    needRef(*object);
+#  ifndef RABALDR_PIN_INSTANCE
+    // We reuse the result register for the instance.
+    instance = RegPtr(ReturnReg);
+    fr.loadInstancePtr(instance);
+#  else
+    // We can use the pinned instance register.
+    instance = RegPtr(InstanceReg);
+#  endif
+
+    RegPtr typeDefData = loadTypeDefInstanceData(typeIndex);
+    RegPtr temp1 = needPtr();
+    RegPtr temp2 = needPtr();
+
+    Label success;
+    Label fail;
+    masm.wasmNewStructObject(instance, *object, typeDefData, temp1, temp2,
+                             &fail, allocKind, ZeroFields);
+    freePtr(temp1);
+    freePtr(temp2);
+    masm.jump(&success);
+
+    masm.bind(&fail);
+    freeRef(*object);
+    pushPtr(typeDefData);
+    if (!emitInstanceCall(ZeroFields ? SASigStructNewIL_true
+                                     : SASigStructNewIL_false)) {
+      return false;
+    }
+    *object = popRef();
+    MOZ_ASSERT(*object == RegRef(ReturnReg));
+
+    masm.bind(&success);
+  }
+
+  *outlineBase = *isOutlineStruct ? needPtr() : RegPtr();
+
+  // Free the barrier reg for later use
+  freePtr(RegPtr(PreBarrierReg));
+
+  return true;
+}
+
 bool BaseCompiler::emitStructNew() {
   uint32_t typeIndex;
   BaseNothingVector args{};
@@ -6975,19 +7313,14 @@ bool BaseCompiler::emitStructNew() {
     return true;
   }
 
-  const StructType& structType = (*moduleEnv_.types)[typeIndex].structType();
+  const TypeDef& typeDef = (*moduleEnv_.types)[typeIndex];
+  const StructType& structType = typeDef.structType();
 
-  // Figure out whether we need an OOL storage area, and hence which routine
-  // to call.
-  SymbolicAddressSignature calleeSASig =
-      WasmStructObject::requiresOutlineBytes(structType.size_)
-          ? SASigStructNewOOL_false
-          : SASigStructNewIL_false;
-
-  // Allocate an uninitialized struct. This requires the type definition
-  // for the struct to be pushed on the stack. This will trap on OOM.
-  pushPtr(loadTypeDefInstanceData(typeIndex));
-  if (!emitInstanceCall(calleeSASig)) {
+  RegRef object;
+  RegPtr outlineBase;
+  bool isOutlineStruct;
+  if (!emitStructAlloc<false>(typeIndex, &object, &isOutlineStruct,
+                              &outlineBase)) {
     return false;
   }
 
@@ -6996,18 +7329,6 @@ bool BaseCompiler::emitStructNew() {
   // really only need to pop the stack once at the end, not for every element,
   // but to do better we need a bit more machinery to load elements off the
   // stack into registers.
-
-  bool isOutlineStruct = structType.size_ > WasmStructObject_MaxInlineBytes;
-
-  // Reserve this register early if we will need it so that it is not taken by
-  // any register used in this function.
-  needPtr(RegPtr(PreBarrierReg));
-
-  RegRef object = popRef();
-  RegPtr outlineBase = isOutlineStruct ? needPtr() : RegPtr();
-
-  // Free the barrier reg after we've allocated all registers
-  freePtr(RegPtr(PreBarrierReg));
 
   // Optimization opportunity: when the value being stored is a known
   // zero/null we need store nothing.  This case may be somewhat common
@@ -7080,19 +7401,20 @@ bool BaseCompiler::emitStructNewDefault() {
     return true;
   }
 
-  const StructType& structType = (*moduleEnv_.types)[typeIndex].structType();
+  RegRef object;
+  bool isOutlineStruct;
+  RegPtr outlineBase;
+  if (!emitStructAlloc<true>(typeIndex, &object, &isOutlineStruct,
+                             &outlineBase)) {
+    return false;
+  }
 
-  // Figure out whether we need an OOL storage area, and hence which routine
-  // to call.
-  SymbolicAddressSignature calleeSASig =
-      WasmStructObject::requiresOutlineBytes(structType.size_)
-          ? SASigStructNewOOL_true
-          : SASigStructNewIL_true;
+  if (isOutlineStruct) {
+    freePtr(outlineBase);
+  }
+  pushRef(object);
 
-  // Allocate a default initialized struct. This requires the type definition
-  // for the struct to be pushed on the stack. This will trap on OOM.
-  pushPtr(loadTypeDefInstanceData(typeIndex));
-  return emitInstanceCall(calleeSASig);
+  return true;
 }
 
 bool BaseCompiler::emitStructGet(FieldWideningOp wideningOp) {
@@ -8079,15 +8401,15 @@ bool BaseCompiler::emitBrOnCast(bool onSuccess) {
                             sourceType, destType);
 }
 
-bool BaseCompiler::emitExternInternalize() {
-  // extern.internalize is a no-op because anyref and extern share the same
+bool BaseCompiler::emitAnyConvertExtern() {
+  // any.convert_extern is a no-op because anyref and extern share the same
   // representation
   Nothing nothing;
   return iter_.readRefConversion(RefType::extern_(), RefType::any(), &nothing);
 }
 
-bool BaseCompiler::emitExternExternalize() {
-  // extern.externalize is a no-op because anyref and extern share the same
+bool BaseCompiler::emitExternConvertAny() {
+  // extern.convert_any is a no-op because anyref and extern share the same
   // representation
   Nothing nothing;
   return iter_.readRefConversion(RefType::any(), RefType::extern_(), &nothing);
@@ -9340,13 +9662,13 @@ bool BaseCompiler::emitVectorLaneSelect() {
 
 //////////////////////////////////////////////////////////////////////////////
 //
-// "Intrinsics" - magically imported functions for internal use.
+// "Builtin module funcs" - magically imported functions for internal use.
 
-bool BaseCompiler::emitIntrinsic() {
-  const Intrinsic* intrinsic;
+bool BaseCompiler::emitCallBuiltinModuleFunc() {
+  const BuiltinModuleFunc* builtinModuleFunc;
 
   BaseNothingVector params;
-  if (!iter_.readIntrinsic(&intrinsic, &params)) {
+  if (!iter_.readCallBuiltinModuleFunc(&builtinModuleFunc, &params)) {
     return false;
   }
 
@@ -9354,11 +9676,13 @@ bool BaseCompiler::emitIntrinsic() {
     return true;
   }
 
-  // The final parameter of an intrinsic is implicitly the heap base
-  pushHeapBase(0);
+  if (builtinModuleFunc->usesMemory) {
+    // The final parameter of an builtinModuleFunc is implicitly the heap base
+    pushHeapBase(0);
+  }
 
-  // Call the intrinsic
-  return emitInstanceCall(intrinsic->signature);
+  // Call the builtinModuleFunc
+  return emitInstanceCall(builtinModuleFunc->signature);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -9596,6 +9920,16 @@ bool BaseCompiler::emitBody() {
           return iter_.unrecognizedOpcode(&op);
         }
         CHECK_NEXT(emitRethrow());
+      case uint16_t(Op::ThrowRef):
+        if (!moduleEnv_.exnrefEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitThrowRef());
+      case uint16_t(Op::TryTable):
+        if (!moduleEnv_.exnrefEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitTryTable());
       case uint16_t(Op::Br):
         CHECK_NEXT(emitBr());
       case uint16_t(Op::BrIf):
@@ -10275,10 +10609,10 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(emitBrOnCast(/*onSuccess=*/true));
           case uint32_t(GcOp::BrOnCastFail):
             CHECK_NEXT(emitBrOnCast(/*onSuccess=*/false));
-          case uint16_t(GcOp::ExternInternalize):
-            CHECK_NEXT(emitExternInternalize());
-          case uint16_t(GcOp::ExternExternalize):
-            CHECK_NEXT(emitExternExternalize());
+          case uint16_t(GcOp::AnyConvertExtern):
+            CHECK_NEXT(emitAnyConvertExtern());
+          case uint16_t(GcOp::ExternConvertAny):
+            CHECK_NEXT(emitExternConvertAny());
           default:
             break;
         }  // switch (op.b1)
@@ -11196,12 +11530,12 @@ bool BaseCompiler::emitBody() {
 
       // asm.js and other private operations
       case uint16_t(Op::MozPrefix): {
-        if (op.b1 != uint32_t(MozOp::Intrinsic) ||
-            !moduleEnv_.intrinsicsEnabled()) {
+        if (op.b1 != uint32_t(MozOp::CallBuiltinModuleFunc) ||
+            !moduleEnv_.isBuiltinModule()) {
           return iter_.unrecognizedOpcode(&op);
         }
-        // private intrinsic operations
-        CHECK_NEXT(emitIntrinsic());
+        // Call a private builtin module func
+        CHECK_NEXT(emitCallBuiltinModuleFunc());
       }
 
       default:
@@ -11389,11 +11723,7 @@ bool BaseCompiler::emitFunction() {
     return false;
   }
 
-  if (!endFunction()) {
-    return false;
-  }
-
-  return true;
+  return endFunction();
 }
 
 BaseCompiler::BaseCompiler(const ModuleEnvironment& moduleEnv,

@@ -14,8 +14,8 @@
 #endif
 
 #include "gc/GC.h"
-#include "js/AllocPolicy.h"         // js::ReportOutOfMemory
-#include "js/friend/StackLimits.h"  // js::ReportOverRecursed
+#include "js/AllocPolicy.h"  // js::ReportOutOfMemory
+#include "js/friend/StackLimits.h"  // js::ReportOverRecursed, js::MinimumStackLimitMargin
 #include "js/Modules.h"
 #include "util/DifferentialTesting.h"
 #include "util/NativeStack.h"  // GetNativeStackBase
@@ -88,11 +88,8 @@ bool FrontendContext::allocateOwnedPool() {
 }
 
 bool FrontendContext::hadErrors() const {
-  if (maybeCx_) {
-    if (maybeCx_->isExceptionPending()) {
-      return true;
-    }
-  }
+  // All errors must be reported to FrontendContext.
+  MOZ_ASSERT_IF(maybeCx_, !maybeCx_->isExceptionPending());
 
   return errors_.hadErrors();
 }
@@ -119,11 +116,7 @@ void FrontendContext::onOutOfMemory() { addPendingOutOfMemory(); }
 void FrontendContext::onOverRecursed() { errors_.overRecursed = true; }
 
 void FrontendContext::recoverFromOutOfMemory() {
-  // TODO: Remove this branch once error report directly against JSContext is
-  //       removed from the frontend code.
-  if (maybeCx_) {
-    maybeCx_->recoverFromOutOfMemory();
-  }
+  MOZ_ASSERT_IF(maybeCx_, !maybeCx_->isThrowingOutOfMemory());
 
   errors_.outOfMemory = false;
 }
@@ -286,3 +279,37 @@ FrontendContext* js::NewFrontendContext() {
 }
 
 void js::DestroyFrontendContext(FrontendContext* fc) { js_delete_poison(fc); }
+
+#ifdef DEBUG
+void FrontendContext::checkAndUpdateFrontendContextRecursionLimit(void* sp) {
+  // For the js::MinimumStackLimitMargin to be effective, it should be larger
+  // than the largest stack space which might be consumed by successive calls
+  // to AutoCheckRecursionLimit::check.
+  //
+  // This function asserts that this property holds by recalling the stack
+  // pointer of the previous call and comparing the consumed stack size with
+  // the minimum margin.
+  //
+  // If this property does not hold, either the stack limit should be increased
+  // or more calls to check for recursion should be added.
+  if (previousStackPointer_ != nullptr) {
+#  if JS_STACK_GROWTH_DIRECTION > 0
+    if (sp > previousStackPointer_) {
+      size_t diff = uintptr_t(sp) - uintptr_t(previousStackPointer_);
+      MOZ_ASSERT(diff < js::MinimumStackLimitMargin);
+    }
+#  else
+    if (sp < previousStackPointer_) {
+      size_t diff = uintptr_t(previousStackPointer_) - uintptr_t(sp);
+      MOZ_ASSERT(diff < js::MinimumStackLimitMargin);
+    }
+#  endif
+  }
+  previousStackPointer_ = sp;
+}
+
+void js::CheckAndUpdateFrontendContextRecursionLimit(FrontendContext* fc,
+                                                     void* sp) {
+  fc->checkAndUpdateFrontendContextRecursionLimit(sp);
+}
+#endif

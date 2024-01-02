@@ -2501,17 +2501,6 @@ MOZ_ALWAYS_INLINE const nsTSubstring<CharT>& NonNullHelper(
 void UpdateReflectorGlobal(JSContext* aCx, JS::Handle<JSObject*> aObj,
                            ErrorResult& aError);
 
-/**
- * Used to implement the Symbol.hasInstance property of an interface object.
- */
-bool InterfaceHasInstance(JSContext* cx, unsigned argc, JS::Value* vp);
-
-bool InterfaceHasInstance(JSContext* cx, int prototypeID, int depth,
-                          JS::Handle<JSObject*> instance, bool* bp);
-
-// Used to implement the cross-context <Interface>.isInstance static method.
-bool InterfaceIsInstance(JSContext* cx, unsigned argc, JS::Value* vp);
-
 // Helper for lenient getters/setters to report to console.  If this
 // returns false, we couldn't even get a global.
 bool ReportLenientThisUnwrappingFailure(JSContext* cx, JSObject* obj);
@@ -2568,8 +2557,10 @@ already_AddRefed<T> ConstructJSImplementation(const char* aContractId,
  * As such, the string is not UTF-8 encoded.  Any UTF8 strings passed to these
  * methods will be mangled.
  */
-bool NonVoidByteStringToJsval(JSContext* cx, const nsACString& str,
-                              JS::MutableHandle<JS::Value> rval);
+inline bool NonVoidByteStringToJsval(JSContext* cx, const nsACString& str,
+                                     JS::MutableHandle<JS::Value> rval) {
+  return xpc::NonVoidLatin1StringToJsval(cx, str, rval);
+}
 inline bool ByteStringToJsval(JSContext* cx, const nsACString& str,
                               JS::MutableHandle<JS::Value> rval) {
   if (str.IsVoid()) {
@@ -2954,6 +2945,15 @@ bool CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
     if (!CreateGlobalOptions<T>::PostCreateGlobal(aCx, aGlobal)) {
       return false;
     }
+
+    // Initializing this at this point for nsGlobalWindowInner makes no sense,
+    // because GetRTPCallerType doesn't return the correct result before
+    // the global is completely initialized with a document.
+    if constexpr (!std::is_base_of_v<nsGlobalWindowInner, T>) {
+      JS::SetRealmReduceTimerPrecisionCallerType(
+          js::GetNonCCWObjectRealm(aGlobal),
+          RTPCallerTypeToToken(aNative->GetRTPCallerType()));
+    }
   }
 
   if (aInitStandardClasses && !JS::InitRealmStandardClasses(aCx)) {
@@ -3095,10 +3095,15 @@ inline RefPtr<T> StrongOrRawPtr(RefPtr<S>&& aPtr) {
   return std::move(aPtr);
 }
 
-template <class T, class ReturnType = std::conditional_t<IsRefcounted<T>::value,
-                                                         T*, UniquePtr<T>>>
-inline ReturnType StrongOrRawPtr(T* aPtr) {
-  return ReturnType(aPtr);
+template <class T, typename = std::enable_if_t<IsRefcounted<T>::value>>
+inline T* StrongOrRawPtr(T* aPtr) {
+  return aPtr;
+}
+
+template <class T, class S,
+          typename = std::enable_if_t<!IsRefcounted<S>::value>>
+inline UniquePtr<T> StrongOrRawPtr(UniquePtr<S>&& aPtr) {
+  return std::move(aPtr);
 }
 
 template <class T, template <typename> class SmartPtr, class S>

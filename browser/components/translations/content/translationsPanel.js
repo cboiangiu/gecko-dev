@@ -11,6 +11,7 @@
 /* eslint-enable jsdoc/valid-types */
 
 ChromeUtils.defineESModuleGetters(this, {
+  PageActions: "resource:///modules/PageActions.sys.mjs",
   TranslationsTelemetry:
     "chrome://browser/content/translations/TranslationsTelemetry.sys.mjs",
 });
@@ -23,6 +24,7 @@ const PageAction = Object.freeze({
   NO_CHANGE: "NO_CHANGE",
   RESTORE_PAGE: "RESTORE_PAGE",
   TRANSLATE_PAGE: "TRANSLATE_PAGE",
+  CLOSE_PANEL: "CLOSE_PANEL",
 });
 
 /**
@@ -151,6 +153,11 @@ class CheckboxPageAction {
       case CheckboxPageAction.#computeState(1, 0, 0, 1):
       case CheckboxPageAction.#computeState(1, 0, 0, 0):
         return PageAction.RESTORE_PAGE;
+      case CheckboxPageAction.#computeState(0, 1, 0, 0):
+      case CheckboxPageAction.#computeState(0, 0, 0, 1):
+      case CheckboxPageAction.#computeState(0, 1, 0, 1):
+      case CheckboxPageAction.#computeState(0, 0, 0, 0):
+        return PageAction.CLOSE_PANEL;
     }
     return PageAction.NO_CHANGE;
   }
@@ -169,6 +176,10 @@ class CheckboxPageAction {
         return PageAction.RESTORE_PAGE;
       case CheckboxPageAction.#computeState(0, 1, 0, 1):
         return PageAction.TRANSLATE_PAGE;
+      case CheckboxPageAction.#computeState(0, 0, 1, 0):
+      case CheckboxPageAction.#computeState(0, 1, 0, 0):
+      case CheckboxPageAction.#computeState(0, 0, 0, 0):
+        return PageAction.CLOSE_PANEL;
     }
     return PageAction.NO_CHANGE;
   }
@@ -599,6 +610,10 @@ var TranslationsPanel = new (class {
    * @returns {boolean}
    */
   #isShowingDefaultView() {
+    if (!this.#lazyElements) {
+      // Nothing has been initialized.
+      return false;
+    }
     const { multiview } = this.elements;
     return (
       multiview.getAttribute("mainViewId") === "translations-panel-view-default"
@@ -608,9 +623,10 @@ var TranslationsPanel = new (class {
   /**
    * Show the default view of choosing a source and target language.
    *
+   * @param {TranslationsParent} actor
    * @param {boolean} force - Force the page to show translation options.
    */
-  async #showDefaultView(force = false) {
+  async #showDefaultView(actor, force = false) {
     const {
       fromMenuList,
       multiview,
@@ -637,7 +653,7 @@ var TranslationsPanel = new (class {
         message: "translations-panel-error-load-languages",
         hint: "translations-panel-error-load-languages-hint",
         actionText: "translations-panel-error-load-languages-hint-button",
-        actionCommand: () => this.#reloadLangList(),
+        actionCommand: () => this.#reloadLangList(actor),
       });
 
       translateButton.disabled = true;
@@ -671,7 +687,6 @@ var TranslationsPanel = new (class {
       this.updateUIForReTranslation(false /* isReTranslation */);
       cancelButton.hidden = false;
       multiview.setAttribute("mainViewId", "translations-panel-view-default");
-      let actor = this.#getTranslationsActor();
 
       if (!this._hasShownPanel) {
         actor.firstShowUriSpec = gBrowser.currentURI.spec;
@@ -874,7 +889,7 @@ var TranslationsPanel = new (class {
   async #showRevisitView({ fromLanguage, toLanguage }) {
     const { fromMenuList, toMenuList, intro } = this.elements;
     if (!this.#isShowingDefaultView()) {
-      await this.#showDefaultView();
+      await this.#showDefaultView(this.#getTranslationsActor());
     }
     intro.hidden = true;
     fromMenuList.value = fromLanguage;
@@ -969,7 +984,10 @@ var TranslationsPanel = new (class {
     const { panel } = this.elements;
     PanelMultiView.hidePopup(panel);
 
-    await this.#showDefaultView(true /* force this view to be shown */);
+    await this.#showDefaultView(
+      this.#getTranslationsActor(),
+      true /* force this view to be shown */
+    );
 
     await this.#openPanelPopup(this.elements.appMenuButton, {
       event,
@@ -978,10 +996,13 @@ var TranslationsPanel = new (class {
     });
   }
 
-  async #reloadLangList() {
+  /**
+   * @param {TranslationsActor} actor
+   */
+  async #reloadLangList(actor) {
     try {
       await this.#ensureLangListsBuilt();
-      await this.#showDefaultView();
+      await this.#showDefaultView(actor);
     } catch (error) {
       this.elements.errorHintAction.disabled = false;
     }
@@ -1199,7 +1220,7 @@ var TranslationsPanel = new (class {
         this.console?.error(error);
       });
     } else {
-      await this.#showDefaultView().catch(error => {
+      await this.#showDefaultView(this.#getTranslationsActor()).catch(error => {
         this.console?.error(error);
       });
     }
@@ -1231,17 +1252,6 @@ var TranslationsPanel = new (class {
       maintainFlow: false,
       isFirstUserInteraction,
     });
-  }
-
-  /**
-   * Removes the translations button.
-   */
-  #hideTranslationsButton() {
-    const { button, buttonLocale, buttonCircleArrows } = this.buttonElements;
-    button.hidden = true;
-    buttonLocale.hidden = true;
-    buttonCircleArrows.hidden = true;
-    button.removeAttribute("translationsactive");
   }
 
   /**
@@ -1345,6 +1355,10 @@ var TranslationsPanel = new (class {
         await this.onTranslate();
         break;
       }
+      case PageAction.CLOSE_PANEL: {
+        PanelMultiView.hidePopup(this.elements.panel);
+        break;
+      }
     }
   }
 
@@ -1426,8 +1440,6 @@ var TranslationsPanel = new (class {
     this.#getTranslationsActor().restorePage(docLangTag);
   }
 
-  handleEventId = 0;
-
   /**
    * An event handler that allows the TranslationsPanel object
    * to be compatible with the addTabsProgressListener function.
@@ -1437,8 +1449,35 @@ var TranslationsPanel = new (class {
   onLocationChange(browser) {
     if (browser.currentURI.spec.startsWith("about:reader")) {
       // Hide the translations button when entering reader mode.
-      TranslationsPanel.#hideTranslationsButton();
+      this.buttonElements.button.hidden = true;
     }
+  }
+
+  /**
+   * Update the view to show an error.
+   *
+   * @param {TranslationParent} actor
+   */
+  async #showEngineError(actor) {
+    const { button } = this.buttonElements;
+    await this.#ensureLangListsBuilt();
+    if (!this.#isShowingDefaultView()) {
+      await this.#showDefaultView(actor).catch(e => {
+        this.console?.error(e);
+      });
+    }
+    this.elements.error.hidden = false;
+    this.#showError({
+      message: "translations-panel-error-translating",
+    });
+    const targetButton = button.hidden ? this.elements.appMenuButton : button;
+
+    // Re-open the menu on an error.
+    await this.#openPanelPopup(targetButton, {
+      autoShow: true,
+      viewName: "errorView",
+      maintainFlow: true,
+    });
   }
 
   /**
@@ -1446,7 +1485,7 @@ var TranslationsPanel = new (class {
    *
    * @param {CustomEvent} event
    */
-  handleEvent = async event => {
+  handleEvent = event => {
     switch (event.type) {
       case "TranslationsParent:OfferTranslation": {
         if (Services.wm.getMostRecentBrowserWindow()?.gBrowser === gBrowser) {
@@ -1454,15 +1493,14 @@ var TranslationsPanel = new (class {
         }
         break;
       }
-      case "TranslationsParent:LanguageState":
-        // Check this value after every `await` to guard against race conditions.
-        const handleEventId = ++this.handleEventId;
+      case "TranslationsParent:LanguageState": {
+        const { actor } = event.detail;
         const {
           detectedLanguages,
           requestedTranslationPair,
           error,
           isEngineReady,
-        } = event.detail;
+        } = actor.languageState;
 
         const { button, buttonLocale, buttonCircleArrows } =
           this.buttonElements;
@@ -1482,7 +1520,7 @@ var TranslationsPanel = new (class {
           // Make sure to use the language state that is passed by the event.detail, and
           // don't read it from the actor here, as it's possible the actor isn't available
           // via the gBrowser.selectedBrowser.
-          this.#updateViewFromTranslationStatus(event.detail);
+          this.#updateViewFromTranslationStatus(actor.languageState);
         }
 
         if (
@@ -1494,12 +1532,11 @@ var TranslationsPanel = new (class {
           error ||
           // Finally check that we can translate this language.
           (hasSupportedLanguage &&
-            (await TranslationsParent.getIsTranslationsEngineSupported()))
+            TranslationsParent.getIsTranslationsEngineSupported())
         ) {
-          if (handleEventId !== this.handleEventId) {
-            // A new handleEvent was received, this one is stale.
-            return;
-          }
+          // Keep track if the button was originally hidden, because it will be shown now.
+          const wasButtonHidden = button.hidden;
+
           button.hidden = false;
           if (requestedTranslationPair) {
             // The translation is active, update the urlbar button.
@@ -1545,8 +1582,7 @@ var TranslationsPanel = new (class {
             // button's accessible tooltip label.
             if (
               this._hasShownPanel &&
-              gBrowser.currentURI.spec !==
-                this.#getTranslationsActor().firstShowUriSpec
+              gBrowser.currentURI.spec !== actor.firstShowUriSpec
             ) {
               document.l10n.setAttributes(
                 button,
@@ -1559,42 +1595,29 @@ var TranslationsPanel = new (class {
               );
             }
           }
-        } else {
-          if (handleEventId !== this.handleEventId) {
-            // A new handleEvent was received, this one is stale.
-            return;
+
+          // The button was hidden, but now it is shown.
+          if (wasButtonHidden) {
+            PageActions.sendPlacedInUrlbarTrigger(button);
           }
-          this.#hideTranslationsButton();
+        } else if (!button.hidden) {
+          // There are no translations visible, hide the button.
+          button.hidden = true;
         }
 
         switch (error) {
           case null:
             break;
           case "engine-load-failure":
-            if (!this.#isShowingDefaultView()) {
-              await this.#showDefaultView().catch(e => {
-                this.console?.error(e);
-              });
-            }
-            this.elements.error.hidden = false;
-            this.#showError({
-              message: "translations-panel-error-translating",
-            });
-            const targetButton = button.hidden
-              ? this.elements.appMenuButton
-              : button;
-
-            // Re-open the menu on an error.
-            await this.#openPanelPopup(targetButton, {
-              autoShow: true,
-              viewName: "errorView",
-              maintainFlow: true,
-            });
+            this.#showEngineError(actor).catch(viewError =>
+              this.console.error(viewError)
+            );
             break;
           default:
             console.error("Unknown translation error", error);
         }
         break;
+      }
     }
   };
 })();

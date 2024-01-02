@@ -114,8 +114,8 @@ lazy_static! {
         // Don't do network connections for mitm priming
         ("security.certerrors.mitm.priming.enabled", Pref::new(false)),
 
-        // Ensure blocklist updates don't hit the network
-        ("services.settings.server", Pref::new("")),
+        // Ensure remote settings do not hit the network
+        ("services.settings.server", Pref::new("data:,#remote-settings-dummy/v1")),
 
         // Disable first run pages
         ("startup.homepage_welcome_url", Pref::new("about:blank")),
@@ -125,12 +125,18 @@ lazy_static! {
         ("browser.newtabpage.activity-stream.asrouter.providers.cfr", Pref::new("null")),
         // TODO: Remove once minimum supported Firefox release is 93.
         ("browser.newtabpage.activity-stream.asrouter.providers.cfr-fxa", Pref::new("null")),
+
+        // TODO: Remove once minimum supported Firefox release is 128.
         ("browser.newtabpage.activity-stream.asrouter.providers.snippets", Pref::new("null")),
+
         ("browser.newtabpage.activity-stream.asrouter.providers.message-groups", Pref::new("null")),
         ("browser.newtabpage.activity-stream.asrouter.providers.whats-new-panel", Pref::new("null")),
         ("browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments", Pref::new("null")),
         ("browser.newtabpage.activity-stream.feeds.system.topstories", Pref::new(false)),
+
+        // TODO: Remove once minimum supported Firefox release is 128.
         ("browser.newtabpage.activity-stream.feeds.snippets", Pref::new(false)),
+
         ("browser.newtabpage.activity-stream.tippyTop.service.endpoint", Pref::new("")),
         ("browser.newtabpage.activity-stream.discoverystream.config", Pref::new("[]")),
 

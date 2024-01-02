@@ -17,6 +17,12 @@ enum WidgetNodeType : int;
 struct _GtkStyle;
 typedef struct _GDBusProxy GDBusProxy;
 typedef struct _GtkCssProvider GtkCssProvider;
+typedef struct _GFile GFile;
+typedef struct _GFileMonitor GFileMonitor;
+
+namespace mozilla {
+enum class StyleGtkThemeFamily : uint8_t;
+}
 
 class nsLookAndFeel final : public nsXPLookAndFeel {
  public:
@@ -47,21 +53,16 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
     nscolor mFg = kBlack;
   };
 
+  using ThemeFamily = mozilla::StyleGtkThemeFamily;
+
  protected:
   static bool WidgetUsesImage(WidgetNodeType aNodeType);
   void RecordLookAndFeelSpecificTelemetry() override;
   static bool ShouldHonorThemeScrollbarColors();
   mozilla::Maybe<ColorScheme> ComputeColorSchemeSetting();
 
-  enum class ThemeFamily : uint8_t {
-    // Adwaita, the default GTK theme.
-    Adwaita,
-    // Breeze, the default KDE theme.
-    Breeze,
-    // Yaru, the default Ubuntu theme.
-    Yaru,
-    Other,
-  };
+  void WatchDBus();
+  void UnwatchDBus();
 
   // We use up to two themes (one light, one dark), which might have different
   // sets of fonts and colors.
@@ -71,11 +72,7 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
     bool mHighContrast = false;
     bool mPreferDarkTheme = false;
 
-    ThemeFamily mFamily = ThemeFamily::Other;
-
-    // NOTE(emilio): This is unused, but if we need to we can use it to override
-    // system colors with standins like we do for the non-native theme.
-    bool mCompatibleWithHTMLLightColors = false;
+    ThemeFamily mFamily{0};
 
     // Cached fonts
     nsString mDefaultFontName;
@@ -96,9 +93,10 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
     ColorPair mHeaderBarInactive;
     ColorPair mButton;
     ColorPair mButtonHover;
-    nscolor mButtonActiveText = kBlack;
-    nscolor mFrameOuterLightBorder = kBlack;
-    nscolor mFrameInnerDarkBorder = kBlack;
+    ColorPair mButtonActive;
+    nscolor mButtonBorder = kBlack;
+    nscolor mThreeDHighlight = kBlack;
+    nscolor mThreeDShadow = kBlack;
     nscolor mOddCellBackground = kWhite;
     nscolor mNativeHyperLinkText = kBlack;
     nscolor mNativeVisitedHyperLinkText = kBlack;
@@ -108,6 +106,9 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
     nscolor mComboBoxText = kBlack;
     ColorPair mField;
     ColorPair mWindow;
+    ColorPair mDialog;
+    ColorPair mSidebar;
+    nscolor mSidebarBorder = kBlack;
 
     nscolor mMozWindowActiveBorder = kBlack;
     nscolor mMozWindowInactiveBorder = kBlack;
@@ -117,8 +118,9 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
     ColorPair mAccent;
     ColorPair mSelectedItem;
 
-    nscolor mMozColHeaderText = kBlack;
-    nscolor mMozColHeaderHoverText = kBlack;
+    ColorPair mMozColHeader;
+    ColorPair mMozColHeaderHover;
+    ColorPair mMozColHeaderActive;
 
     ColorPair mTitlebar;
     ColorPair mTitlebarInactive;
@@ -160,7 +162,10 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
     return mSystemThemeOverridden ? mAltTheme : mSystemTheme;
   }
 
+  uint32_t mDBusID = 0;
   RefPtr<GDBusProxy> mDBusSettingsProxy;
+  RefPtr<GFile> mKdeColors;
+  RefPtr<GFileMonitor> mKdeColorsMonitor;
   mozilla::Maybe<ColorScheme> mColorSchemePreference;
   int32_t mCaretBlinkTime = 0;
   int32_t mCaretBlinkCount = -1;
@@ -195,6 +200,7 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
   bool ConfigureAltTheme();
   void ConfigureAndInitializeAltTheme();
   void ConfigureFinalEffectiveTheme();
+  void MaybeApplyAdwaitaOverrides();
 };
 
 #endif

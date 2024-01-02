@@ -219,6 +219,9 @@ class HTMLInputElement final : public TextControlElement,
   void SetLastValueChangeWasInteractive(bool);
 
   // TextControlElement
+  bool IsSingleLineTextControlOrTextArea() const override {
+    return IsSingleLineTextControl(false);
+  }
   void SetValueChanged(bool aValueChanged) override;
   bool IsSingleLineTextControl() const override;
   bool IsTextArea() const override;
@@ -230,7 +233,7 @@ class HTMLInputElement final : public TextControlElement,
   bool ValueChanged() const override;
   void GetTextEditorValue(nsAString& aValue) const override;
   MOZ_CAN_RUN_SCRIPT TextEditor* GetTextEditor() override;
-  TextEditor* GetTextEditorWithoutCreation() override;
+  TextEditor* GetTextEditorWithoutCreation() const override;
   nsISelectionController* GetSelectionController() override;
   nsFrameSelection* GetConstFrameSelection() override;
   TextControlState* GetTextControlState() const override {
@@ -820,7 +823,7 @@ class HTMLInputElement final : public TextControlElement,
 
   MOZ_CAN_RUN_SCRIPT nsIEditor* GetEditorForBindings();
   // For WebIDL bindings.
-  bool HasEditor();
+  bool HasEditor() const;
 
   bool IsInputEventTarget() const { return IsSingleLineTextControl(false); }
 
@@ -962,7 +965,7 @@ class HTMLInputElement final : public TextControlElement,
                     const nsAttrValue* aValue, const nsAttrValue* aOldValue,
                     nsIPrincipal* aSubjectPrincipal, bool aNotify) override;
 
-  void BeforeSetForm(bool aBindToTree) override;
+  void BeforeSetForm(HTMLFormElement* aForm, bool aBindToTree) override;
 
   void AfterClearForm(bool aUnbindOrDelete) override;
 
@@ -1067,6 +1070,7 @@ class HTMLInputElement final : public TextControlElement,
 
   MOZ_CAN_RUN_SCRIPT void FreeData();
   TextControlState* GetEditorState() const;
+  void EnsureEditorState();
 
   MOZ_CAN_RUN_SCRIPT TextEditor* GetTextEditorFromState();
 
@@ -1076,8 +1080,6 @@ class HTMLInputElement final : public TextControlElement,
   MOZ_CAN_RUN_SCRIPT
   void HandleTypeChange(FormControlType aNewType, bool aNotify);
 
-  enum class SanitizationKind { ForValueGetter, ForDisplay, Other };
-
   /**
    * If the input range has a list, this function will snap the given value to
    * the nearest tick mark, but only if the given value is close enough to that
@@ -1085,13 +1087,13 @@ class HTMLInputElement final : public TextControlElement,
    */
   void MaybeSnapToTickMark(Decimal& aValue);
 
+  enum class SanitizationKind { ForValueGetter, ForValueSetter, ForDisplay };
   /**
    * Sanitize the value of the element depending of its current type.
    * See:
    * http://www.whatwg.org/specs/web-apps/current-work/#value-sanitization-algorithm
    */
-  void SanitizeValue(nsAString& aValue,
-                     SanitizationKind = SanitizationKind::Other);
+  void SanitizeValue(nsAString& aValue, SanitizationKind) const;
 
   /**
    * Returns whether the placeholder attribute applies for the current type.
@@ -1595,14 +1597,21 @@ class HTMLInputElement final : public TextControlElement,
     }
   }
 
-  bool DoesDirnameApply() const {
+  /**
+   * https://html.spec.whatwg.org/#auto-directionality-form-associated-elements
+   */
+  bool IsAutoDirectionalityAssociated() const {
     switch (mType) {
+      case FormControlType::InputHidden:
       case FormControlType::InputText:
       case FormControlType::InputSearch:
-      case FormControlType::InputEmail:
-      case FormControlType::InputHidden:
       case FormControlType::InputTel:
       case FormControlType::InputUrl:
+      case FormControlType::InputEmail:
+      case FormControlType::InputPassword:
+      case FormControlType::InputSubmit:
+      case FormControlType::InputReset:
+      case FormControlType::InputButton:
         return true;
       default:
         return false;
@@ -1627,8 +1636,14 @@ class HTMLInputElement final : public TextControlElement,
   bool CheckActivationBehaviorPreconditions(EventChainVisitor& aVisitor) const;
 
   /**
+   * Call MaybeDispatchPasswordEvent or MaybeDispatchUsernameEvent
+   * in order to dispatch LoginManager events.
+   */
+  void MaybeDispatchLoginManagerEvents(HTMLFormElement* aForm);
+
+  /**
    * Fire an event when the password input field is removed from the DOM tree.
-   * This is now only used by the password manager.
+   * This is now only used by the password manager and formautofill.
    */
   void MaybeFireInputPasswordRemoved();
 

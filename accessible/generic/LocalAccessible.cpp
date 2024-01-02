@@ -101,12 +101,10 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(LocalAccessible)
 NS_IMPL_CYCLE_COLLECTING_RELEASE_WITH_DESTROY(LocalAccessible, LastRelease())
 
 LocalAccessible::LocalAccessible(nsIContent* aContent, DocAccessible* aDoc)
-    : Accessible(),
-      mContent(aContent),
+    : mContent(aContent),
       mDoc(aDoc),
       mParent(nullptr),
       mIndexInParent(-1),
-      mBounds(),
       mFirstLineStart(-1),
       mStateFlags(0),
       mContextFlags(0),
@@ -917,7 +915,8 @@ nsresult LocalAccessible::HandleAccEvent(AccEvent* aEvent) {
           AccCaretMoveEvent* event = downcast_accEvent(aEvent);
           ipcDoc->SendCaretMoveEvent(
               id, event->GetCaretOffset(), event->IsSelectionCollapsed(),
-              event->IsAtEndOfLine(), event->GetGranularity());
+              event->IsAtEndOfLine(), event->GetGranularity(),
+              event->IsFromUserInput());
           break;
         }
         case nsIAccessibleEvent::EVENT_TEXT_INSERTED:
@@ -935,16 +934,6 @@ nsresult LocalAccessible::HandleAccEvent(AccEvent* aEvent) {
           AccSelChangeEvent* selEvent = downcast_accEvent(aEvent);
           ipcDoc->SendSelectionEvent(id, selEvent->Widget()->ID(),
                                      aEvent->GetEventType());
-          break;
-        }
-        case nsIAccessibleEvent::EVENT_VIRTUALCURSOR_CHANGED: {
-          AccVCChangeEvent* vcEvent = downcast_accEvent(aEvent);
-          LocalAccessible* position = vcEvent->NewAccessible();
-          LocalAccessible* oldPosition = vcEvent->OldAccessible();
-          ipcDoc->SendVirtualCursorChangeEvent(
-              id, oldPosition ? oldPosition->ID() : 0,
-              position ? position->ID() : 0, vcEvent->Reason(),
-              vcEvent->IsFromUserInput());
           break;
         }
         case nsIAccessibleEvent::EVENT_FOCUS:
@@ -1040,9 +1029,9 @@ nsresult LocalAccessible::HandleAccEvent(AccEvent* aEvent) {
       // AccessibleWrap::UpdateSystemCaretFor currently needs to call
       // HyperTextAccessible::GetCaretRect again to get the widget and there's
       // no point calling it twice.
-      PlatformCaretMoveEvent(target, event->GetCaretOffset(),
-                             event->IsSelectionCollapsed(),
-                             event->GetGranularity(), rect);
+      PlatformCaretMoveEvent(
+          target, event->GetCaretOffset(), event->IsSelectionCollapsed(),
+          event->GetGranularity(), rect, event->IsFromUserInput());
       break;
     }
     case nsIAccessibleEvent::EVENT_TEXT_INSERTED:
@@ -1060,15 +1049,6 @@ nsresult LocalAccessible::HandleAccEvent(AccEvent* aEvent) {
       AccSelChangeEvent* selEvent = downcast_accEvent(aEvent);
       PlatformSelectionEvent(target, selEvent->Widget(),
                              aEvent->GetEventType());
-      break;
-    }
-    case nsIAccessibleEvent::EVENT_VIRTUALCURSOR_CHANGED: {
-#ifdef ANDROID
-      AccVCChangeEvent* vcEvent = downcast_accEvent(aEvent);
-      PlatformVirtualCursorChangeEvent(
-          target, vcEvent->OldAccessible(), vcEvent->NewAccessible(),
-          vcEvent->Reason(), vcEvent->IsFromUserInput());
-#endif
       break;
     }
     case nsIAccessibleEvent::EVENT_FOCUS: {
@@ -1265,14 +1245,8 @@ already_AddRefed<AccAttributes> LocalAccessible::NativeAttributes() {
                            Atomize(eCSSProperty_text_align));
 
   // Expose 'text-indent' attribute.
-  // XXX how does whatever reads this whether this was a percentage or a length?
-  const LengthPercentage& textIndent = f->StyleText()->mTextIndent;
-  if (textIndent.ConvertsToLength()) {
-    attributes->SetAttribute(nsGkAtoms::textIndent,
-                             textIndent.ToLengthInCSSPixels());
-  } else if (textIndent.ConvertsToPercentage()) {
-    attributes->SetAttribute(nsGkAtoms::textIndent, textIndent.ToPercentage());
-  }
+  attributes->SetAttribute(nsGkAtoms::textIndent,
+                           Atomize(eCSSProperty_text_indent));
 
   auto GetMargin = [&](mozilla::Side aSide) -> CSSCoord {
     // This is here only to guarantee that we do the same as getComputedStyle
@@ -1505,7 +1479,9 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
   }
 
   if (aAttribute == nsGkAtoms::aria_controls ||
-      aAttribute == nsGkAtoms::aria_flowto) {
+      aAttribute == nsGkAtoms::aria_flowto ||
+      aAttribute == nsGkAtoms::aria_details ||
+      aAttribute == nsGkAtoms::aria_errormessage) {
     mDoc->QueueCacheUpdate(this, CacheDomain::Relations);
   }
 

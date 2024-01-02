@@ -10,6 +10,9 @@
 
 #include "frontend/ParseNode.h"
 
+#include "js/AllocPolicy.h"
+#include "js/Vector.h"
+
 namespace js::frontend {
 
 struct BytecodeEmitter;
@@ -38,15 +41,18 @@ class MOZ_STACK_CLASS DecoratorEmitter {
 
   [[nodiscard]] bool emitInitializeFieldOrAccessor();
 
+  [[nodiscard]] bool emitCreateAddInitializerFunction(
+      FunctionNode* addInitializerFunction, TaggedParserAtomIndex initializers);
+
+  [[nodiscard]] bool emitCallExtraInitializers(
+      TaggedParserAtomIndex extraInitializers);
+
  private:
   [[nodiscard]] bool emitPropertyKey(ParseNode* key);
 
   [[nodiscard]] bool emitDecorationState();
 
   [[nodiscard]] bool emitUpdateDecorationState();
-
-  [[nodiscard]] bool emitDecoratorCallee(CallOrNewEmitter& cone,
-                                         ParseNode* decorator);
 
   [[nodiscard]] bool emitCallDecoratorForElement(Kind kind, ParseNode* key,
                                                  bool isStatic,
@@ -56,8 +62,6 @@ class MOZ_STACK_CLASS DecoratorEmitter {
 
   [[nodiscard]] bool emitCheckIsUndefined();
 
-  [[nodiscard]] bool emitCheckIsCallable();
-
   [[nodiscard]] bool emitCreateAddInitializerFunction();
 
   [[nodiscard]] bool emitCreateDecoratorContextObject(Kind kind, ParseNode* key,
@@ -66,6 +70,11 @@ class MOZ_STACK_CLASS DecoratorEmitter {
 
   [[nodiscard]] bool emitHandleNewValueField(TaggedParserAtomIndex atom,
                                              int8_t offset);
+
+  using DecoratorsVector = js::Vector<ParseNode*, 2, js::SystemAllocPolicy>;
+
+  [[nodiscard]] bool reverseDecoratorsToApplicationOrder(
+      const ListNode* decorators, DecoratorsVector& vec);
 };
 
 } /* namespace js::frontend */

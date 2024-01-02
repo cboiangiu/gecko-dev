@@ -278,3 +278,21 @@ async function MaybeSetStorageAccess(origin, embedding_origin, value) {
     // in the test.
   }
 }
+
+// Starts a dedicated worker in the given frame.
+function StartDedicatedWorker(frame) {
+  return PostMessageAndAwaitReply(
+    { command: "start_dedicated_worker" }, frame.contentWindow);
+}
+
+// Sends a message to the dedicated worker in the given frame.
+function MessageWorker(frame, message = {}) {
+  return PostMessageAndAwaitReply(
+    { command: "message_worker", message }, frame.contentWindow);
+}
+// Opens a WebSocket connection to origin from within frame, and
+// returns the cookie header that was sent during the handshake.
+function ReadCookiesFromWebSocketConnection(frame, origin) {
+  return PostMessageAndAwaitReply(
+   { command: "get_cookie_via_websocket", origin}, frame.contentWindow);
+}

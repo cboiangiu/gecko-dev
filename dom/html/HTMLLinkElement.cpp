@@ -108,10 +108,6 @@ void HTMLLinkElement::LinkAdded() {
   CreateAndDispatchEvent(u"DOMLinkAdded"_ns);
 }
 
-void HTMLLinkElement::LinkRemoved() {
-  CreateAndDispatchEvent(u"DOMLinkRemoved"_ns);
-}
-
 void HTMLLinkElement::UnbindFromTree(bool aNullParent) {
   CancelDNSPrefetch(*this);
   CancelPrefetchOrPreload();
@@ -130,8 +126,6 @@ void HTMLLinkElement::UnbindFromTree(bool aNullParent) {
                     eIgnoreCase)) {
       oldDoc->LocalizationLinkRemoved(this);
     }
-
-    CreateAndDispatchEvent(u"DOMLinkRemoved"_ns);
   }
 
   nsGenericHTMLElement::UnbindFromTree(aNullParent);
@@ -161,6 +155,11 @@ bool HTMLLinkElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
 
     if (aAttribute == nsGkAtoms::integrity) {
       aResult.ParseStringOrAtom(aValue);
+      return true;
+    }
+
+    if (aAttribute == nsGkAtoms::fetchpriority) {
+      ParseFetchPriority(aValue, aResult);
       return true;
     }
   }
@@ -390,6 +389,7 @@ Maybe<LinkStyle::SheetInfo> HTMLLinkElement::GetStyleSheetInfo() {
       alternate ? HasAlternateRel::Yes : HasAlternateRel::No,
       IsInline::No,
       mExplicitlyEnabled ? IsExplicitlyEnabled::Yes : IsExplicitlyEnabled::No,
+      GetFetchPriority(),
   });
 }
 
@@ -485,7 +485,7 @@ void HTMLLinkElement::
     if (!moduleLoader) {
       // For the print preview documents, at this moment it doesn't have module
       // loader yet, as the (print preview) document is not attached to the
-      // nsIContentViewer yet, so it doesn't have the GlobalObject.
+      // nsIDocumentViewer yet, so it doesn't have the GlobalObject.
       // Also, the script elements won't be processed as they are also cloned
       // from the original document.
       // So we simply bail out if the module loader is null.

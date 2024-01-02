@@ -111,7 +111,7 @@ class FuncType {
   }
 
  public:
-  FuncType() : args_(), results_() {}
+  FuncType() = default;
   FuncType(ValTypeVector&& args, ValTypeVector&& results)
       : args_(std::move(args)), results_(std::move(results)) {}
 
@@ -298,7 +298,7 @@ class StructType {
   OutlineTraceOffsetVector outlineTraceOffsets_;
 
  public:
-  StructType() : fields_(), size_(0) {}
+  StructType() : size_(0) {}
 
   explicit StructType(StructFieldVector&& fields)
       : fields_(std::move(fields)), size_(0) {}
@@ -444,12 +444,9 @@ class ArrayType {
   // "Matching type definitions" in WasmValType.h for more background.
   static bool matches(const RecGroup* lhsRecGroup, const ArrayType& lhs,
                       const RecGroup* rhsRecGroup, const ArrayType& rhs) {
-    if (lhs.isMutable_ != rhs.isMutable_ ||
-        lhs.elementType_.forMatch(lhsRecGroup) !=
-            rhs.elementType_.forMatch(rhsRecGroup)) {
-      return false;
-    }
-    return true;
+    return lhs.isMutable_ == rhs.isMutable_ &&
+           lhs.elementType_.forMatch(lhsRecGroup) ==
+               rhs.elementType_.forMatch(rhsRecGroup);
   }
 
   // Checks if two arrays are compatible in a given subtyping relationship.
@@ -1350,6 +1347,8 @@ inline RefTypeHierarchy RefType::hierarchy() const {
     case RefType::Extern:
     case RefType::NoExtern:
       return RefTypeHierarchy::Extern;
+    case RefType::Exn:
+      return RefTypeHierarchy::Exn;
     case RefType::Any:
     case RefType::None:
     case RefType::I31:
@@ -1375,6 +1374,7 @@ inline TableRepr RefType::tableRepr() const {
   switch (hierarchy()) {
     case RefTypeHierarchy::Any:
     case RefTypeHierarchy::Extern:
+    case RefTypeHierarchy::Exn:
       return TableRepr::Ref;
     case RefTypeHierarchy::Func:
       return TableRepr::Func;

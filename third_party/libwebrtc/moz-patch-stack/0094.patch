@@ -1,49 +1,40 @@
-From: Jan Grulich <jgrulich@redhat.com>
-Date: Thu, 27 Jul 2023 09:49:00 +0000
-Subject: Bug 1841851 - WebRTC backport: PipeWire capturer: increase buffer
- size to avoid buffer overflow r=jib,webrtc-reviewers,mjf
+From: Michael Froman <mfroman@mozilla.com>
+Date: Tue, 14 Feb 2023 03:27:00 +0000
+Subject: Bug 1816173 - pt12 - add shim config for
+ third_party/libwebrtc/testing/{gmock|gtest} r=ng
 
-This is a simple backport of an WebRTC upstream change.
+We don't vendor third_party/libwebrtc/third_party/gmock
+                third_party/libwebrtc/third_party/gtest, so:
+- add BUILD.gn to avoid scattered BUILD.gn changes
 
-Upstream commit: 8fcc6df79daf1810cd4ecdb8d2ef1d361abfdc9c
-
-Differential Revision: https://phabricator.services.mozilla.com/D183355
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/263be02fdeb0c3556e1da296eb18eb3d154eb99e
+Differential Revision: https://phabricator.services.mozilla.com/D169674
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/4ea9d2db79c42a144235e45c47c71adf1dd01fdc
 ---
- .../linux/wayland/shared_screencast_stream.cc               | 6 +++---
- 1 file changed, 3 insertions(+), 3 deletions(-)
+ testing/gmock/BUILD.gn | 5 +++++
+ testing/gtest/BUILD.gn | 5 +++++
+ 2 files changed, 10 insertions(+)
+ create mode 100644 testing/gmock/BUILD.gn
+ create mode 100644 testing/gtest/BUILD.gn
 
-diff --git a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-index 5b4e23c32d..0c26e7a7d5 100644
---- a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-+++ b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-@@ -281,7 +281,7 @@ void SharedScreenCastStreamPrivate::OnStreamParamChanged(
- 
-   that->stream_size_ = DesktopSize(width, height);
- 
--  uint8_t buffer[1024] = {};
-+  uint8_t buffer[2048] = {};
-   auto builder = spa_pod_builder{buffer, sizeof(buffer)};
- 
-   // Setup buffers and meta header for new format.
-@@ -364,7 +364,7 @@ void SharedScreenCastStreamPrivate::OnRenegotiateFormat(void* data, uint64_t) {
-   {
-     PipeWireThreadLoopLock thread_loop_lock(that->pw_main_loop_);
- 
--    uint8_t buffer[2048] = {};
-+    uint8_t buffer[4096] = {};
- 
-     spa_pod_builder builder = spa_pod_builder{buffer, sizeof(buffer)};
- 
-@@ -482,7 +482,7 @@ bool SharedScreenCastStreamPrivate::StartScreenCastStream(
- 
-     pw_stream_add_listener(pw_stream_, &spa_stream_listener_,
-                            &pw_stream_events_, this);
--    uint8_t buffer[2048] = {};
-+    uint8_t buffer[4096] = {};
- 
-     spa_pod_builder builder = spa_pod_builder{buffer, sizeof(buffer)};
- 
--- 
-2.37.3
-
+diff --git a/testing/gmock/BUILD.gn b/testing/gmock/BUILD.gn
+new file mode 100644
+index 0000000000..a2a1efdea9
+--- /dev/null
++++ b/testing/gmock/BUILD.gn
+@@ -0,0 +1,5 @@
++import("//third_party/libaom/options.gni")
++import("../../webrtc.gni")
++
++rtc_library("gmock") {
++}
+diff --git a/testing/gtest/BUILD.gn b/testing/gtest/BUILD.gn
+new file mode 100644
+index 0000000000..c9c2703c37
+--- /dev/null
++++ b/testing/gtest/BUILD.gn
+@@ -0,0 +1,5 @@
++import("//third_party/libaom/options.gni")
++import("../../webrtc.gni")
++
++rtc_library("gtest") {
++}

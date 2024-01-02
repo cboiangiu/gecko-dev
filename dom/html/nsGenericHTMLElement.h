@@ -20,6 +20,8 @@
 #include "mozilla/dom/PopoverData.h"
 #include "mozilla/dom/ToggleEvent.h"
 
+#include <cstdint>
+
 class nsDOMTokenList;
 class nsIFormControlFrame;
 class nsIFrame;
@@ -40,6 +42,7 @@ class PresState;
 namespace dom {
 class ElementInternals;
 class HTMLFormElement;
+enum class FetchPriority : uint8_t;
 }  // namespace dom
 }  // namespace mozilla
 
@@ -181,7 +184,7 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
   void ForgetPreviouslyFocusedElementAfterHidingPopover();
   MOZ_CAN_RUN_SCRIPT void FocusPreviousElementAfterHidingPopover();
 
-  MOZ_CAN_RUN_SCRIPT void FocusCandidate(Element&, bool aClearUpFocus);
+  MOZ_CAN_RUN_SCRIPT void FocusCandidate(Element*, bool aClearUpFocus);
 
   void SetNonce(const nsAString& aNonce) {
     SetProperty(nsGkAtoms::nonce, new nsString(aNonce),
@@ -331,10 +334,10 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
   nsresult BindToTree(BindContext&, nsINode& aParent) override;
   void UnbindFromTree(bool aNullParent = true) override;
 
-  bool IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) override {
-    bool isFocusable = false;
-    IsHTMLFocusable(aWithMouse, &isFocusable, aTabIndex);
-    return isFocusable;
+  Focusable IsFocusableWithoutStyle(bool aWithMouse) override {
+    Focusable result;
+    IsHTMLFocusable(aWithMouse, &result.mFocusable, &result.mTabIndex);
+    return result;
   }
   /**
    * Returns true if a subclass is not allowed to override the value returned
@@ -681,7 +684,21 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
     GetAttr(nsGkAtoms::value, aResult);
   }
 
+  // <https://html.spec.whatwg.org/#fetch-priority-attribute>.
+  static mozilla::dom::FetchPriority ToFetchPriority(const nsAString& aValue);
+
+  void GetFetchPriority(nsAString& aFetchPriority) const;
+
+  void SetFetchPriority(const nsAString& aFetchPriority) {
+    SetHTMLAttr(nsGkAtoms::fetchpriority, aFetchPriority);
+  }
+
  protected:
+  mozilla::dom::FetchPriority GetFetchPriority() const;
+
+  static void ParseFetchPriority(const nsAString& aValue, nsAttrValue& aResult);
+
+ private:
   /**
    * Add/remove this element to the documents name cache
    */
@@ -902,19 +919,6 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
   // Used by A, AREA, LINK, and STYLE.
   already_AddRefed<nsIURI> GetHrefURIForAnchors() const;
 
- public:
-  /**
-   * Returns whether this element is an editable root. There are two types of
-   * editable roots:
-   *   1) the documentElement if the whole document is editable (for example for
-   *      desginMode=on)
-   *   2) an element that is marked editable with contentEditable=true and that
-   *      doesn't have a parent or whose parent is not editable.
-   * Note that this doesn't return input and textarea elements that haven't been
-   * made editable through contentEditable or designMode.
-   */
-  bool IsEditableRoot() const;
-
  private:
   void ChangeEditableState(int32_t aChange);
 };
@@ -1034,7 +1038,8 @@ class nsGenericHTMLFormElement : public nsGenericHTMLElement {
                     nsIPrincipal* aMaybeScriptedPrincipal,
                     bool aNotify) override;
 
-  virtual void BeforeSetForm(bool aBindToTree) {}
+  virtual void BeforeSetForm(mozilla::dom::HTMLFormElement* aForm,
+                             bool aBindToTree) {}
 
   virtual void AfterClearForm(bool aUnbindOrDelete) {}
 
@@ -1226,10 +1231,21 @@ class nsGenericHTMLFormControlElementWithState
     SetHTMLAttr(nsGkAtoms::popovertargetaction, aValue);
   }
 
+  // InvokerElement
+  mozilla::dom::Element* GetInvokeTargetElement() const;
+  void SetInvokeTargetElement(mozilla::dom::Element*);
+  void GetInvokeAction(nsAString& aValue) const;
+  nsAtom* GetInvokeAction() const;
+  void SetInvokeAction(const nsAString& aValue) {
+    SetHTMLAttr(nsGkAtoms::invokeaction, aValue);
+  }
+
   /**
    * https://html.spec.whatwg.org/#popover-target-attribute-activation-behavior
    */
   MOZ_CAN_RUN_SCRIPT void HandlePopoverTargetAction();
+
+  MOZ_CAN_RUN_SCRIPT void HandleInvokeTargetAction();
 
   /**
    * Get the presentation state for a piece of content, or create it if it does

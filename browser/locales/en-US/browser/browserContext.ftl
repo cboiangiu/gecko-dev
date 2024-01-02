@@ -81,11 +81,11 @@ toolbar-button-stop =
 toolbar-button-stop-reload =
     .title = { main-context-menu-reload.aria-label }
 
-## Firefox Account Button
+## Account toolbar Button
 
-toolbar-button-fxaccount =
-    .label = { -fxaccount-brand-name(capitalization: "sentence") }
-    .tooltiptext = { -fxaccount-brand-name(capitalization: "sentence") }
+toolbar-button-account =
+    .label = Account
+    .tooltiptext = Account
 
 ## Save Page
 
@@ -185,7 +185,7 @@ main-context-menu-copy-link-simple =
 # query parameters used to track users across sites.
 main-context-menu-strip-on-share-link =
     .label = Copy Link Without Site Tracking
-    .accesskey = y
+    .accesskey = u
 
 ## Media (video/audio) controls
 ##
@@ -341,19 +341,10 @@ main-context-menu-send-to-device =
     .label = Send Page to Device
     .accesskey = n
 
-## The access keys for "Use Saved Login" and "Use Saved Password"
-## should be the same if possible; the two context menu items
-## are mutually exclusive.
-
-main-context-menu-use-saved-login =
-    .label = Use Saved Login
-    .accesskey = o
-
+# Displayed when there are saved passwords and the user clicks inside a username or password field
 main-context-menu-use-saved-password =
     .label = Use Saved Password
     .accesskey = o
-
-##
 
 main-context-menu-use-relay-mask =
     .label = Use { -relay-brand-short-name } Email Mask
@@ -363,8 +354,8 @@ main-context-menu-suggest-strong-password =
     .label = Suggest Strong Password…
     .accesskey = S
 
-main-context-menu-manage-logins2 =
-    .label = Manage Logins
+main-context-menu-manage-passwords =
+    .label = Manage Passwords
     .accesskey = M
 
 main-context-menu-keyword =

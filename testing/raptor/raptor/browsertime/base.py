@@ -58,6 +58,7 @@ class Browsertime(Perftest):
 
         profile_class = "firefox"
         if app in CHROME_ANDROID_APPS:
+            # use the chrome-m profile class for both chrome-m and CaR-m
             profile_class = "chrome-m"
 
         super(Browsertime, self).__init__(
@@ -146,6 +147,7 @@ class Browsertime(Perftest):
             "chrome-m",
             "chromium",
             "custom-car",
+            "cstm-car-m",
         ):
             if (
                 not self.config.get("run_local", None)
@@ -166,7 +168,7 @@ class Browsertime(Perftest):
                     "mac-x86_64": str(
                         pathlib.Path("{}chromedriver-mac-x64", "chromedriver")
                     ),
-                    "mac-arm": str(
+                    "mac-aarch64": str(
                         pathlib.Path("{}chromedriver-mac-arm64", "chromedriver")
                     ),
                     "default": str(
@@ -236,16 +238,16 @@ class Browsertime(Perftest):
     def clean_up(self):
         super(Browsertime, self).clean_up()
 
-    def _expose_gecko_profiler(self, extra_profiler_run, test):
+    def _expose_browser_profiler(self, extra_profiler_run, test):
         """Use this method to check if we will use an exposed gecko profiler via browsertime.
-        The exposed gecko profiler let's us control the start/stop during tests.
-        At the moment we would only want this for the Firefox browser and for any test with the
-        `expose_gecko_profiler` field set true (e.g. benchmark tests).
+        The exposed browser profiler let's us control the start/stop during tests.
+        At the moment we would only want this for the Firefox or Chrome* applications and for
+        any test with the `expose_browser_profiler` field set true (e.g. benchmark tests).
         """
         return (
-            extra_profiler_run
-            and test.get("expose_gecko_profiler")
-            and self.config["app"] in GECKO_PROFILER_APPS
+            (self.config["gecko_profile"] or extra_profiler_run)
+            and test.get("expose_browser_profiler")
+            and self.config["app"] in GECKO_PROFILER_APPS + TRACE_APPS
         )
 
     def _compose_cmd(self, test, timeout, extra_profiler_run=False):
@@ -380,7 +382,7 @@ class Browsertime(Perftest):
             os.environ.get("MOZ_FETCHES_DIR", "None"),
             "--browsertime.expose_profiler",
             "true"
-            if (self._expose_gecko_profiler(extra_profiler_run, test))
+            if self._expose_browser_profiler(extra_profiler_run, test)
             else "false",
         ]
 
@@ -434,7 +436,13 @@ class Browsertime(Perftest):
                     browsertime_options.extend(pairing)
 
         priority1_options = self.browsertime_args
-        if self.config["app"] in ("chrome", "chromium", "chrome-m", "custom-car"):
+        if self.config["app"] in (
+            "chrome",
+            "chromium",
+            "chrome-m",
+            "custom-car",
+            "cstm-car-m",
+        ):
             priority1_options.extend(self.setup_chrome_args(test))
 
         if self.debug_mode:
@@ -494,6 +502,7 @@ class Browsertime(Perftest):
                 "chrome-m",
                 "chrome",
                 "custom-car",
+                "cstm-car-m",
             ):
                 priority1_options.extend(
                     [
@@ -582,7 +591,7 @@ class Browsertime(Perftest):
         LOG.info("Composing Gecko Profiler commands")
         self._init_gecko_profiling(test)
         priority1_options.append("--firefox.geckoProfiler")
-        if self._expose_gecko_profiler(self.config.get("extra_profiler_run"), test):
+        if self._expose_browser_profiler(self.config.get("extra_profiler_run"), test):
             priority1_options.extend(
                 [
                     "--firefox.geckoProfilerRecordingType",
@@ -629,7 +638,10 @@ class Browsertime(Perftest):
 
         LOG.info("Composing Chrome Trace commands")
         self._init_chrome_trace(test)
+
         priority1_options.extend(["--chrome.trace"])
+        if self._expose_browser_profiler(self.config.get("extra_profiler_run"), test):
+            priority1_options.extend(["--chrome.timelineRecordingType", "custom"])
 
         # current categories to capture, we can modify this as needed in the future
         # reference:

@@ -495,7 +495,7 @@ FilenameTypeAndDetails nsContentSecurityUtils::FilenameToFilenameType(
   return FilenameTypeAndDetails(kOther, Nothing());
 }
 
-#ifdef NIGHTLY_BUILD
+#if defined(EARLY_BETA_OR_EARLIER)
 // Crash String must be safe from a telemetry point of view.
 // This will be ensured when this function is used.
 void PossiblyCrash(const char* aPrefSuffix, const char* aUnsafeCrashString,
@@ -687,7 +687,7 @@ bool nsContentSecurityUtils::IsEvalAllowed(JSContext* cx,
   // Check the allowlist for the provided filename. getFilename is a helper
   // function
   nsAutoCString fileName;
-  uint32_t lineNumber = 0, columnNumber = 0;
+  uint32_t lineNumber = 0, columnNumber = 1;
   nsJSUtils::GetCallingLocation(cx, fileName, &lineNumber, &columnNumber);
   if (fileName.IsEmpty()) {
     fileName = "unknown-file"_ns;
@@ -1152,7 +1152,7 @@ void EnforceXFrameOptionsCheck(nsIChannel* aChannel,
                         u""_ns,  // no sourcefile
                         u""_ns,  // no scriptsample
                         0,       // no linenumber
-                        0,       // no columnnumber
+                        1,       // no columnnumber
                         nsIScriptError::warningFlag,
                         "IgnoringSrcBecauseOfDirective"_ns, innerWindowID,
                         privateWindow);
@@ -1541,7 +1541,7 @@ bool nsContentSecurityUtils::ValidateScriptFilename(JSContext* cx,
           : "(None)",
       "Blocking a script load %s from file %s");
   MOZ_CRASH_UNSAFE_PRINTF("%s", crashString.get());
-#elif defined(NIGHTLY_BUILD)
+#elif defined(EARLY_BETA_OR_EARLIER)
   // Cause a crash (if we've never crashed before and we can ensure we won't do
   // it again.)
   // The details in the second arg, passed to UNSAFE_PRINTF, are also included

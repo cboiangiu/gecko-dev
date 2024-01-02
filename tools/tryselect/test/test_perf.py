@@ -21,6 +21,7 @@ from tryselect.selectors.perf import (
     Variants,
     run,
 )
+from tryselect.selectors.perf_preview import plain_display
 from tryselect.selectors.perfselector.classification import (
     check_for_live_sites,
     check_for_profile,
@@ -96,6 +97,7 @@ TEST_CATEGORIES = {
         },
         "suites": [Suites.RAPTOR.value],
         "tasks": [],
+        "description": "",
     },
     "Pageload (essential)": {
         "query": {
@@ -104,6 +106,7 @@ TEST_CATEGORIES = {
         "variant-restrictions": {Suites.RAPTOR.value: [Variants.FISSION.value]},
         "suites": [Suites.RAPTOR.value],
         "tasks": [],
+        "description": "",
     },
     "Responsiveness": {
         "query": {
@@ -112,6 +115,7 @@ TEST_CATEGORIES = {
         "suites": [Suites.RAPTOR.value],
         "variant-restrictions": {Suites.RAPTOR.value: []},
         "tasks": [],
+        "description": "",
     },
     "Benchmarks": {
         "query": {
@@ -120,6 +124,7 @@ TEST_CATEGORIES = {
         "suites": [Suites.RAPTOR.value],
         "variant-restrictions": {Suites.RAPTOR.value: []},
         "tasks": [],
+        "description": "",
     },
     "DAMP (Devtools)": {
         "query": {
@@ -127,6 +132,7 @@ TEST_CATEGORIES = {
         },
         "suites": [Suites.TALOS.value],
         "tasks": [],
+        "description": "",
     },
     "Talos PerfTests": {
         "query": {
@@ -134,6 +140,7 @@ TEST_CATEGORIES = {
         },
         "suites": [Suites.TALOS.value],
         "tasks": [],
+        "description": "",
     },
     "Resource Usage": {
         "query": {
@@ -152,6 +159,7 @@ TEST_CATEGORIES = {
             Suites.TALOS.value: [Apps.FIREFOX.value],
         },
         "tasks": [],
+        "description": "",
     },
     "Graphics, & Media Playback": {
         "query": {
@@ -162,6 +170,7 @@ TEST_CATEGORIES = {
         "suites": [Suites.TALOS.value, Suites.RAPTOR.value],
         "variant-restrictions": {Suites.RAPTOR.value: [Variants.FISSION.value]},
         "tasks": [],
+        "description": "",
     },
 }
 
@@ -184,8 +193,9 @@ TEST_CATEGORIES = {
                         "!live",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ]
                 },
                 "Pageload macosx": {
@@ -196,8 +206,9 @@ TEST_CATEGORIES = {
                         "!live",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ]
                 },
                 "Resource Usage desktop": {
@@ -209,8 +220,9 @@ TEST_CATEGORIES = {
                         "!live",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ],
                     "talos": [
                         "'talos 'xperf | 'tp5",
@@ -236,8 +248,9 @@ TEST_CATEGORIES = {
                         "!bytecode",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ]
                 },
                 "Pageload macosx": {
@@ -247,8 +260,9 @@ TEST_CATEGORIES = {
                         "!bytecode",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ]
                 },
                 "Pageload macosx live-sites": {
@@ -259,8 +273,9 @@ TEST_CATEGORIES = {
                         "!bytecode",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ],
                 },
             },
@@ -285,7 +300,8 @@ TEST_CATEGORIES = {
                         "!bytecode",
                         "!profil",
                         "!chrom",
-                        "!custom-car",
+                        "!fenix",
+                        "!m-car",
                     ]
                 },
                 "Pageload macosx safari": {
@@ -323,8 +339,9 @@ TEST_CATEGORIES = {
                         "!android 'shippable !-32 !clang",
                         "!bytecode",
                         "!profil",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ]
                 },
                 "Pageload macosx live-sites": {
@@ -334,8 +351,9 @@ TEST_CATEGORIES = {
                         "'live",
                         "!bytecode",
                         "!profil",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ],
                 },
                 "Benchmarks desktop chromium": {
@@ -356,7 +374,7 @@ TEST_CATEGORIES = {
         ),
         (
             {"android": True},
-            88,
+            78,
             {
                 "Benchmarks desktop": {
                     "raptor": [
@@ -366,8 +384,9 @@ TEST_CATEGORIES = {
                         "!live",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ],
                 },
                 "Responsiveness android-a51 geckoview": {
@@ -384,11 +403,12 @@ TEST_CATEGORIES = {
             [
                 "Responsiveness android-a51 chrome-m",
                 "Firefox Pageload android",
+                "Pageload android-a51 fenix",
             ],
         ),
         (
             {"android": True, "chrome": True},
-            138,
+            128,
             {
                 "Benchmarks desktop": {
                     "raptor": [
@@ -397,8 +417,9 @@ TEST_CATEGORIES = {
                         "!bytecode",
                         "!live",
                         "!profil",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ],
                 },
                 "Responsiveness android-a51 chrome-m": {
@@ -416,7 +437,7 @@ TEST_CATEGORIES = {
         ),
         (
             {"android": True, "chrome": True, "profile": True},
-            176,
+            164,
             {
                 "Benchmarks desktop": {
                     "raptor": [
@@ -424,8 +445,9 @@ TEST_CATEGORIES = {
                         "!android 'shippable !-32 !clang",
                         "!bytecode",
                         "!live",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ]
                 },
                 "Talos PerfTests desktop profiling": {
@@ -434,6 +456,40 @@ TEST_CATEGORIES = {
                         "!android 'shippable !-32 !clang",
                         "'profil",
                         "!swr",
+                    ]
+                },
+            },
+            [
+                "Resource Usage desktop profiling",
+                "DAMP (Devtools) desktop chrome",
+                "Resource Usage android",
+                "Resource Usage windows chromium",
+            ],
+        ),
+        (
+            {"android": True, "fenix": True},
+            88,
+            {
+                "Pageload android-a51": {
+                    "raptor": [
+                        "'browsertime 'tp6",
+                        "'android 'a51 'shippable 'aarch64",
+                        "!nofis",
+                        "!live",
+                        "!profil",
+                        "!chrom",
+                        "!safari",
+                        "!m-car",
+                    ]
+                },
+                "Pageload android-a51 fenix": {
+                    "raptor": [
+                        "'browsertime 'tp6",
+                        "'android 'a51 'shippable 'aarch64",
+                        "'fenix",
+                        "!nofis",
+                        "!live",
+                        "!profil",
                     ]
                 },
             },
@@ -454,7 +510,7 @@ TEST_CATEGORIES = {
                     "raptor": [
                         "'browsertime 'benchmark",
                         "!-32 'windows 'shippable",
-                        "!chrom !geckoview !fenix !safari !custom-car",
+                        "!chrom !geckoview !fenix !safari !m-car",
                         "!bytecode",
                         "!live",
                         "!profil",
@@ -664,7 +720,7 @@ TEST_CATEGORIES = {
                     "raptor": [
                         "'browsertime 'responsive",
                         "!-32 'windows 'shippable",
-                        "!chrom !geckoview !fenix !safari !custom-car",
+                        "!chrom !geckoview !fenix !safari !m-car",
                         "!bytecode",
                         "!live",
                         "!profil",
@@ -686,7 +742,7 @@ TEST_CATEGORIES = {
                     "raptor": [
                         "'browsertime 'responsive",
                         "!-32 'windows 'shippable",
-                        "!chrom !geckoview !fenix !safari !custom-car",
+                        "!chrom !geckoview !fenix !safari !m-car",
                         "!bytecode",
                         "!profil",
                     ],
@@ -699,8 +755,9 @@ TEST_CATEGORIES = {
                         "!bytecode",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ],
                 },
                 "Graphics, & Media Playback windows": {
@@ -710,8 +767,9 @@ TEST_CATEGORIES = {
                         "!bytecode",
                         "!profil",
                         "!chrom",
+                        "!fenix",
                         "!safari",
-                        "!custom-car",
+                        "!m-car",
                     ],
                     "talos": [
                         "'talos 'svgr | 'bcv | 'webgl",
@@ -761,7 +819,7 @@ def test_category_expansion(
     [
         (
             {},
-            [9, 2, 2, 10, 2, 1],
+            [10, 2, 2, 10, 2, 1],
             2,
             (
                 "\n!!!NOTE!!!\n You'll be able to find a performance comparison "
@@ -772,7 +830,7 @@ def test_category_expansion(
         ),
         (
             {"query": "'Pageload 'linux 'firefox"},
-            [9, 2, 2, 10, 2, 1],
+            [10, 2, 2, 10, 2, 1],
             2,
             (
                 "\n!!!NOTE!!!\n You'll be able to find a performance comparison "
@@ -783,7 +841,7 @@ def test_category_expansion(
         ),
         (
             {"cached_revision": "cached_base_revision"},
-            [9, 1, 1, 10, 2, 0],
+            [10, 1, 1, 10, 2, 0],
             2,
             (
                 "\n!!!NOTE!!!\n You'll be able to find a performance comparison "
@@ -794,7 +852,7 @@ def test_category_expansion(
         ),
         (
             {"dry_run": True},
-            [9, 1, 1, 10, 2, 0],
+            [10, 1, 1, 10, 2, 0],
             2,
             (
                 "\n!!!NOTE!!!\n You'll be able to find a performance comparison "
@@ -827,7 +885,7 @@ def test_category_expansion(
         ),
         (
             {"single_run": True},
-            [9, 1, 1, 4, 2, 0],
+            [10, 1, 1, 4, 2, 0],
             2,
             (
                 "If you need any help, you can find us in the #perf-help Matrix channel:\n"
@@ -836,7 +894,7 @@ def test_category_expansion(
         ),
         (
             {"detect_changes": True},
-            [10, 2, 2, 10, 2, 1],
+            [11, 2, 2, 10, 2, 1],
             2,
             (
                 "\n!!!NOTE!!!\n You'll be able to find a performance comparison "
@@ -847,7 +905,7 @@ def test_category_expansion(
         ),
         (
             {"perfcompare_beta": True},
-            [9, 2, 2, 10, 2, 1],
+            [10, 2, 2, 10, 2, 1],
             2,
             (
                 "\n!!!NOTE!!!\n You'll be able to find a performance comparison "
@@ -875,8 +933,9 @@ def test_full_run(options, call_counts, log_ind, expected_log_message):
     ) as srt, mock.patch(
         "tryselect.selectors.perf.print",
     ) as perf_print:
-        fzf.side_effect = [
+        fzf_side_effects = [
             ["", ["Benchmarks linux"]],
+            ["", TASKS],
             ["", TASKS],
             ["", TASKS],
             ["", TASKS],
@@ -887,6 +946,11 @@ def test_full_run(options, call_counts, log_ind, expected_log_message):
             ["", TASKS],
             ["", ["Perftest Change Detector"]],
         ]
+        # Number of side effects for fzf should always be greater than
+        # or equal to the number of calls expected
+        assert len(fzf_side_effects) >= call_counts[0]
+
+        fzf.side_effect = fzf_side_effects
         ccr.return_value = options.get("cached_revision", "")
 
         run(**options)
@@ -905,11 +969,11 @@ def test_full_run(options, call_counts, log_ind, expected_log_message):
     [
         (
             {"detect_changes": True},
-            [10, 0, 0, 2, 1],
+            [11, 0, 0, 2, 1],
             1,
             (
                 "Executing raptor queries: 'browsertime 'benchmark, !clang 'linux "
-                "'shippable, !bytecode, !live, !profil, !chrom, !safari, !custom-car"
+                "'shippable, !bytecode, !live, !profil, !chrom, !fenix, !safari, !m-car"
             ),
             InvalidRegressionDetectorQuery,
         ),
@@ -936,7 +1000,7 @@ def test_change_detection_task_injection_failure(
     ) as ccr, mock.patch(
         "tryselect.selectors.perf.print",
     ) as perf_print:
-        fzf.side_effect = [
+        fzf_side_effects = [
             ["", ["Benchmarks linux"]],
             ["", TASKS],
             ["", TASKS],
@@ -947,7 +1011,12 @@ def test_change_detection_task_injection_failure(
             ["", TASKS],
             ["", TASKS],
             ["", TASKS],
+            ["", TASKS],
+            ["", TASKS],
         ]
+        assert len(fzf_side_effects) >= call_counts[0]
+
+        fzf.side_effect = fzf_side_effects
 
         with pytest.raises(expected_failure):
             run(**options)
@@ -1289,6 +1358,64 @@ def test_artifact_mode_autodisable(try_config, selected_tasks, expected_try_conf
     assert (
         try_config["use-artifact-builds"] == expected_try_config["use-artifact-builds"]
     )
+
+
+def test_build_category_description():
+    base_cmd = ["--preview", '-t "{+f}"']
+
+    with mock.patch("tryselect.selectors.perf.json.dump") as dump:
+        PerfParser.build_category_description(base_cmd, "")
+
+        assert dump.call_count == 1
+        assert str(base_cmd).count("-d") == 1
+        assert str(base_cmd).count("-l") == 1
+
+
+@pytest.mark.parametrize(
+    "options, call_count",
+    [
+        ({}, [1, 1, 2]),
+        ({"show_all": True}, [0, 0, 1]),
+    ],
+)
+def test_preview_description(options, call_count):
+    with mock.patch("tryselect.selectors.perf.PerfParser.perf_push_to_try"), mock.patch(
+        "tryselect.selectors.perf.fzf_bootstrap"
+    ), mock.patch(
+        "tryselect.selectors.perf.PerfParser.get_perf_tasks"
+    ) as get_perf_tasks, mock.patch(
+        "tryselect.selectors.perf.PerfParser.get_tasks"
+    ), mock.patch(
+        "tryselect.selectors.perf.PerfParser.build_category_description"
+    ) as bcd:
+        get_perf_tasks.return_value = [], [], []
+
+        run(**options)
+
+        assert bcd.call_count == call_count[0]
+
+    base_cmd = ["--preview", '-t "{+f}"']
+    option = base_cmd[base_cmd.index("--preview") + 1].split(" ")
+    description, line = None, None
+    if call_count[0] == 1:
+        PerfParser.build_category_description(base_cmd, "")
+        option = base_cmd[base_cmd.index("--preview") + 1].split(" ")
+        description = option[option.index("-d") + 1]
+        line = "Current line"
+
+    taskfile = option[option.index("-t") + 1]
+
+    with mock.patch("tryselect.selectors.perf_preview.open"), mock.patch(
+        "tryselect.selectors.perf_preview.pathlib.Path.open"
+    ), mock.patch("tryselect.selectors.perf_preview.json.load") as load, mock.patch(
+        "tryselect.selectors.perf_preview.print"
+    ) as preview_print:
+        load.return_value = {line: "test description"}
+
+        plain_display(taskfile, description, line)
+
+        assert load.call_count == call_count[1]
+        assert preview_print.call_count == call_count[2]
 
 
 if __name__ == "__main__":

@@ -25,11 +25,10 @@ from mach.decorators import (
     Command,
     CommandArgument,
     CommandArgumentGroup,
-    SettingsProvider,
     SubCommand,
 )
+from mozfile import load_source
 
-import mozbuild.settings  # noqa need @SettingsProvider hook to execute
 from mozbuild.base import (
     BinaryNotFoundException,
     BuildEnvironmentNotFoundException,
@@ -1115,11 +1114,10 @@ def android_gtest(
 
     # run gtest via remotegtests.py
     exit_code = 0
-    import imp
 
     path = os.path.join("testing", "gtest", "remotegtests.py")
-    with open(path, "r") as fh:
-        imp.load_module("remotegtests", fh, path, (".py", "r", imp.PY_SOURCE))
+    load_source("remotegtests", path)
+
     import remotegtests
 
     tester = remotegtests.RemoteGTests()
@@ -1216,21 +1214,6 @@ def install(command_context, **kwargs):
     if ret == 0:
         command_context.notify("Install complete")
     return ret
-
-
-@SettingsProvider
-class RunSettings:
-    config_settings = [
-        (
-            "runprefs.*",
-            "string",
-            """
-Pass a pref into Firefox when using `mach run`, of the form `foo.bar=value`.
-Prefs will automatically be cast into the appropriate type. Integers can be
-single quoted to force them to be strings.
-""".strip(),
-        )
-    ]
 
 
 def _get_android_run_parser():
@@ -2376,6 +2359,12 @@ def repackage_deb(
     required=True,
     help="Location of the templates used to generate the debian/ directory files",
 )
+@CommandArgument(
+    "--release-product",
+    type=str,
+    required=True,
+    help="The product being shipped. Used to disambiguate beta/devedition etc.",
+)
 def repackage_deb_l10n(
     command_context,
     input_xpi_file,
@@ -2384,6 +2373,7 @@ def repackage_deb_l10n(
     version,
     build_number,
     templates,
+    release_product,
 ):
     for input_file in (input_xpi_file, input_tar_file):
         if not os.path.exists(input_file):
@@ -2398,7 +2388,13 @@ def repackage_deb_l10n(
     from mozbuild.repackaging.deb import repackage_deb_l10n
 
     repackage_deb_l10n(
-        input_xpi_file, input_tar_file, output, template_dir, version, build_number
+        input_xpi_file,
+        input_tar_file,
+        output,
+        template_dir,
+        version,
+        build_number,
+        release_product,
     )
 
 
@@ -2695,8 +2691,8 @@ def repackage_msix(
     if not arch:
         # Only try to guess the arch when this is clearly a local build.
         if input.endswith("bin"):
-            if command_context.substs["TARGET_CPU"] in ("i686", "x86_64", "aarch64"):
-                arch = command_context.substs["TARGET_CPU"].replace("i686", "x86")
+            if command_context.substs["TARGET_CPU"] in ("x86", "x86_64", "aarch64"):
+                arch = command_context.substs["TARGET_CPU"]
 
         if not arch:
             command_context.log(

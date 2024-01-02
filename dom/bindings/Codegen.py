@@ -945,7 +945,7 @@ class CGInterfaceObjectJSClass(CGThing):
             ctorname = "nullptr"
         else:
             ctorname = "ThrowingConstructor"
-        needsHasInstance = self.descriptor.interface.hasInterfacePrototypeObject()
+        wantsIsInstance = self.descriptor.interface.hasInterfacePrototypeObject()
 
         prototypeID, depth = PrototypeIDAndDepth(self.descriptor)
         slotCount = "DOM_INTERFACE_SLOTS_BASE"
@@ -1018,7 +1018,7 @@ class CGInterfaceObjectJSClass(CGThing):
                 ${hooks},
                 ${protoGetter}
               },
-              ${needsHasInstance},
+              ${wantsIsInstance},
               ${funToString}
             };
             """,
@@ -1033,7 +1033,7 @@ class CGInterfaceObjectJSClass(CGThing):
             prototypeID=prototypeID,
             depth=depth,
             protoGetter=protoGetter,
-            needsHasInstance=toStringBool(needsHasInstance),
+            wantsIsInstance=toStringBool(wantsIsInstance),
             funToString=funToString,
         )
         return ret
@@ -15194,7 +15194,7 @@ class CGDOMJSProxyHandler_defineProperty(ClassMethod):
                 if (IsArrayIndex(index)) {
                   $*{cxDecl}
                   *done = true;
-                  // https://heycam.github.io/webidl/#legacy-platform-object-defineownproperty
+                  // https://webidl.spec.whatwg.org/#legacy-platform-object-defineownproperty
                   // Step 1.1.  The no-indexed-setter case is handled by step 1.2.
                   if (!desc.isDataDescriptor()) {
                     return opresult.failNotDataDescriptor();
@@ -15246,6 +15246,16 @@ class CGDOMJSProxyHandler_defineProperty(ClassMethod):
                     "that has unforgeables.  Figure out how that "
                     "should work!"
                 )
+            set += dedent(
+                """
+                // https://webidl.spec.whatwg.org/#legacy-platform-object-defineownproperty
+                // Step 2.2.2.1.
+                if (!desc.isDataDescriptor()) {
+                  *done = true;
+                  return opresult.failNotDataDescriptor();
+                }
+                """
+            )
             tailCode = dedent(
                 """
                 *done = true;

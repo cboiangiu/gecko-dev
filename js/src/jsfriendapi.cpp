@@ -18,7 +18,7 @@
 #include "frontend/FrontendContext.h"  // FrontendContext
 #include "gc/PublicIterators.h"
 #include "gc/WeakMap.h"
-#include "js/ColumnNumber.h"  // JS::LimitedColumnNumberZeroOrigin
+#include "js/ColumnNumber.h"  // JS::LimitedColumnNumberOneOrigin
 #include "js/experimental/CodeCoverage.h"
 #include "js/experimental/CTypes.h"  // JS::AutoCTypesActivityCallback, JS::SetCTypesActivityCallback
 #include "js/experimental/Intl.h"  // JS::AddMoz{DateTimeFormat,DisplayNames}Constructor
@@ -46,6 +46,7 @@
 #include "vm/PromiseObject.h"  // js::PromiseObject
 #include "vm/Realm.h"
 #include "vm/StringObject.h"
+#include "vm/Watchtower.h"
 #include "vm/WrapperObject.h"
 #ifdef ENABLE_RECORD_TUPLE
 #  include "vm/RecordType.h"
@@ -468,6 +469,8 @@ void JS::detail::SetReservedSlotWithBarrier(JSObject* obj, size_t slot,
   } else {
     // Note: we don't use setReservedSlot so that this also works on swappable
     // DOM objects. See NativeObject::getReservedSlotRef comment.
+    MOZ_ASSERT(
+        !Watchtower::watchesPropertyModification(&obj->as<NativeObject>()));
     obj->as<NativeObject>().setSlot(slot, value);
   }
 }
@@ -481,7 +484,7 @@ void js::SetPreserveWrapperCallbacks(
 
 JS_PUBLIC_API unsigned JS_PCToLineNumber(
     JSScript* script, jsbytecode* pc,
-    JS::LimitedColumnNumberZeroOrigin* columnp) {
+    JS::LimitedColumnNumberOneOrigin* columnp) {
   return PCToLineNumber(script, pc, columnp);
 }
 

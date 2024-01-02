@@ -16,15 +16,22 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "chrome://remote/content/shared/messagehandler/MessageHandler.sys.mjs",
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
   EventPromise: "chrome://remote/content/shared/Sync.sys.mjs",
+  getTimeoutMultiplier: "chrome://remote/content/shared/AppInfo.sys.mjs",
   Log: "chrome://remote/content/shared/Log.sys.mjs",
   modal: "chrome://remote/content/shared/Prompt.sys.mjs",
+  registerNavigationId:
+    "chrome://remote/content/shared/NavigationManager.sys.mjs",
   NavigationListener:
     "chrome://remote/content/shared/listeners/NavigationListener.sys.mjs",
+  OwnershipModel: "chrome://remote/content/webdriver-bidi/RemoteValue.sys.mjs",
+  PollPromise: "chrome://remote/content/shared/Sync.sys.mjs",
   pprint: "chrome://remote/content/shared/Format.sys.mjs",
   print: "chrome://remote/content/shared/PDF.sys.mjs",
   ProgressListener: "chrome://remote/content/shared/Navigate.sys.mjs",
   PromptListener:
     "chrome://remote/content/shared/listeners/PromptListener.sys.mjs",
+  setDefaultAndAssertSerializationOptions:
+    "chrome://remote/content/webdriver-bidi/RemoteValue.sys.mjs",
   TabManager: "chrome://remote/content/shared/TabManager.sys.mjs",
   waitForInitialNavigationCompleted:
     "chrome://remote/content/shared/Navigate.sys.mjs",
@@ -45,14 +52,15 @@ const MAX_WINDOW_SIZE = 10000000;
  */
 
 /**
- * Enum of possible clip rectangle types.
+ * Enum of possible clip rectangle types supported by the
+ * browsingContext.captureScreenshot command.
  *
  * @readonly
  * @enum {ClipRectangleType}
  */
 export const ClipRectangleType = {
+  Box: "box",
   Element: "element",
-  Viewport: "viewport",
 };
 
 /**
@@ -69,6 +77,40 @@ const CreateType = {
   tab: "tab",
   window: "window",
 };
+
+/**
+ * @typedef {string} LocatorType
+ */
+
+/**
+ * Enum of types supported by the browsingContext.locateNodes command.
+ *
+ * @readonly
+ * @enum {LocatorType}
+ */
+export const LocatorType = {
+  css: "css",
+  innerText: "innerText",
+  xpath: "xpath",
+};
+
+/**
+ * @typedef {string} OriginType
+ */
+
+/**
+ * Enum of origin type supported by the
+ * browsingContext.captureScreenshot command.
+ *
+ * @readonly
+ * @enum {OriginType}
+ */
+export const OriginType = {
+  document: "document",
+  viewport: "viewport",
+};
+
+const TIMEOUT_SET_HISTORY_INDEX = 1000;
 
 /**
  * Enum of user prompt types supported by the browsingContext.handleUserPrompt
@@ -125,9 +167,9 @@ class BrowsingContextModule extends Module {
   constructor(messageHandler) {
     super(messageHandler);
 
-    // Create the browsing context listener and listen to "attached" events.
     this.#contextListener = new lazy.BrowsingContextListener();
     this.#contextListener.on("attached", this.#onContextAttached);
+    this.#contextListener.on("discarded", this.#onContextDiscarded);
 
     // Create the navigation listener and listen to "navigation-started" and
     // "location-changed" events.
@@ -147,10 +189,14 @@ class BrowsingContextModule extends Module {
 
     // Set of event names which have active subscriptions.
     this.#subscribedEvents = new Set();
+
+    // Treat the event of moving a page to BFCache as context discarded event for iframes.
+    this.messageHandler.on("windowglobal-pagehide", this.#onPageHideEvent);
   }
 
   destroy() {
     this.#contextListener.off("attached", this.#onContextAttached);
+    this.#contextListener.off("discarded", this.#onContextDiscarded);
     this.#contextListener.destroy();
 
     this.#promptListener.off("closed", this.#onPromptClosed);
@@ -158,6 +204,8 @@ class BrowsingContextModule extends Module {
     this.#promptListener.destroy();
 
     this.#subscribedEvents = null;
+
+    this.messageHandler.off("windowglobal-pagehide", this.#onPageHideEvent);
   }
 
   /**
@@ -203,11 +251,11 @@ class BrowsingContextModule extends Module {
 
   /**
    * Used as an argument for browsingContext.captureScreenshot command
-   * to represent a viewport which is going to be a target of the command.
+   * to represent a box which is going to be a target of the command.
    *
    * @typedef BoxClipRectangle
    *
-   * @property {ClipRectangleType} [type=ClipRectangleType.Viewport]
+   * @property {ClipRectangleType} [type=ClipRectangleType.Box]
    * @property {number} x
    * @property {number} y
    * @property {number} width
@@ -222,7 +270,6 @@ class BrowsingContextModule extends Module {
    *
    * @property {ClipRectangleType} [type=ClipRectangleType.Element]
    * @property {SharedReference} element
-   * @property {boolean=} scrollIntoView
    */
 
   /**
@@ -232,14 +279,19 @@ class BrowsingContextModule extends Module {
    * @param {string} options.context
    *     Id of the browsing context to screenshot.
    * @param {ClipRectangle=} options.clip
-   *     An element or a viewport of which a screenshot should be taken.
+   *     A box or an element of which a screenshot should be taken.
    *     If not present, take a screenshot of the whole viewport.
+   * @param {OriginType=} options.origin
    *
    * @throws {NoSuchFrameError}
    *     If the browsing context cannot be found.
    */
   async captureScreenshot(options = {}) {
-    const { clip = null, context: contextId } = options;
+    const {
+      clip = null,
+      context: contextId,
+      origin = OriginType.viewport,
+    } = options;
 
     lazy.assert.string(
       contextId,
@@ -247,30 +299,18 @@ class BrowsingContextModule extends Module {
     );
     const context = this.#getBrowsingContext(contextId);
 
+    const originTypeValues = Object.values(OriginType);
+    lazy.assert.that(
+      value => originTypeValues.includes(value),
+      `Expected "origin" to be one of ${originTypeValues}, got ${origin}`
+    )(origin);
+
     if (clip !== null) {
       lazy.assert.object(clip, `Expected "clip" to be a object, got ${clip}`);
 
       const { type } = clip;
       switch (type) {
-        case ClipRectangleType.Element: {
-          const { element, scrollIntoView = null } = clip;
-
-          lazy.assert.object(
-            element,
-            `Expected "element" to be an object, got ${element}`
-          );
-
-          if (scrollIntoView !== null) {
-            lazy.assert.boolean(
-              scrollIntoView,
-              `Expected "scrollIntoView" to be a boolean, got ${scrollIntoView}`
-            );
-          }
-
-          break;
-        }
-
-        case ClipRectangleType.Viewport: {
+        case ClipRectangleType.Box: {
           const { x, y, width, height } = clip;
 
           lazy.assert.number(x, `Expected "x" to be a number, got ${x}`);
@@ -282,6 +322,17 @@ class BrowsingContextModule extends Module {
           lazy.assert.number(
             height,
             `Expected "height" to be a number, got ${height}`
+          );
+
+          break;
+        }
+
+        case ClipRectangleType.Element: {
+          const { element } = clip;
+
+          lazy.assert.object(
+            element,
+            `Expected "element" to be an object, got ${element}`
           );
 
           break;
@@ -305,6 +356,7 @@ class BrowsingContextModule extends Module {
       },
       params: {
         clip,
+        origin,
       },
       retryOnAbort: true,
     });
@@ -669,6 +721,175 @@ class BrowsingContextModule extends Module {
   }
 
   /**
+   * Used as an argument for browsingContext.locateNodes command, as one of the available variants
+   * {CssLocator}, {InnerTextLocator} or {XPathLocator}, to represent a way of how lookup of nodes
+   * is going to be performed.
+   *
+   * @typedef Locator
+   */
+
+  /**
+   * Used as an argument for browsingContext.locateNodes command
+   * to represent a lookup by css selector.
+   *
+   * @typedef CssLocator
+   *
+   * @property {LocatorType} [type=LocatorType.css]
+   * @property {string} value
+   */
+
+  /**
+   * Used as an argument for browsingContext.locateNodes command
+   * to represent a lookup by inner text.
+   *
+   * @typedef InnerTextLocator
+   *
+   * @property {LocatorType} [type=LocatorType.innerText]
+   * @property {string} value
+   * @property {boolean=} ignoreCase
+   * @property {("full"|"partial")=} matchType
+   * @property {number=} maxDepth
+   */
+
+  /**
+   * Used as an argument for browsingContext.locateNodes command
+   * to represent a lookup by xpath.
+   *
+   * @typedef XPathLocator
+   *
+   * @property {LocatorType} [type=LocatorType.xpath]
+   * @property {string} value
+   */
+
+  /**
+   * Returns a list of all nodes matching
+   * the specified locator.
+   *
+   * @param {object} options
+   * @param {string} options.context
+   *     Id of the browsing context.
+   * @param {Locator} options.locator
+   *     The type of lookup which is going to be used.
+   * @param {number=} options.maxNodeCount
+   *     The maximum amount of nodes which is going to be returned.
+   *     Defaults to return all the found nodes.
+   * @param {OwnershipModel=} options.ownership
+   *     The ownership model to use for the serialization
+   *     of the DOM nodes. Defaults to `OwnershipModel.None`.
+   * @property {string=} sandbox
+   *     The name of the sandbox. If the value is null or empty
+   *     string, the default realm will be used.
+   * @property {SerializationOptions=} serializationOptions
+   *     An object which holds the information of how the DOM nodes
+   *     should be serialized.
+   * @property {Array<SharedReference>=} startNodes
+   *     A list of references to nodes, which are used as
+   *     starting points for lookup.
+   *
+   * @throws {InvalidArgumentError}
+   *     Raised if an argument is of an invalid type or value.
+   * @throws {InvalidSelectorError}
+   *     Raised if a locator value is invalid.
+   * @throws {NoSuchFrameError}
+   *     If the browsing context cannot be found.
+   * @throws {UnsupportedOperationError}
+   *     Raised when unsupported lookup types are used.
+   */
+  async locateNodes(options = {}) {
+    const {
+      context: contextId,
+      locator,
+      maxNodeCount = null,
+      ownership = lazy.OwnershipModel.None,
+      sandbox = null,
+      serializationOptions,
+      startNodes = null,
+    } = options;
+
+    lazy.assert.string(
+      contextId,
+      `Expected "context" to be a string, got ${contextId}`
+    );
+
+    const context = this.#getBrowsingContext(contextId);
+
+    lazy.assert.object(
+      locator,
+      `Expected "locator" to be an object, got ${locator}`
+    );
+
+    const locatorTypes = Object.values(LocatorType);
+
+    lazy.assert.that(
+      locatorType => locatorTypes.includes(locatorType),
+      `Expected "locator.type" to be one of ${locatorTypes}, got ${locator.type}`
+    )(locator.type);
+
+    if (![LocatorType.css, LocatorType.xpath].includes(locator.type)) {
+      throw new lazy.error.UnsupportedOperationError(
+        `"locator.type" argument with value: ${locator.type} is not supported yet.`
+      );
+    }
+
+    if (maxNodeCount != null) {
+      const maxNodeCountErrorMsg = `Expected "maxNodeCount" to be an integer and greater than 0, got ${maxNodeCount}`;
+      lazy.assert.that(maxNodeCount => {
+        lazy.assert.integer(maxNodeCount, maxNodeCountErrorMsg);
+        return maxNodeCount > 0;
+      }, maxNodeCountErrorMsg)(maxNodeCount);
+    }
+
+    const ownershipTypes = Object.values(lazy.OwnershipModel);
+    lazy.assert.that(
+      ownership => ownershipTypes.includes(ownership),
+      `Expected "ownership" to be one of ${ownershipTypes}, got ${ownership}`
+    )(ownership);
+
+    if (sandbox != null) {
+      lazy.assert.string(
+        sandbox,
+        `Expected "sandbox" to be a string, got ${sandbox}`
+      );
+    }
+
+    const serializationOptionsWithDefaults =
+      lazy.setDefaultAndAssertSerializationOptions(serializationOptions);
+
+    if (startNodes != null) {
+      lazy.assert.that(startNodes => {
+        lazy.assert.array(
+          startNodes,
+          `Expected "startNodes" to be an array, got ${startNodes}`
+        );
+        return !!startNodes.length;
+      }, `Expected "startNodes" to have at least one element, got ${startNodes}`)(
+        startNodes
+      );
+    }
+
+    const result = await this.messageHandler.forwardCommand({
+      moduleName: "browsingContext",
+      commandName: "_locateNodes",
+      destination: {
+        type: lazy.WindowGlobalMessageHandler.type,
+        id: context.id,
+      },
+      params: {
+        locator,
+        maxNodeCount,
+        resultOwnership: ownership,
+        sandbox,
+        serializationOptions: serializationOptionsWithDefaults,
+        startNodes,
+      },
+    });
+
+    return {
+      nodes: result.serializedNodes,
+    };
+  }
+
+  /**
    * An object that holds the WebDriver Bidi navigation information.
    *
    * @typedef BrowsingContextNavigateResult
@@ -974,7 +1195,7 @@ class BrowsingContextModule extends Module {
    *
    * @throws {InvalidArgumentError}
    *     Raised if an argument is of an invalid type or value.
-   * @throws UnsupportedOperationError
+   * @throws {UnsupportedOperationError}
    *     Raised when the command is called on Android.
    */
   async setViewport(options = {}) {
@@ -998,25 +1219,37 @@ class BrowsingContextModule extends Module {
         `Browsing Context with id ${contextId} is not top-level`
       );
     }
-    const browser = context.embedderElement;
 
-    if (typeof viewport !== "object") {
-      throw new lazy.error.InvalidArgumentError(
-        `Expected "viewport" to be an object or null, got ${viewport}`
-      );
-    }
+    const browser = context.embedderElement;
+    const currentHeight = browser.clientHeight;
+    const currentWidth = browser.clientWidth;
 
     let targetHeight, targetWidth;
-    if (viewport !== null) {
-      const { height, width } = viewport;
+    if (viewport === undefined) {
+      // Don't modify the viewport's size.
+      targetHeight = currentHeight;
+      targetWidth = currentWidth;
+    } else if (viewport === null) {
+      // Reset viewport to the original dimensions.
+      targetHeight = browser.parentElement.clientHeight;
+      targetWidth = browser.parentElement.clientWidth;
 
+      browser.style.removeProperty("height");
+      browser.style.removeProperty("width");
+    } else {
+      lazy.assert.object(
+        viewport,
+        `Expected "viewport" to be an object, got ${viewport}`
+      );
+
+      const { height, width } = viewport;
       targetHeight = lazy.assert.positiveInteger(
         height,
-        `Expected "height" to be a positive integer, got ${height}`
+        `Expected viewport's "height" to be a positive integer, got ${height}`
       );
       targetWidth = lazy.assert.positiveInteger(
         width,
-        `Expected "width" to be a positive integer, got ${width}`
+        `Expected viewport's "width" to be a positive integer, got ${width}`
       );
 
       if (targetHeight > MAX_WINDOW_SIZE || targetWidth > MAX_WINDOW_SIZE) {
@@ -1027,28 +1260,84 @@ class BrowsingContextModule extends Module {
 
       browser.style.setProperty("height", targetHeight + "px");
       browser.style.setProperty("width", targetWidth + "px");
-    } else {
-      // Reset viewport to the original dimensions
-      targetHeight = browser.parentElement.clientHeight;
-      targetWidth = browser.parentElement.clientWidth;
-
-      browser.style.removeProperty("height");
-      browser.style.removeProperty("width");
     }
 
-    // Wait until the viewport has been resized
-    await this.messageHandler.forwardCommand({
-      moduleName: "browsingContext",
-      commandName: "_awaitViewportDimensions",
-      destination: {
-        type: lazy.WindowGlobalMessageHandler.type,
-        id: context.id,
+    if (targetHeight !== currentHeight || targetWidth !== currentWidth) {
+      // Wait until the viewport has been resized
+      await this.messageHandler.forwardCommand({
+        moduleName: "browsingContext",
+        commandName: "_awaitViewportDimensions",
+        destination: {
+          type: lazy.WindowGlobalMessageHandler.type,
+          id: context.id,
+        },
+        params: {
+          height: targetHeight,
+          width: targetWidth,
+        },
+      });
+    }
+  }
+
+  /**
+   * Traverses the history of a given context by a given delta.
+   *
+   * @param {object=} options
+   * @param {string} options.context
+   *     Id of the browsing context.
+   * @param {number} options.delta
+   *     The number of steps we have to traverse.
+   *
+   * @throws {InvalidArgumentError}
+   *     Raised if an argument is of an invalid type or value.
+   * @throws {NoSuchFrameException}
+   *     When a context is not available.
+   * @throws {NoSuchHistoryEntryError}
+   *     When a requested history entry does not exist.
+   */
+  async traverseHistory(options = {}) {
+    const { context: contextId, delta } = options;
+
+    lazy.assert.string(
+      contextId,
+      `Expected "context" to be a string, got ${contextId}`
+    );
+
+    const context = this.#getBrowsingContext(contextId);
+
+    lazy.assert.integer(
+      delta,
+      `Expected "delta" to be an integer, got ${delta}`
+    );
+
+    const sessionHistory = context.sessionHistory;
+    const allSteps = sessionHistory.count;
+    const currentIndex = sessionHistory.index;
+    const targetIndex = currentIndex + delta;
+    const validEntry = targetIndex >= 0 && targetIndex < allSteps;
+
+    if (!validEntry) {
+      throw new lazy.error.NoSuchHistoryEntryError(
+        `History entry with delta ${delta} not found`
+      );
+    }
+
+    context.goToIndex(targetIndex);
+
+    // On some platforms the requested index isn't set immediately.
+    await lazy.PollPromise(
+      (resolve, reject) => {
+        if (sessionHistory.index == targetIndex) {
+          resolve();
+        } else {
+          reject();
+        }
       },
-      params: {
-        height: targetHeight,
-        width: targetWidth,
-      },
-    });
+      {
+        errorMessage: `History was not updated for index "${targetIndex}"`,
+        timeout: TIMEOUT_SET_HISTORY_INDEX * lazy.getTimeoutMultiplier(),
+      }
+    );
   }
 
   /**
@@ -1108,8 +1397,91 @@ class BrowsingContextModule extends Module {
       );
     }
 
+    // If WaitCondition is Complete, we should try to wait for the corresponding
+    // responseCompleted event to be received.
+    let onNavigationRequestCompleted;
+
+    // However, a navigation will not necessarily have network events.
+    // For instance: same document navigation, or when using file or data
+    // protocols (for which we don't have network events yet).
+    // Therefore we will not unconditionally wait for a navigation request and
+    // this flag should only be set when a responseCompleted event should be
+    // expected.
+    let shouldWaitForNavigationRequest = false;
+
+    // Cleaning up the listeners will be done at the end of this method.
+    let unsubscribeNavigationListeners;
+
+    if (wait === WaitCondition.Complete) {
+      let resolveOnNetworkEvent;
+      onNavigationRequestCompleted = new Promise(
+        r => (resolveOnNetworkEvent = r)
+      );
+      const onBeforeRequestSent = (name, data) => {
+        if (data.navigation) {
+          shouldWaitForNavigationRequest = true;
+        }
+      };
+      const onResponseCompleted = (name, data) => {
+        if (data.navigation) {
+          resolveOnNetworkEvent();
+        }
+      };
+
+      await this.messageHandler.eventsDispatcher.on(
+        "network._beforeRequestSent",
+        contextDescriptor,
+        onBeforeRequestSent
+      );
+      await this.messageHandler.eventsDispatcher.on(
+        "network._responseCompleted",
+        contextDescriptor,
+        onResponseCompleted
+      );
+
+      unsubscribeNavigationListeners = async () => {
+        await this.messageHandler.eventsDispatcher.off(
+          "network._beforeRequestSent",
+          contextDescriptor,
+          onBeforeRequestSent
+        );
+
+        await this.messageHandler.eventsDispatcher.off(
+          "network._responseCompleted",
+          contextDescriptor,
+          onResponseCompleted
+        );
+      };
+    }
+
     const navigated = listener.start();
-    navigated.finally(async () => {
+
+    try {
+      const navigationId = lazy.registerNavigationId({
+        contextDetails: { context: webProgress.browsingContext },
+      });
+
+      await startNavigationFn();
+      await navigated;
+
+      if (shouldWaitForNavigationRequest) {
+        await onNavigationRequestCompleted;
+      }
+
+      let url;
+      if (wait === WaitCondition.None) {
+        // If wait condition is None, the navigation resolved before the current
+        // context has navigated.
+        url = listener.targetURI.spec;
+      } else {
+        url = listener.currentURI.spec;
+      }
+
+      return {
+        navigation: navigationId,
+        url,
+      };
+    } finally {
       if (listener.isStarted) {
         listener.stop();
       }
@@ -1120,29 +1492,13 @@ class BrowsingContextModule extends Module {
           contextDescriptor,
           onDocumentInteractive
         );
+      } else if (
+        wait === WaitCondition.Complete &&
+        shouldWaitForNavigationRequest
+      ) {
+        await unsubscribeNavigationListeners();
       }
-    });
-
-    await startNavigationFn();
-    await navigated;
-
-    let url;
-    if (wait === WaitCondition.None) {
-      // If wait condition is None, the navigation resolved before the current
-      // context has navigated.
-      url = listener.targetURI.spec;
-    } else {
-      url = listener.currentURI.spec;
     }
-
-    const navigation =
-      this.messageHandler.navigationManager.getNavigationForBrowsingContext(
-        webProgress.browsingContext
-      );
-    return {
-      navigation: navigation ? navigation.navigationId : null,
-      url,
-    };
   }
 
   /**
@@ -1216,36 +1572,94 @@ class BrowsingContextModule extends Module {
   }
 
   #onContextAttached = async (eventName, data = {}) => {
-    const { browsingContext, why } = data;
+    if (this.#subscribedEvents.has("browsingContext.contextCreated")) {
+      const { browsingContext, why } = data;
 
-    // Filter out top-level browsing contexts that are created because of a
-    // cross-group navigation.
-    if (why === "replace") {
-      return;
+      // Filter out top-level browsing contexts that are created because of a
+      // cross-group navigation.
+      if (why === "replace") {
+        return;
+      }
+
+      // TODO: Bug 1852941. We should also filter out events which are emitted
+      // for DevTools frames.
+
+      // Filter out notifications for chrome context until support gets
+      // added (bug 1722679).
+      if (!browsingContext.webProgress) {
+        return;
+      }
+
+      const browsingContextInfo = this.#getBrowsingContextInfo(
+        browsingContext,
+        {
+          maxDepth: 0,
+        }
+      );
+
+      // This event is emitted from the parent process but for a given browsing
+      // context. Set the event's contextInfo to the message handler corresponding
+      // to this browsing context.
+      const contextInfo = {
+        contextId: browsingContext.id,
+        type: lazy.WindowGlobalMessageHandler.type,
+      };
+      this.emitEvent(
+        "browsingContext.contextCreated",
+        browsingContextInfo,
+        contextInfo
+      );
     }
+  };
 
-    // Filter out notifications for chrome context until support gets
-    // added (bug 1722679).
-    if (!browsingContext.webProgress) {
-      return;
+  #onContextDiscarded = async (eventName, data = {}) => {
+    if (this.#subscribedEvents.has("browsingContext.contextDestroyed")) {
+      const { browsingContext, why } = data;
+
+      // Filter out top-level browsing contexts that are destroyed because of a
+      // cross-group navigation.
+      if (why === "replace") {
+        return;
+      }
+
+      // TODO: Bug 1852941. We should also filter out events which are emitted
+      // for DevTools frames.
+
+      // Filter out notifications for chrome context until support gets
+      // added (bug 1722679).
+      if (!browsingContext.webProgress) {
+        return;
+      }
+
+      // If this event is for a child context whose top or parent context is also destroyed,
+      // we don't need to send it, in this case the event for the top/parent context is enough.
+      if (
+        browsingContext.parent &&
+        (browsingContext.top.isDiscarded || browsingContext.parent.isDiscarded)
+      ) {
+        return;
+      }
+
+      const browsingContextInfo = this.#getBrowsingContextInfo(
+        browsingContext,
+        {
+          maxDepth: 0,
+        }
+      );
+
+      // This event is emitted from the parent process but for a given browsing
+      // context. Set the event's contextInfo to the message handler corresponding
+      // to this browsing context.
+      const contextInfo = {
+        contextId: browsingContext.id,
+        type: lazy.WindowGlobalMessageHandler.type,
+      };
+      this.emitEvent(
+        "browsingContext.contextDestroyed",
+        browsingContextInfo,
+        contextInfo
+      );
     }
-
-    const browsingContextInfo = this.#getBrowsingContextInfo(browsingContext, {
-      maxDepth: 0,
-    });
-
-    // This event is emitted from the parent process but for a given browsing
-    // context. Set the event's contextInfo to the message handler corresponding
-    // to this browsing context.
-    const contextInfo = {
-      contextId: browsingContext.id,
-      type: lazy.WindowGlobalMessageHandler.type,
-    };
-    this.emitEvent(
-      "browsingContext.contextCreated",
-      browsingContextInfo,
-      contextInfo
-    );
   };
 
   #onLocationChanged = async (eventName, data) => {
@@ -1314,13 +1728,25 @@ class BrowsingContextModule extends Module {
         type: lazy.WindowGlobalMessageHandler.type,
       };
 
+      const eventPayload = {
+        context: contextId,
+        type: prompt.promptType,
+        message: await prompt.getText(),
+      };
+
+      // Bug 1859814: Since the platform doesn't provide the access to the `defaultValue` of the prompt,
+      // we use prompt the `value` instead. The `value` is set to `defaultValue` when `defaultValue` is provided.
+      // This approach doesn't allow us to distinguish between the `defaultValue` being set to an empty string and
+      // `defaultValue` not set, because `value` is always defaulted to an empty string.
+      // We should switch to using the actual `defaultValue` when it's available and check for the `null` here.
+      const defaultValue = await prompt.getInputText();
+      if (defaultValue) {
+        eventPayload.defaultValue = defaultValue;
+      }
+
       this.emitEvent(
         "browsingContext.userPromptOpened",
-        {
-          context: contextId,
-          type: prompt.promptType,
-          message: await prompt.getText(),
-        },
+        eventPayload,
         contextInfo
       );
     }
@@ -1346,6 +1772,15 @@ class BrowsingContextModule extends Module {
         },
         contextInfo
       );
+    }
+  };
+
+  #onPageHideEvent = (name, eventPayload) => {
+    const { context } = eventPayload;
+    if (context.parent) {
+      this.#onContextDiscarded("windowglobal-pagehide", {
+        browsingContext: context,
+      });
     }
   };
 
@@ -1375,7 +1810,8 @@ class BrowsingContextModule extends Module {
 
   #subscribeEvent(event) {
     switch (event) {
-      case "browsingContext.contextCreated": {
+      case "browsingContext.contextCreated":
+      case "browsingContext.contextDestroyed": {
         this.#contextListener.startListening();
         this.#subscribedEvents.add(event);
         break;
@@ -1397,7 +1833,8 @@ class BrowsingContextModule extends Module {
 
   #unsubscribeEvent(event) {
     switch (event) {
-      case "browsingContext.contextCreated": {
+      case "browsingContext.contextCreated":
+      case "browsingContext.contextDestroyed": {
         this.#contextListener.stopListening();
         this.#subscribedEvents.delete(event);
         break;
@@ -1448,6 +1885,7 @@ class BrowsingContextModule extends Module {
   static get supportedEvents() {
     return [
       "browsingContext.contextCreated",
+      "browsingContext.contextDestroyed",
       "browsingContext.domContentLoaded",
       "browsingContext.fragmentNavigated",
       "browsingContext.load",

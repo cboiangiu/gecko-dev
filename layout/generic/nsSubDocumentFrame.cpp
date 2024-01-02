@@ -26,7 +26,7 @@
 #include "nsGenericHTMLFrameElement.h"
 #include "nsAttrValueInlines.h"
 #include "nsIDocShell.h"
-#include "nsIContentViewer.h"
+#include "nsIDocumentViewer.h"
 #include "nsIContentInlines.h"
 #include "nsPresContext.h"
 #include "nsView.h"
@@ -154,19 +154,28 @@ void nsSubDocumentFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
       // Presentation is for a different document, don't restore it.
       frameloader->Hide();
     }
-
-    if (RefPtr<BrowsingContext> bc = frameloader->GetExtantBrowsingContext()) {
-      mIsInObjectOrEmbed = bc->IsEmbedderTypeObjectOrEmbed();
-    }
   }
 
-  MaybeUpdateRemoteStyle();
+  // NOTE: The frame loader might not yet be initialized yet. If it's not, the
+  // call in ShowViewer() should pick things up.
+  UpdateEmbeddedBrowsingContextDependentData();
+  nsContentUtils::AddScriptRunner(new AsyncFrameInit(this));
+}
 
+void nsSubDocumentFrame::UpdateEmbeddedBrowsingContextDependentData() {
+  if (!mFrameLoader) {
+    return;
+  }
+  BrowsingContext* bc = mFrameLoader->GetExtantBrowsingContext();
+  if (!bc) {
+    return;
+  }
+  mIsInObjectOrEmbed = bc->IsEmbedderTypeObjectOrEmbed();
+  MaybeUpdateRemoteStyle();
+  MaybeUpdateEmbedderColorScheme();
   PropagateIsUnderHiddenEmbedderElement(
       PresShell()->IsUnderHiddenEmbedderElement() ||
       !StyleVisibility()->IsVisible());
-
-  nsContentUtils::AddScriptRunner(new AsyncFrameInit(this));
 }
 
 void nsSubDocumentFrame::PropagateIsUnderHiddenEmbedderElement(bool aValue) {
@@ -196,16 +205,13 @@ void nsSubDocumentFrame::ShowViewer() {
     }
     mCallingShow = false;
     mDidCreateDoc = didCreateDoc;
-
     if (!HasAnyStateBits(NS_FRAME_FIRST_REFLOW)) {
       frameloader->UpdatePositionAndSize(this);
     }
-
-    MaybeUpdateEmbedderColorScheme();
-
     if (!weakThis.IsAlive()) {
       return;
     }
+    UpdateEmbeddedBrowsingContextDependentData();
     InvalidateFrame();
   }
 }
@@ -1121,19 +1127,19 @@ static CallState EndSwapDocShellsForDocument(Document& aDocument) {
   // Now also update all nsDeviceContext::mWidget to that of the
   // container view in the new hierarchy.
   if (nsCOMPtr<nsIDocShell> ds = aDocument.GetDocShell()) {
-    nsCOMPtr<nsIContentViewer> cv;
-    ds->GetContentViewer(getter_AddRefs(cv));
-    while (cv) {
-      RefPtr<nsPresContext> pc = cv->GetPresContext();
+    nsCOMPtr<nsIDocumentViewer> viewer;
+    ds->GetDocViewer(getter_AddRefs(viewer));
+    while (viewer) {
+      RefPtr<nsPresContext> pc = viewer->GetPresContext();
       if (pc && pc->GetPresShell()) {
         pc->GetPresShell()->SetNeverPainting(ds->IsInvisible());
       }
       nsDeviceContext* dc = pc ? pc->DeviceContext() : nullptr;
       if (dc) {
-        nsView* v = cv->FindContainerView();
+        nsView* v = viewer->FindContainerView();
         dc->Init(v ? v->GetNearestWidget(nullptr) : nullptr);
       }
-      cv = cv->GetPreviousViewer();
+      viewer = viewer->GetPreviousViewer();
     }
   }
 

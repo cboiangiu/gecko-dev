@@ -17,6 +17,7 @@
 #include "builtin/AtomicsObject.h"
 #include "ds/TraceableFifo.h"
 #include "frontend/NameCollections.h"
+#include "gc/GCEnum.h"
 #include "gc/Memory.h"
 #include "irregexp/RegExpTypes.h"
 #include "jit/PcScriptCache.h"
@@ -45,6 +46,7 @@ namespace js {
 class AutoAllocInAtomsZone;
 class AutoMaybeLeaveAtomsZone;
 class AutoRealm;
+struct PortableBaselineStack;
 
 namespace jit {
 class ICScript;
@@ -213,10 +215,7 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
 
   // Allocate a GC thing.
   template <typename T, js::AllowGC allowGC = js::CanGC, typename... Args>
-  T* newCell(Args&&... args) {
-    return js::gc::CellAllocator::template NewCell<T, allowGC>(
-        this, std::forward<Args>(args)...);
-  }
+  T* newCell(Args&&... args);
 
   /* Clear the pending exception (if any) due to OOM. */
   void recoverFromOutOfMemory();
@@ -293,7 +292,7 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   JS::Zone* zone() const {
     MOZ_ASSERT_IF(!realm() && zone_, inAtomsZone());
     MOZ_ASSERT_IF(realm(), js::GetRealmZone(realm()) == zone_);
-    return zoneUnchecked();
+    return zone_;
   }
 
   // For JIT use.
@@ -398,6 +397,11 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   js::InterpreterStack& interpreterStack() {
     return runtime()->interpreterStack();
   }
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+  js::PortableBaselineStack& portableBaselineStack() {
+    return runtime()->portableBaselineStack();
+  }
+#endif
 
  private:
   // Base address of the native stack for the current thread.
@@ -887,11 +891,12 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   js::StructuredSpewer& spewer() { return structuredSpewer_.ref(); }
 #endif
 
-  // During debugger evaluations which need to observe native calls, JITs are
-  // completely disabled. This flag indicates whether we are in this state, and
-  // the debugger which initiated the evaluation. This debugger has other
-  // references on the stack and does not need to be traced.
-  js::ContextData<js::Debugger*> insideDebuggerEvaluationWithOnNativeCallHook;
+  // Debugger having set `exclusiveDebuggerOnEval` property to true
+  // want their evaluations and calls to be ignore by all other Debuggers
+  // except themself. This flag indicates whether we are in such debugger
+  // evaluation, and which debugger initiated the evaluation. This debugger
+  // has other references on the stack and does not need to be traced.
+  js::ContextData<js::Debugger*> insideExclusiveDebuggerOnEval;
 
 }; /* struct JSContext */
 
@@ -1012,18 +1017,18 @@ class AutoAssertNoPendingException {
 #endif
 };
 
-class MOZ_RAII AutoNoteDebuggerEvaluationWithOnNativeCallHook {
+class MOZ_RAII AutoNoteExclusiveDebuggerOnEval {
   JSContext* cx;
   Debugger* oldValue;
 
  public:
-  AutoNoteDebuggerEvaluationWithOnNativeCallHook(JSContext* cx, Debugger* dbg)
-      : cx(cx), oldValue(cx->insideDebuggerEvaluationWithOnNativeCallHook) {
-    cx->insideDebuggerEvaluationWithOnNativeCallHook = dbg;
+  AutoNoteExclusiveDebuggerOnEval(JSContext* cx, Debugger* dbg)
+      : cx(cx), oldValue(cx->insideExclusiveDebuggerOnEval) {
+    cx->insideExclusiveDebuggerOnEval = dbg;
   }
 
-  ~AutoNoteDebuggerEvaluationWithOnNativeCallHook() {
-    cx->insideDebuggerEvaluationWithOnNativeCallHook = oldValue;
+  ~AutoNoteExclusiveDebuggerOnEval() {
+    cx->insideExclusiveDebuggerOnEval = oldValue;
   }
 };
 

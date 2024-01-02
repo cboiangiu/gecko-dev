@@ -158,6 +158,12 @@ nsCookieBannerService::Observe(nsISupports* aSubject, const char* aTopic,
     return RemoveWebProgressListener(aSubject);
   }
 
+  // Clear the executed data for private session when the last private browsing
+  // session exits.
+  if (nsCRT::strcmp(aTopic, "last-pb-context-exited") == 0) {
+    return RemoveAllExecutedRecords(true);
+  }
+
   return NS_OK;
 }
 
@@ -208,6 +214,8 @@ nsresult nsCookieBannerService::Init() {
   obsSvc->AddObserver(this, OBSERVER_TOPIC_BC_ATTACHED, false);
   obsSvc->AddObserver(this, OBSERVER_TOPIC_BC_DISCARDED, false);
 
+  obsSvc->AddObserver(this, "last-pb-context-exited", false);
+
   return NS_OK;
 }
 
@@ -234,6 +242,8 @@ nsresult nsCookieBannerService::Shutdown() {
 
   obsSvc->RemoveObserver(this, OBSERVER_TOPIC_BC_ATTACHED);
   obsSvc->RemoveObserver(this, OBSERVER_TOPIC_BC_DISCARDED);
+
+  obsSvc->RemoveObserver(this, "last-pb-context-exited");
 
   return NS_OK;
 }
@@ -899,6 +909,144 @@ nsCookieBannerService::RemoveAllDomainPrefs(const bool aIsPrivate) {
 
   nsresult rv = mDomainPrefService->RemoveAll(aIsPrivate);
   NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsCookieBannerService::ShouldStopBannerClickingForSite(const nsACString& aSite,
+                                                       const bool aIsTopLevel,
+                                                       const bool aIsPrivate,
+                                                       bool* aShouldStop) {
+  if (!mIsInitialized) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  uint8_t threshold =
+      StaticPrefs::cookiebanners_bannerClicking_maxTriesPerSiteAndSession();
+
+  // Don't stop banner clicking if the pref is set to zero.
+  if (threshold == 0) {
+    *aShouldStop = false;
+    return NS_OK;
+  }
+
+  // Ensure we won't use an overflowed threshold.
+  threshold = std::min(threshold, std::numeric_limits<uint8_t>::max());
+
+  auto entry = mExecutedDataForSites.MaybeGet(aSite);
+
+  if (!entry) {
+    return NS_OK;
+  }
+
+  auto& data = entry.ref();
+  uint8_t cnt = 0;
+
+  if (aIsPrivate) {
+    cnt = aIsTopLevel ? data.countExecutedInTopPrivate
+                      : data.countExecutedInFramePrivate;
+  } else {
+    cnt = aIsTopLevel ? data.countExecutedInTop : data.countExecutedInFrame;
+  }
+
+  *aShouldStop = cnt >= threshold;
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsCookieBannerService::MarkSiteExecuted(const nsACString& aSite,
+                                        const bool aIsTopLevel,
+                                        const bool aIsPrivate) {
+  NS_ENSURE_TRUE(!aSite.IsEmpty(), NS_ERROR_INVALID_ARG);
+
+  if (!mIsInitialized) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  auto& data = mExecutedDataForSites.LookupOrInsert(aSite);
+  uint8_t* count = nullptr;
+
+  if (aIsPrivate) {
+    if (aIsTopLevel) {
+      count = &data.countExecutedInTopPrivate;
+    } else {
+      count = &data.countExecutedInFramePrivate;
+    }
+  } else {
+    if (aIsTopLevel) {
+      count = &data.countExecutedInTop;
+    } else {
+      count = &data.countExecutedInFrame;
+    }
+  }
+
+  MOZ_ASSERT(count);
+
+  // Ensure we never overflow.
+  if (*count < std::numeric_limits<uint8_t>::max()) {
+    (*count) += 1;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsCookieBannerService::RemoveExecutedRecordForSite(const nsACString& aSite,
+                                                   const bool aIsPrivate) {
+  if (!mIsInitialized) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  auto entry = mExecutedDataForSites.Lookup(aSite);
+
+  if (!entry) {
+    return NS_OK;
+  }
+
+  auto data = entry.Data();
+
+  if (aIsPrivate) {
+    data.countExecutedInTopPrivate = 0;
+    data.countExecutedInFramePrivate = 0;
+  } else {
+    data.countExecutedInTop = 0;
+    data.countExecutedInFrame = 0;
+  }
+
+  // We can remove the entry if there is no flag set after removal.
+  if (!data.countExecutedInTop && !data.countExecutedInFrame &&
+      !data.countExecutedInTopPrivate && !data.countExecutedInFramePrivate) {
+    entry.Remove();
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsCookieBannerService::RemoveAllExecutedRecords(const bool aIsPrivate) {
+  if (!mIsInitialized) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  for (auto iter = mExecutedDataForSites.Iter(); !iter.Done(); iter.Next()) {
+    auto& data = iter.Data();
+    // Clear the flags.
+    if (aIsPrivate) {
+      data.countExecutedInTopPrivate = 0;
+      data.countExecutedInFramePrivate = 0;
+    } else {
+      data.countExecutedInTop = 0;
+      data.countExecutedInFrame = 0;
+    }
+
+    // Remove the entry if there is no flag set.
+    if (!data.countExecutedInTop && !data.countExecutedInFrame &&
+        !data.countExecutedInTopPrivate && !data.countExecutedInFramePrivate) {
+      iter.Remove();
+    }
+  }
 
   return NS_OK;
 }

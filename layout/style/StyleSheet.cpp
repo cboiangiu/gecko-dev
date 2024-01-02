@@ -13,6 +13,7 @@
 #include "mozilla/dom/CSSImportRule.h"
 #include "mozilla/dom/CSSRuleList.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/FetchPriority.h"
 #include "mozilla/dom/MediaList.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ReferrerInfo.h"
@@ -36,7 +37,6 @@ using namespace dom;
 StyleSheet::StyleSheet(css::SheetParsingMode aParsingMode, CORSMode aCORSMode,
                        const dom::SRIMetadata& aIntegrity)
     : mParentSheet(nullptr),
-      mRelevantGlobal(nullptr),
       mConstructorDocument(nullptr),
       mDocumentOrShadowRoot(nullptr),
       mParsingMode(aParsingMode),
@@ -49,7 +49,6 @@ StyleSheet::StyleSheet(const StyleSheet& aCopy, StyleSheet* aParentSheetToUse,
                        dom::DocumentOrShadowRoot* aDocOrShadowRootToUse,
                        dom::Document* aConstructorDocToUse)
     : mParentSheet(aParentSheetToUse),
-      mRelevantGlobal(nullptr),
       mConstructorDocument(aConstructorDocToUse),
       mTitle(aCopy.mTitle),
       mDocumentOrShadowRoot(aDocOrShadowRootToUse),
@@ -127,9 +126,6 @@ already_AddRefed<StyleSheet> StyleSheet::Constructor(
   auto referrerInfo = MakeRefPtr<ReferrerInfo>(*constructorDocument);
   sheet->SetReferrerInfo(referrerInfo);
   sheet->mConstructorDocument = constructorDocument;
-  if (constructorDocument) {
-    sheet->mRelevantGlobal = constructorDocument->GetParentObject();
-  }
 
   // 2. Set the sheet's media according to aOptions.
   if (aOptions.mMedia.IsUTF8String()) {
@@ -294,6 +290,14 @@ void StyleSheet::SetComplete() {
              "Can't complete a sheet that's already been forced unique.");
   MOZ_ASSERT(!IsComplete(), "Already complete?");
   mState |= State::Complete;
+
+  if (!mRelevantGlobal) {
+    // Constructable sheets can be set to complete multiple times.
+    if (Document* doc = GetAssociatedDocument()) {
+      mRelevantGlobal = doc->GetScopeObject();
+    }
+  }
+
   if (!Disabled()) {
     ApplicableStateChanged(true);
   }
@@ -677,7 +681,7 @@ void StyleSheet::MaybeRejectReplacePromise() {
   mReplacePromise = nullptr;
 }
 
-// https://wicg.github.io/construct-stylesheets/#dom-cssstylesheet-replace
+// https://drafts.csswg.org/cssom/#dom-cssstylesheet-replace
 already_AddRefed<dom::Promise> StyleSheet::Replace(const nsACString& aText,
                                                    ErrorResult& aRv) {
   nsIGlobalObject* globalObject = nullptr;
@@ -722,14 +726,13 @@ already_AddRefed<dom::Promise> StyleSheet::Replace(const nsACString& aText,
       css::Loader::UseSystemPrincipal::No, css::StylePreloadKind::None,
       /* aPreloadEncoding */ nullptr, /* aObserver */ nullptr,
       mConstructorDocument->NodePrincipal(), GetReferrerInfo(),
-      /* aNonce */ u""_ns);
+      /* aNonce */ u""_ns, FetchPriority::Auto);
 
   // In parallel
   // 5.1 Parse aText into rules.
   // 5.2 Load import rules, throw NetworkError if failed.
   // 5.3 Set sheet's rules to new rules.
-  nsCOMPtr<nsISerialEventTarget> target =
-      mConstructorDocument->EventTargetFor(TaskCategory::Other);
+  nsISerialEventTarget* target = GetMainThreadSerialEventTarget();
   loadData->mIsBeingParsed = true;
   MOZ_ASSERT(!mReplacePromise);
   mReplacePromise = promise;
@@ -967,11 +970,6 @@ void StyleSheet::SetAssociatedDocumentOrShadowRoot(
 
   // not ref counted
   mDocumentOrShadowRoot = aDocOrShadowRoot;
-
-  if (Document* doc = GetAssociatedDocument()) {
-    MOZ_ASSERT(!mRelevantGlobal);
-    mRelevantGlobal = doc->GetScopeObject();
-  }
 }
 
 void StyleSheet::AppendStyleSheet(StyleSheet& aSheet) {
@@ -1156,34 +1154,14 @@ already_AddRefed<StyleSheet> StyleSheet::CreateEmptyChildSheet(
   return child.forget();
 }
 
-// We disable parallel stylesheet parsing if any of the following three
-// conditions hold:
-//
-// (1) The pref is off.
-// (2) The browser is recording CSS errors (which parallel parsing can't
-//     handle).
-// (3) The stylesheet is a chrome stylesheet, since those can use
-//     -moz-bool-pref, which needs to access the pref service, which is not
-//     threadsafe.
+// We disable parallel stylesheet parsing if the browser is recording CSS errors
+// (which parallel parsing can't handle).
 static bool AllowParallelParse(css::Loader& aLoader, URLExtraData* aUrlData) {
-  // If the browser is recording CSS errors, we need to use the sequential path
-  // because the parallel path doesn't support that.
   Document* doc = aLoader.GetDocument();
   if (doc && css::ErrorReporter::ShouldReportErrors(*doc)) {
     return false;
   }
-
-  // If this is a chrome stylesheet, it might use -moz-bool-pref, which needs to
-  // access the pref service, which is not thread-safe. We could probably expose
-  // the relevant booleans as thread-safe var caches if we needed to, but
-  // parsing chrome stylesheets in parallel is unlikely to be a win anyway.
-  //
-  // Note that UA stylesheets can also use -moz-bool-pref, but those are always
-  // parsed sync.
-  if (aUrlData->ChromeRulesEnabled()) {
-    return false;
-  }
-
+  // Otherwise we can parse in parallel.
   return true;
 }
 
@@ -1240,6 +1218,7 @@ void StyleSheet::FinishAsyncParse(
   MOZ_ASSERT(!mParsePromise.IsEmpty());
   Inner().mContents = aSheetContents;
   Inner().mUseCounters = std::move(aUseCounters);
+  FixUpRuleListAfterContentsChangeIfNeeded();
   mParsePromise.Resolve(true, __func__);
 }
 

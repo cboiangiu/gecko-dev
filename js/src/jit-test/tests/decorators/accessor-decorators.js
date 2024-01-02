@@ -44,7 +44,11 @@ function checkDecoratorContext(kind, isPrivate, isStatic, name) {
     assertEq(context.private, isPrivate);
     assertEq(context.static, isStatic);
     assertEq(context.name, name);
-    assertEq(typeof context.addInitializer, "object");
+    if (isStatic) {
+      assertEq(typeof context.addInitializer, "undefined");
+    } else {
+      assertEq(typeof context.addInitializer, "function");
+    }
     // return undefined
   }
 }
@@ -164,3 +168,22 @@ assertThrowsInstanceOf(() => {
     @(() => { return {init: "hello!"}; }) accessor x;
   }
 }, TypeError), "Returning a value other than undefined or a callable throws.";
+
+const decoratorOrder = [];
+function makeOrderedDecorator(order) {
+  return function (value, context) {
+    decoratorOrder.push(order);
+    return value;
+  }
+}
+
+class H {
+  @makeOrderedDecorator(1) @makeOrderedDecorator(2) @makeOrderedDecorator(3)
+  accessor x = 1;
+}
+
+let h = new H();
+assertEq(decoratorOrder.length, 3);
+assertEq(decoratorOrder[0], 3);
+assertEq(decoratorOrder[1], 2);
+assertEq(decoratorOrder[2], 1);

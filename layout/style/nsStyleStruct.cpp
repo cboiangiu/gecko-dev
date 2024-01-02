@@ -193,7 +193,7 @@ void Gecko_LoadData_Drop(StyleLoadData* aData) {
     // We want to dispatch this async to prevent reentrancy issues, as
     // imgRequestProxy going away can destroy documents, etc, see bug 1677555.
     auto task = MakeRefPtr<StyleImageRequestCleanupTask>(*aData);
-    SchedulerGroup::Dispatch(TaskCategory::Other, task.forget());
+    SchedulerGroup::Dispatch(task.forget());
   }
 
   // URIs are safe to refcount from any thread.
@@ -1540,7 +1540,7 @@ void StyleImage::ResolveImage(Document& aDoc, const StyleImage* aOld) {
 }
 
 template <>
-ImageResolution StyleImage::GetResolution() const {
+ImageResolution StyleImage::GetResolution(const ComputedStyle& aStyle) const {
   ImageResolution resolution;
   if (imgRequestProxy* request = GetImageRequest()) {
     RefPtr<imgIContainer> image;
@@ -1557,28 +1557,10 @@ ImageResolution StyleImage::GetResolution() const {
       resolution.ScaleBy(r);
     }
   }
+  if (aStyle.EffectiveZoom() != StyleZoom::ONE) {
+    resolution.ScaleBy(1.0f / aStyle.EffectiveZoom().ToFloat());
+  }
   return resolution;
-}
-
-template <>
-Maybe<CSSIntSize> StyleImage::GetIntrinsicSize() const {
-  imgRequestProxy* request = GetImageRequest();
-  if (!request) {
-    return Nothing();
-  }
-  RefPtr<imgIContainer> image;
-  request->GetImage(getter_AddRefs(image));
-  if (!image) {
-    return Nothing();
-  }
-  // FIXME(emilio): Seems like this should be smarter about unspecified width /
-  // height, aspect ratio, etc, but this preserves the current behavior of our
-  // only caller for now...
-  int32_t w = 0, h = 0;
-  image->GetWidth(&w);
-  image->GetHeight(&h);
-  GetResolution().ApplyTo(w, h);
-  return Some(CSSIntSize{w, h});
 }
 
 // --------------------
@@ -1874,8 +1856,6 @@ nsStyleImageLayers::Layer::~Layer() = default;
 
 void nsStyleImageLayers::Layer::Initialize(
     nsStyleImageLayers::LayerType aType) {
-  mRepeat.SetInitialValues();
-
   mPosition = Position::FromPercentage(0.);
 
   if (aType == LayerType::Background) {
@@ -2044,37 +2024,13 @@ bool nsStyleBackground::IsTransparent(const ComputedStyle* aStyle) const {
 
 StyleTransition::StyleTransition(const StyleTransition& aCopy) = default;
 
-void StyleTransition::SetInitialValues() {
-  mTimingFunction =
-      StyleComputedTimingFunction::Keyword(StyleTimingKeyword::Ease);
-  mDuration = {0.0};
-  mDelay = {0.0};
-  mProperty = eCSSPropertyExtra_all_properties;
-}
-
 bool StyleTransition::operator==(const StyleTransition& aOther) const {
   return mTimingFunction == aOther.mTimingFunction &&
          mDuration == aOther.mDuration && mDelay == aOther.mDelay &&
-         mProperty == aOther.mProperty &&
-         (mProperty != eCSSProperty_UNKNOWN ||
-          mUnknownProperty == aOther.mUnknownProperty);
+         mProperty == aOther.mProperty;
 }
 
 StyleAnimation::StyleAnimation(const StyleAnimation& aCopy) = default;
-
-void StyleAnimation::SetInitialValues() {
-  mTimingFunction =
-      StyleComputedTimingFunction::Keyword(StyleTimingKeyword::Ease);
-  mDuration = {0.0};
-  mDelay = {0.0};
-  mName = nsGkAtoms::_empty;
-  mDirection = dom::PlaybackDirection::Normal;
-  mFillMode = dom::FillMode::None;
-  mPlayState = StyleAnimationPlayState::Running;
-  mIterationCount = {1.0f};
-  mComposition = dom::CompositeOperation::Replace;
-  mTimeline = StyleAnimationTimeline::Auto();
-}
 
 bool StyleAnimation::operator==(const StyleAnimation& aOther) const {
   return mTimingFunction == aOther.mTimingFunction &&
@@ -2371,8 +2327,11 @@ nsChangeHint nsStyleDisplay::CalcDifference(
     const bool isScrollable = IsScrollableOverflow();
     if (isScrollable != aNewData.IsScrollableOverflow()) {
       // We may need to construct or destroy a scroll frame as a result of this
-      // change.
-      hint |= nsChangeHint_ScrollbarChange;
+      // change. If we don't, we still need to update our overflow in some cases
+      // (like svg:foreignObject), which ignore the scrollable-ness of our
+      // overflow.
+      hint |= nsChangeHint_ScrollbarChange | nsChangeHint_UpdateOverflow |
+              nsChangeHint_RepaintFrame;
     } else if (isScrollable) {
       if (ScrollbarGenerationChanged(*this, aNewData)) {
         // We might need to reframe in the case of hidden -> non-hidden case
@@ -2760,8 +2719,7 @@ void nsStyleContent::TriggerImageLoads(Document& aDoc,
 //
 
 nsStyleTextReset::nsStyleTextReset()
-    : mTextOverflow(),
-      mTextDecorationLine(StyleTextDecorationLine::NONE),
+    : mTextDecorationLine(StyleTextDecorationLine::NONE),
       mTextDecorationStyle(StyleTextDecorationStyle::Solid),
       mUnicodeBidi(StyleUnicodeBidi::Normal),
       mInitialLetterSink(0),
@@ -2848,7 +2806,6 @@ nsStyleText::nsStyleText(const Document& aDocument)
       mTabSize(StyleNonNegativeLengthOrNumber::Number(8.f)),
       mWordSpacing(LengthPercentage::Zero()),
       mLetterSpacing({0.}),
-      mTextIndent(LengthPercentage::Zero()),
       mTextUnderlineOffset(LengthPercentageOrAuto::Auto()),
       mTextDecorationSkipInk(StyleTextDecorationSkipInk::Auto),
       mTextUnderlinePosition(StyleTextUnderlinePosition::AUTO),
@@ -3010,7 +2967,7 @@ nsStyleUI::nsStyleUI()
       mMozTheme(StyleMozTheme::Auto),
       mUserInput(StyleUserInput::Auto),
       mUserModify(StyleUserModify::ReadOnly),
-      mUserFocus(StyleUserFocus::None),
+      mUserFocus(StyleUserFocus::Normal),
       mPointerEvents(StylePointerEvents::Auto),
       mCursor{{}, StyleCursorKind::Auto},
       mAccentColor(StyleColorOrAuto::Auto()),
@@ -3107,7 +3064,7 @@ nsStyleUIReset::nsStyleUIReset()
       mMozSubtreeHiddenOnlyVisually(false),
       mIMEMode(StyleImeMode::Auto),
       mWindowDragging(StyleWindowDragging::Default),
-      mWindowShadow(StyleWindowShadow::Default),
+      mWindowShadow(StyleWindowShadow::Auto),
       mWindowOpacity(1.0),
       mMozWindowInputRegionMargin(StyleLength::Zero()),
       mWindowTransformOrigin{LengthPercentage::FromPercentage(0.5),
@@ -3141,8 +3098,6 @@ nsStyleUIReset::nsStyleUIReset()
       mViewTimelineAxisCount(1),
       mViewTimelineInsetCount(1) {
   MOZ_COUNT_CTOR(nsStyleUIReset);
-  mTransitions[0].SetInitialValues();
-  mAnimations[0].SetInitialValues();
 }
 
 nsStyleUIReset::nsStyleUIReset(const nsStyleUIReset& aSource)
@@ -3511,10 +3466,23 @@ nscoord StyleCalcLengthPercentage::Resolve(nscoord aBasis,
 
 bool nsStyleDisplay::PrecludesSizeContainmentOrContentVisibilityWithFrame(
     const nsIFrame& aFrame) const {
-  // Note: The spec for size containment says it should have no effect on
-  // non-atomic, inline-level boxes.
-  bool isNonReplacedInline = aFrame.IsFrameOfType(nsIFrame::eLineParticipant) &&
-                             !aFrame.IsFrameOfType(nsIFrame::eReplaced);
+  // The spec says that in the case of SVG, the contain property only applies
+  // to <svg> elements that have an associated CSS layout box.
+  // https://drafts.csswg.org/css-contain/#contain-property
+  // Internal SVG elements do not use the standard CSS box model, and wouldn't
+  // be affected by size containment. By disabling it we prevent them from
+  // becoming query containers for size features.
+  if (aFrame.HasAnyStateBits(NS_FRAME_SVG_LAYOUT)) {
+    return true;
+  }
+
+  // Note: The spec for size containment says it should have no effect
+  // - on non-atomic, inline-level boxes.
+  // - on internal ruby boxes.
+  // - if inner display type is table.
+  // - on internal table boxes.
+  // https://drafts.csswg.org/css-contain/#containment-size
+  bool isNonReplacedInline = aFrame.IsLineParticipant() && !aFrame.IsReplaced();
   return isNonReplacedInline || IsInternalRubyDisplayType() ||
          DisplayInside() == mozilla::StyleDisplayInside::Table ||
          IsInnerTableStyle();
@@ -3528,13 +3496,6 @@ ContainSizeAxes nsStyleDisplay::GetContainSizeAxes(
   }
 
   if (PrecludesSizeContainmentOrContentVisibilityWithFrame(aFrame)) {
-    return ContainSizeAxes(false, false);
-  }
-
-  // Internal SVG elements do not use the standard CSS box model, and wouldn't
-  // be affected by size containment. By disabling it we prevent them from
-  // becoming query containers for size features.
-  if (aFrame.HasAnyStateBits(NS_FRAME_SVG_LAYOUT)) {
     return ContainSizeAxes(false, false);
   }
 
@@ -3556,6 +3517,8 @@ StyleContentVisibility nsStyleDisplay::ContentVisibility(
   if (MOZ_LIKELY(mContentVisibility == StyleContentVisibility::Visible)) {
     return StyleContentVisibility::Visible;
   }
+  // content-visibility applies to elements for which size containment applies.
+  // https://drafts.csswg.org/css-contain/#content-visibility
   if (PrecludesSizeContainmentOrContentVisibilityWithFrame(aFrame)) {
     return StyleContentVisibility::Visible;
   }

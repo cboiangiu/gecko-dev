@@ -8,8 +8,6 @@
 
 #include "mozilla/AnimationUtils.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/AutoRestyleTimelineMarker.h"
-#include "mozilla/AutoTimelineMarker.h"
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/ComputedStyleInlines.h"
 #include "mozilla/DocumentStyleRootIterator.h"
@@ -136,8 +134,10 @@ void RestyleManager::ContentAppended(nsIContent* aFirstNewContent) {
       auto* containerElement = container->AsElement();
       PostRestyleEvent(containerElement, RestyleHint::RestyleSubtree(),
                        nsChangeHint(0));
-      StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
-          containerElement->GetFirstElementChild());
+      if (selectorFlags & NodeSelectorFlags::HasSlowSelectorNthAll) {
+        StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
+            containerElement->GetFirstElementChild());
+      }
     } else {
       RestylePreviousSiblings(aFirstNewContent);
       RestyleSiblingsStartingWith(aFirstNewContent);
@@ -398,8 +398,10 @@ void RestyleManager::RestyleForInsertOrChange(nsIContent* aChild) {
       auto* containerElement = container->AsElement();
       PostRestyleEvent(containerElement, RestyleHint::RestyleSubtree(),
                        nsChangeHint(0));
-      StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
-          containerElement->GetFirstElementChild());
+      if (selectorFlags & NodeSelectorFlags::HasSlowSelectorNthAll) {
+        StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
+            containerElement->GetFirstElementChild());
+      }
     } else {
       RestylePreviousSiblings(aChild);
       RestyleSiblingsStartingWith(aChild);
@@ -411,8 +413,10 @@ void RestyleManager::RestyleForInsertOrChange(nsIContent* aChild) {
   if (selectorFlags & NodeSelectorFlags::HasSlowSelectorLaterSiblings) {
     // Restyle all later siblings.
     RestyleSiblingsStartingWith(aChild->GetNextSibling());
-    StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
-        aChild->GetNextElementSibling());
+    if (selectorFlags & NodeSelectorFlags::HasSlowSelectorNthAll) {
+      StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
+          aChild->GetNextElementSibling());
+    }
   }
 
   if (selectorFlags & NodeSelectorFlags::HasEdgeChildSelector) {
@@ -492,8 +496,10 @@ void RestyleManager::ContentRemoved(nsIContent* aOldChild,
       auto* containerElement = container->AsElement();
       PostRestyleEvent(containerElement, RestyleHint::RestyleSubtree(),
                        nsChangeHint(0));
-      StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
-          containerElement->GetFirstElementChild());
+      if (selectorFlags & NodeSelectorFlags::HasSlowSelectorNthAll) {
+        StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
+            containerElement->GetFirstElementChild());
+      }
     } else {
       RestylePreviousSiblings(aOldChild);
       RestyleSiblingsStartingWith(aOldChild);
@@ -505,8 +511,10 @@ void RestyleManager::ContentRemoved(nsIContent* aOldChild,
   if (selectorFlags & NodeSelectorFlags::HasSlowSelectorLaterSiblings) {
     // Restyle all later siblings.
     RestyleSiblingsStartingWith(aFollowingSibling);
-    StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
-        nextSibling);
+    if (selectorFlags & NodeSelectorFlags::HasSlowSelectorNthAll) {
+      StyleSet()->MaybeInvalidateRelativeSelectorForNthDependencyFromSibling(
+          nextSibling);
+    }
   }
 
   if (selectorFlags & NodeSelectorFlags::HasEdgeChildSelector) {
@@ -586,6 +594,30 @@ static bool StateChangeMayAffectFrame(const Element& aElement,
   return needsImageFrame != aFrame.IsImageFrameOrSubclass();
 }
 
+static bool RepaintForAppearance(nsIFrame& aFrame, const Element& aElement,
+                                 ElementState aStateMask) {
+  if (aStateMask.HasAtLeastOneOfStates(ElementState::HOVER |
+                                       ElementState::ACTIVE) &&
+      aElement.IsAnyOfXULElements(nsGkAtoms::checkbox, nsGkAtoms::radio)) {
+    // The checkbox inside these elements inherit hover state and so on, see
+    // nsNativeTheme::GetContentState.
+    // FIXME(emilio): Would be nice to not have these hard-coded.
+    return true;
+  }
+  auto appearance = aFrame.StyleDisplay()->EffectiveAppearance();
+  if (appearance == StyleAppearance::None) {
+    return false;
+  }
+  nsPresContext* pc = aFrame.PresContext();
+  nsITheme* theme = pc->Theme();
+  if (!theme->ThemeSupportsWidget(pc, &aFrame, appearance)) {
+    return false;
+  }
+  bool repaint = false;
+  theme->WidgetStateChanged(&aFrame, appearance, nullptr, &repaint, nullptr);
+  return repaint;
+}
+
 /**
  * Calculates the change hint and the restyle hint for a given content state
  * change.
@@ -604,20 +636,8 @@ static nsChangeHint ChangeForContentStateChange(const Element& aElement,
     if (StateChangeMayAffectFrame(aElement, *primaryFrame, aStateMask)) {
       return nsChangeHint_ReconstructFrame;
     }
-
-    StyleAppearance appearance =
-        primaryFrame->StyleDisplay()->EffectiveAppearance();
-    if (appearance != StyleAppearance::None) {
-      nsPresContext* pc = primaryFrame->PresContext();
-      nsITheme* theme = pc->Theme();
-      if (theme->ThemeSupportsWidget(pc, primaryFrame, appearance)) {
-        bool repaint = false;
-        theme->WidgetStateChanged(primaryFrame, appearance, nullptr, &repaint,
-                                  nullptr);
-        if (repaint) {
-          changeHint |= nsChangeHint_RepaintFrame;
-        }
-      }
+    if (RepaintForAppearance(*primaryFrame, aElement, aStateMask)) {
+      changeHint |= nsChangeHint_RepaintFrame;
     }
     primaryFrame->ElementStateChanged(aStateMask);
   }
@@ -762,7 +782,7 @@ static nsIFrame* GetFrameForChildrenOnlyTransformHint(nsIFrame* aFrame) {
     MOZ_ASSERT(aFrame->IsSVGOuterSVGAnonChildFrame(),
                "Where is the SVGOuterSVGFrame's anon child??");
   }
-  MOZ_ASSERT(aFrame->IsFrameOfType(nsIFrame::eSVG | nsIFrame::eSVGContainer),
+  MOZ_ASSERT(aFrame->IsSVGContainerFrame(),
              "Children-only transforms only expected on SVG frames");
   return aFrame;
 }
@@ -1738,8 +1758,7 @@ void RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList) {
       hint |= nsChangeHint_RepaintFrame;
     }
 
-    if ((hint & nsChangeHint_UpdateUsesOpacity) &&
-        frame->IsFrameOfType(nsIFrame::eTablePart)) {
+    if ((hint & nsChangeHint_UpdateUsesOpacity) && frame->IsTablePart()) {
       NS_ASSERTION(hint & nsChangeHint_UpdateOpacityLayer,
                    "should only return UpdateUsesOpacity hint "
                    "when also returning UpdateOpacityLayer hint");
@@ -1765,8 +1784,7 @@ void RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList) {
       // For most frame types, DLBI can detect background position changes,
       // so we only need to schedule a paint.
       hint |= nsChangeHint_SchedulePaint;
-      if (frame->IsFrameOfType(nsIFrame::eTablePart) ||
-          frame->IsFrameOfType(nsIFrame::eMathML)) {
+      if (frame->IsTablePart() || frame->IsMathMLFrame()) {
         // Table parts and MathML frames don't build display items for their
         // backgrounds, so DLBI can't detect background-position changes for
         // these frames. Repaint the whole frame.
@@ -1839,7 +1857,7 @@ void RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList) {
           // inner svg frame, so update the child overflows.
           nsIFrame* childFrame = hintFrame->PrincipalChildList().FirstChild();
           for (; childFrame; childFrame = childFrame->GetNextSibling()) {
-            MOZ_ASSERT(childFrame->IsFrameOfType(nsIFrame::eSVG),
+            MOZ_ASSERT(childFrame->IsSVGFrame(),
                        "Not expecting non-SVG children");
             if (!CanSkipOverflowUpdates(childFrame)) {
               mOverflowChangedTracker.AddFrame(
@@ -2411,8 +2429,6 @@ void RestyleManager::PostRestyleEventForAnimations(Element* aElement,
 
   mPresContext->TriggeredAnimationRestyle();
 
-  AutoRestyleTimelineMarker marker(mPresContext->GetDocShell(),
-                                   true /* animation-only */);
   Servo_NoteExplicitHints(elementToRestyle, aRestyleHint, nsChangeHint(0));
 }
 
@@ -3203,8 +3219,6 @@ void RestyleManager::DoProcessPendingRestyles(ServoTraversalFlags aFlags) {
     nsTArray<RefPtr<Element>> anchorsToSuppress;
 
     {
-      // This marker is not used for testing, so can be removed
-      AutoRestyleTimelineMarker marker(presContext->GetDocShell(), false);
       DocumentStyleRootIterator iter(doc->GetServoRestyleRoot());
       while (Element* root = iter.GetNextStyleRoot()) {
         nsTArray<nsIFrame*> wrappersToRestyle;
@@ -3235,8 +3249,6 @@ void RestyleManager::DoProcessPendingRestyles(ServoTraversalFlags aFlags) {
     // processing existing ones. We redirect those into a secondary queue and
     // iterate until there's nothing left.
     {
-      AutoTimelineMarker marker(presContext->GetDocShell(),
-                                "StylesApplyChanges");
       ReentrantChangeList newChanges;
       mReentrantChanges = &newChanges;
       while (!currentChanges.IsEmpty()) {

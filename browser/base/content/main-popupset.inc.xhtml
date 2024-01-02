@@ -145,16 +145,9 @@
   </html:template>
 
   <html:template id="screenshotsPagePanelTemplate">
-    <panel id="screenshotsPagePanel"
-           type="arrow"
-           orient="vertical"
-           norolluponanchor="true"
-           consumeoutsideclicks="never"
-           level="parent"
-           noautohide="true"
-           tabspecific="true">
-           <screenshots-buttons></screenshots-buttons>
-    </panel>
+    <box id="screenshotsPagePanel" hidden="true">
+      <screenshots-buttons></screenshots-buttons>
+    </box>
   </html:template>
 
   <html:template id="invalidFormTemplate">
@@ -192,12 +185,12 @@
               data-l10n-id="bookmark-panel"
               data-l10n-attrs="style">
           <button id="editBookmarkPanelDoneButton"
-                  class="panel-footer-button"
+                  class="footer-button"
                   data-l10n-id="bookmark-panel-save-button"
                   default="true"
                   oncommand="StarUI.panel.hidePopup();"/>
           <button id="editBookmarkPanelRemoveButton"
-                  class="panel-footer-button"
+                  class="footer-button"
                   oncommand="StarUI.removeBookmarkButtonCommand();"/>
         </html:moz-button-group>
       </vbox>
@@ -386,6 +379,8 @@
   </menupopup>
 
   <menupopup id="contentAreaContextMenu"
+# read by macOS cocoa code to enable the "services" menu here:
+             showservicesmenu="true"
              onpopupshowing="if (event.target != this)
                                return true;
                              gContextMenu = new nsContextMenu(this, event.shiftKey);
@@ -599,7 +594,7 @@
     </panel>
   </html:template>
 
-  #include ../../../toolkit/components/pictureinpicture/content/pictureInPicturePanel.xhtml
+  #include ../../../toolkit/components/pictureinpicture/content/pictureInPicturePanel.inc.xhtml
 
   <menupopup id="unified-extensions-context-menu"
              onpopupshowing="gUnifiedExtensions.updateContextMenu(this, event)"

@@ -3905,22 +3905,6 @@ var gCSSProperties = {
     other_values: ["preserve-3d"],
     invalid_values: [],
   },
-  "-moz-user-focus": {
-    domProp: "MozUserFocus",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: ["none"],
-    other_values: [
-      "normal",
-      "ignore",
-      "select-all",
-      "select-before",
-      "select-after",
-      "select-same",
-      "select-menu",
-    ],
-    invalid_values: [],
-  },
   "-moz-user-input": {
     domProp: "MozUserInput",
     inherited: true,
@@ -5248,7 +5232,7 @@ var gCSSProperties = {
       "#fed292",
       "rgba(45,300,12,2)",
       "transparent",
-      "-moz-nativehyperlinktext",
+      "LinkText",
       "rgba(255,128,0,0.5)",
       "#e0fc",
       "#10fcee72",
@@ -8561,17 +8545,6 @@ var gCSSProperties = {
     ],
     invalid_values: [],
   },
-  "text-wrap": {
-    domProp: "textWrap",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    applies_to_placeholder: true,
-    applies_to_cue: true,
-    applies_to_marker: true,
-    initial_values: ["auto"],
-    other_values: ["stable", "balance"],
-    invalid_values: ["wrap", "nowrap", "normal"],
-  },
   width: {
     domProp: "width",
     inherited: false,
@@ -10105,48 +10078,6 @@ var gCSSProperties = {
     alias_for: "tab-size",
     subproperties: ["tab-size"],
   },
-  "-moz-transform": {
-    domProp: "MozTransform",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "transform",
-    subproperties: ["transform"],
-  },
-  "-moz-transform-origin": {
-    domProp: "MozTransformOrigin",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "transform-origin",
-    subproperties: ["transform-origin"],
-  },
-  "-moz-perspective-origin": {
-    domProp: "MozPerspectiveOrigin",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "perspective-origin",
-    subproperties: ["perspective-origin"],
-  },
-  "-moz-perspective": {
-    domProp: "MozPerspective",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "perspective",
-    subproperties: ["perspective"],
-  },
-  "-moz-backface-visibility": {
-    domProp: "MozBackfaceVisibility",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "backface-visibility",
-    subproperties: ["backface-visibility"],
-  },
-  "-moz-transform-style": {
-    domProp: "MozTransformStyle",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "transform-style",
-    subproperties: ["transform-style"],
-  },
   "-moz-border-image": {
     domProp: "MozBorderImage",
     inherited: false,
@@ -10159,132 +10090,6 @@ var gCSSProperties = {
       "border-image-outset",
       "border-image-repeat",
     ],
-  },
-  "-moz-transition": {
-    domProp: "MozTransition",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    applies_to_marker: true,
-    alias_for: "transition",
-    subproperties: [
-      "transition-property",
-      "transition-duration",
-      "transition-timing-function",
-      "transition-delay",
-    ],
-  },
-  "-moz-transition-delay": {
-    domProp: "MozTransitionDelay",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "transition-delay",
-    subproperties: ["transition-delay"],
-  },
-  "-moz-transition-duration": {
-    domProp: "MozTransitionDuration",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "transition-duration",
-    subproperties: ["transition-duration"],
-  },
-  "-moz-transition-property": {
-    domProp: "MozTransitionProperty",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "transition-property",
-    subproperties: ["transition-property"],
-  },
-  "-moz-transition-timing-function": {
-    domProp: "MozTransitionTimingFunction",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "transition-timing-function",
-    subproperties: ["transition-timing-function"],
-  },
-  "-moz-animation": {
-    domProp: "MozAnimation",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    applies_to_marker: true,
-    alias_for: "animation",
-    subproperties: [
-      "animation-name",
-      "animation-duration",
-      "animation-timing-function",
-      "animation-delay",
-      "animation-direction",
-      "animation-fill-mode",
-      "animation-iteration-count",
-      "animation-play-state",
-    ],
-  },
-  "-moz-animation-delay": {
-    domProp: "MozAnimationDelay",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-delay",
-    subproperties: ["animation-delay"],
-  },
-  "-moz-animation-direction": {
-    domProp: "MozAnimationDirection",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-direction",
-    subproperties: ["animation-direction"],
-  },
-  "-moz-animation-duration": {
-    domProp: "MozAnimationDuration",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-duration",
-    subproperties: ["animation-duration"],
-  },
-  "-moz-animation-fill-mode": {
-    domProp: "MozAnimationFillMode",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-fill-mode",
-    subproperties: ["animation-fill-mode"],
-  },
-  "-moz-animation-iteration-count": {
-    domProp: "MozAnimationIterationCount",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-iteration-count",
-    subproperties: ["animation-iteration-count"],
-  },
-  "-moz-animation-name": {
-    domProp: "MozAnimationName",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-name",
-    subproperties: ["animation-name"],
-  },
-  "-moz-animation-play-state": {
-    domProp: "MozAnimationPlayState",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-play-state",
-    subproperties: ["animation-play-state"],
-  },
-  "-moz-animation-timing-function": {
-    domProp: "MozAnimationTimingFunction",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    applies_to_marker: true,
-    alias_for: "animation-timing-function",
-    subproperties: ["animation-timing-function"],
   },
   "-moz-font-feature-settings": {
     domProp: "MozFontFeatureSettings",
@@ -12184,6 +11989,25 @@ gCSSProperties["text-justify"] = {
   invalid_values: [],
 };
 
+if (IsCSSPropertyPrefEnabled("layout.css.text-indent-keywords.enabled")) {
+  gCSSProperties["text-indent"].other_values.push(
+    "2em hanging",
+    "5% each-line",
+    "-10px hanging each-line",
+    "hanging calc(2px)",
+    "each-line calc(-2px)",
+    "each-line calc(50%) hanging",
+    "hanging calc(3*25px) each-line",
+    "each-line hanging calc(25px*3)"
+  );
+  gCSSProperties["text-indent"].invalid_values.push(
+    "hanging",
+    "each-line",
+    "-10px hanging hanging",
+    "each-line calc(2px) each-line"
+  );
+}
+
 if (IsCSSPropertyPrefEnabled("layout.css.font-variations.enabled")) {
   gCSSProperties["font-variation-settings"] = {
     domProp: "fontVariationSettings",
@@ -13491,15 +13315,6 @@ if (false) {
       "2px",
     ],
   };
-
-  gCSSProperties["-moz-font-smoothing-background-color"] = {
-    // domProp: "MozFontSmoothingBackgroundColor",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: ["transparent"],
-    other_values: ["green", "#fc3"],
-    invalid_values: ["000000", "ff00ff"],
-  };
 }
 
 gCSSProperties["scrollbar-color"] = {
@@ -13793,6 +13608,92 @@ if (IsCSSPropertyPrefEnabled("layout.css.animation-composition.enabled")) {
   };
 }
 
+if (IsCSSPropertyPrefEnabled("layout.css.prefixes.animations")) {
+  Object.assign(gCSSProperties, {
+    "-moz-animation": {
+      domProp: "MozAnimation",
+      inherited: false,
+      type: CSS_TYPE_TRUE_SHORTHAND,
+      applies_to_marker: true,
+      alias_for: "animation",
+      subproperties: [
+        "animation-name",
+        "animation-duration",
+        "animation-timing-function",
+        "animation-delay",
+        "animation-direction",
+        "animation-fill-mode",
+        "animation-iteration-count",
+        "animation-play-state",
+      ],
+    },
+    "-moz-animation-delay": {
+      domProp: "MozAnimationDelay",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-delay",
+      subproperties: ["animation-delay"],
+    },
+    "-moz-animation-direction": {
+      domProp: "MozAnimationDirection",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-direction",
+      subproperties: ["animation-direction"],
+    },
+    "-moz-animation-duration": {
+      domProp: "MozAnimationDuration",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-duration",
+      subproperties: ["animation-duration"],
+    },
+    "-moz-animation-fill-mode": {
+      domProp: "MozAnimationFillMode",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-fill-mode",
+      subproperties: ["animation-fill-mode"],
+    },
+    "-moz-animation-iteration-count": {
+      domProp: "MozAnimationIterationCount",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-iteration-count",
+      subproperties: ["animation-iteration-count"],
+    },
+    "-moz-animation-name": {
+      domProp: "MozAnimationName",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-name",
+      subproperties: ["animation-name"],
+    },
+    "-moz-animation-play-state": {
+      domProp: "MozAnimationPlayState",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-play-state",
+      subproperties: ["animation-play-state"],
+    },
+    "-moz-animation-timing-function": {
+      domProp: "MozAnimationTimingFunction",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "animation-timing-function",
+      subproperties: ["animation-timing-function"],
+    },
+  });
+}
+
 if (IsCSSPropertyPrefEnabled("layout.css.scroll-driven-animations.enabled")) {
   // Basically, web-platform-tests should cover most cases, so here we only
   // put some basic test cases.
@@ -14001,6 +13902,130 @@ gCSSProperties["scrollbar-gutter"] = {
     "match-parent",
   ],
 };
+
+if (IsCSSPropertyPrefEnabled("layout.css.text-wrap-balance.enabled")) {
+  gCSSProperties["text-wrap"] = {
+    domProp: "textWrap",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
+    applies_to_cue: true,
+    applies_to_marker: true,
+    initial_values: ["auto"],
+    other_values: ["stable", "balance"],
+    invalid_values: ["wrap", "nowrap", "normal"],
+  };
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.prefixes.transforms")) {
+  Object.assign(gCSSProperties, {
+    "-moz-transform": {
+      domProp: "MozTransform",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      alias_for: "transform",
+      subproperties: ["transform"],
+    },
+    "-moz-transform-origin": {
+      domProp: "MozTransformOrigin",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      alias_for: "transform-origin",
+      subproperties: ["transform-origin"],
+    },
+    "-moz-perspective-origin": {
+      domProp: "MozPerspectiveOrigin",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      alias_for: "perspective-origin",
+      subproperties: ["perspective-origin"],
+    },
+    "-moz-perspective": {
+      domProp: "MozPerspective",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      alias_for: "perspective",
+      subproperties: ["perspective"],
+    },
+    "-moz-backface-visibility": {
+      domProp: "MozBackfaceVisibility",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      alias_for: "backface-visibility",
+      subproperties: ["backface-visibility"],
+    },
+    "-moz-transform-style": {
+      domProp: "MozTransformStyle",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      alias_for: "transform-style",
+      subproperties: ["transform-style"],
+    },
+  });
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.zoom.enabled")) {
+  Object.assign(gCSSProperties, {
+    zoom: {
+      domProp: "zoom",
+      inherited: false,
+      type: CSS_TYPE_LONGHAND,
+      initial_values: ["normal", "1", "100%", "0", "0%"],
+      other_values: ["1.5", "2", "150%", "200%"],
+      invalid_values: ["-1", "-40%"],
+    },
+  });
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.prefixes.transitions")) {
+  Object.assign(gCSSProperties, {
+    "-moz-transition": {
+      domProp: "MozTransition",
+      inherited: false,
+      type: CSS_TYPE_TRUE_SHORTHAND,
+      applies_to_marker: true,
+      alias_for: "transition",
+      subproperties: [
+        "transition-property",
+        "transition-duration",
+        "transition-timing-function",
+        "transition-delay",
+      ],
+    },
+    "-moz-transition-delay": {
+      domProp: "MozTransitionDelay",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "transition-delay",
+      subproperties: ["transition-delay"],
+    },
+    "-moz-transition-duration": {
+      domProp: "MozTransitionDuration",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "transition-duration",
+      subproperties: ["transition-duration"],
+    },
+    "-moz-transition-property": {
+      domProp: "MozTransitionProperty",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "transition-property",
+      subproperties: ["transition-property"],
+    },
+    "-moz-transition-timing-function": {
+      domProp: "MozTransitionTimingFunction",
+      inherited: false,
+      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+      applies_to_marker: true,
+      alias_for: "transition-timing-function",
+      subproperties: ["transition-timing-function"],
+    },
+  });
+}
 
 // Copy aliased properties' fields from their alias targets. Keep this logic
 // at the bottom of this file to ensure all the aliased properties are

@@ -46,9 +46,9 @@ ChromeUtils.defineESModuleGetters(lazy, {
 const PREF_ABOUT_HOME_CACHE_TESTING =
   "browser.startup.homepage.abouthome_cache.testing";
 const ABOUT_WELCOME_URL =
-  "resource://activity-stream/aboutwelcome/aboutwelcome.html";
+  "chrome://browser/content/aboutwelcome/aboutwelcome.html";
 
-const CACHE_WORKER_URL = "resource://activity-stream/lib/cache-worker.js";
+const CACHE_WORKER_URL = "resource://activity-stream/lib/cache.worker.js";
 
 const IS_PRIVILEGED_PROCESS =
   Services.appinfo.remoteType === E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE;

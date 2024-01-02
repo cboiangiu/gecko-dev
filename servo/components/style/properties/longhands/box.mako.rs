@@ -495,7 +495,7 @@ ${helpers.predefined_type(
     engines="gecko",
     spec="https://drafts.csswg.org/css-contain/#content-visibility",
     gecko_pref="layout.css.content-visibility.enabled",
-    animation_value_type="none",
+    animation_value_type="ComputedValue",
     affects="layout",
 )}
 
@@ -640,4 +640,5 @@ ${helpers.predefined_type(
     spec="Non-standard (https://github.com/atanassov/css-zoom/ is the closest)",
     gecko_pref="layout.css.zoom.enabled",
     affects="layout",
+    enabled_in="ua",
 )}

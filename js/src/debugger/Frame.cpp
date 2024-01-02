@@ -1163,10 +1163,21 @@ Result<Completion> js::DebuggerGenericEval(
     env = envArg;
   }
 
+  if (iter && iter->hasScript() && iter->script()->allowRelazify()) {
+    // This is a function that was first lazy, and delazified, and it's marked
+    // as relazifyable because there was no inner function.
+    //
+    // Evaluating a script can create inner function, which should prevent the
+    // relazification.
+    iter->script()->clearAllowRelazify();
+  }
+
   // Note whether we are in an evaluation that might invoke the OnNativeCall
   // hook, so that the JITs will be disabled.
-  AutoNoteDebuggerEvaluationWithOnNativeCallHook noteEvaluation(
-      cx, dbg->observesNativeCalls() ? dbg : nullptr);
+  Maybe<AutoNoteExclusiveDebuggerOnEval> noteEvaluation;
+  if (dbg->isExclusiveDebuggerOnEval()) {
+    noteEvaluation.emplace(cx, dbg);
+  }
 
   // Run the code and produce the completion value.
   LeaveDebuggeeNoExecute nnx(cx);

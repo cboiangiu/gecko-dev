@@ -41,7 +41,7 @@ class CookiePrivateStorage final : public CookieStorage {
 
   void RemoveAllInternal() override {}
 
-  void RemoveCookieFromDB(const CookieListIter& aIter) override {}
+  void RemoveCookieFromDB(const Cookie& aCookie) override {}
 
   already_AddRefed<nsIArray> PurgeCookies(int64_t aCurrentTimeInUsec,
                                           uint16_t aMaxNumberOfCookies,
@@ -50,6 +50,9 @@ class CookiePrivateStorage final : public CookieStorage {
   void StoreCookie(const nsACString& aBaseDomain,
                    const OriginAttributes& aOriginAttributes,
                    Cookie* aCookie) override {}
+
+ private:
+  void CollectCookieJarSizeData() override{};
 };
 
 }  // namespace net

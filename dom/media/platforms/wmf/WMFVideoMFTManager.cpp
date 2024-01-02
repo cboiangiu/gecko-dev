@@ -148,17 +148,6 @@ bool WMFVideoMFTManager::InitializeDXVA() {
     }
   }
 
-  // Try again with d3d9, but record the failure reason
-  // into a new var to avoid overwriting the d3d11 failure.
-  nsAutoCString d3d9Failure;
-  mDXVA2Manager.reset(
-      DXVA2Manager::CreateD3D9DXVA(mKnowsCompositor, d3d9Failure));
-  // Make sure we include the messages from both attempts (if applicable).
-  if (!d3d9Failure.IsEmpty()) {
-    mDXVAFailureReason.AppendLiteral("; D3D9: ");
-    mDXVAFailureReason.Append(d3d9Failure);
-  }
-
   return mDXVA2Manager != nullptr;
 }
 
@@ -206,11 +195,7 @@ MediaResult WMFVideoMFTManager::Init() {
   if (NS_SUCCEEDED(result) && mDXVA2Manager) {
     // If we had some failures but eventually made it work,
     // make sure we preserve the messages.
-    if (mDXVA2Manager->IsD3D11()) {
-      mDXVAFailureReason.AppendLiteral("Using D3D11 API");
-    } else {
-      mDXVAFailureReason.AppendLiteral("Using D3D9 API");
-    }
+    mDXVAFailureReason.AppendLiteral("Using D3D11 API");
   }
 
   return result;
@@ -412,9 +397,11 @@ WMFVideoMFTManager::SetDecoderMediaTypes() {
 
   UINT32 fpsDenominator = 1000;
   UINT32 fpsNumerator = static_cast<uint32_t>(mFramerate * fpsDenominator);
-  hr = MFSetAttributeRatio(inputType, MF_MT_FRAME_RATE, fpsNumerator,
-                           fpsDenominator);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (fpsNumerator > 0) {
+    hr = MFSetAttributeRatio(inputType, MF_MT_FRAME_RATE, fpsNumerator,
+                             fpsDenominator);
+    NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  }
 
   RefPtr<IMFMediaType> outputType;
   hr = wmf::MFCreateMediaType(getter_AddRefs(outputType));
@@ -428,9 +415,11 @@ WMFVideoMFTManager::SetDecoderMediaTypes() {
                           mVideoInfo.ImageRect().height);
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
-  hr = MFSetAttributeRatio(outputType, MF_MT_FRAME_RATE, fpsNumerator,
-                           fpsDenominator);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (fpsNumerator > 0) {
+    hr = MFSetAttributeRatio(outputType, MF_MT_FRAME_RATE, fpsNumerator,
+                             fpsDenominator);
+    NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  }
 
   GUID outputSubType = [&]() {
     switch (mVideoInfo.mColorDepth) {
@@ -996,10 +985,7 @@ nsCString WMFVideoMFTManager::GetDescriptionName() const {
     if (!mDXVA2Manager) {
       return "no DXVA";
     }
-    if (mDXVA2Manager->IsD3D11()) {
-      return "D3D11";
-    }
-    return "D3D9";
+    return "D3D11";
   }();
 
   return nsPrintfCString("wmf %s codec %s video decoder - %s, %s",

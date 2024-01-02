@@ -93,8 +93,13 @@ export class _ExperimentManager {
    */
   createTargetingContext() {
     let context = {
-      isFirstStartup: lazy.FirstStartup.state === lazy.FirstStartup.IN_PROGRESS,
       ...this.extraContext,
+
+      isFirstStartup: lazy.FirstStartup.state === lazy.FirstStartup.IN_PROGRESS,
+
+      get currentDate() {
+        return new Date();
+      },
     };
     Object.defineProperty(context, "activeExperiments", {
       get: async () => {
@@ -130,6 +135,15 @@ export class _ExperimentManager {
       get: async () => {
         await this.store.ready();
         return this.store.getAll().map(enrollment => enrollment.slug);
+      },
+    });
+    Object.defineProperty(context, "enrollmentsMap", {
+      get: async () => {
+        await this.store.ready();
+        return this.store.getAll().reduce((acc, enrollment) => {
+          acc[enrollment.slug] = enrollment.branch.slug;
+          return acc;
+        }, {});
       },
     });
     return context;
@@ -433,7 +447,6 @@ export class _ExperimentManager {
       slug,
       branch,
       active: true,
-      enrollmentId: lazy.NormandyUtils.generateUuid(),
       experimentType,
       source,
       userFacingName,
@@ -638,9 +651,6 @@ export class _ExperimentManager {
         {
           reason,
           branch: enrollment.branch.slug,
-          enrollmentId:
-            enrollment.enrollmentId ||
-            lazy.TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
         },
         typeof changedPref !== "undefined"
           ? { changedPref: changedPref.name }
@@ -653,9 +663,6 @@ export class _ExperimentManager {
         {
           experiment: slug,
           branch: enrollment.branch.slug,
-          enrollment_id:
-            enrollment.enrollmentId ||
-            lazy.TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
           reason,
         },
         typeof changedPref !== "undefined"
@@ -730,18 +737,14 @@ export class _ExperimentManager {
    *
    * @param {Enrollment} experiment
    */
-  sendEnrollmentTelemetry({ slug, branch, experimentType, enrollmentId }) {
+  sendEnrollmentTelemetry({ slug, branch, experimentType }) {
     lazy.TelemetryEvents.sendEvent("enroll", TELEMETRY_EVENT_OBJECT, slug, {
       experimentType,
       branch: branch.slug,
-      enrollmentId:
-        enrollmentId || lazy.TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
     });
     Glean.nimbusEvents.enrollment.record({
       experiment: slug,
       branch: branch.slug,
-      enrollment_id:
-        enrollmentId || lazy.TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
       experiment_type: experimentType,
     });
   }
@@ -757,16 +760,11 @@ export class _ExperimentManager {
       experiment.branch.slug,
       {
         type: `${TELEMETRY_EXPERIMENT_ACTIVE_PREFIX}${experiment.experimentType}`,
-        enrollmentId:
-          experiment.enrollmentId ||
-          lazy.TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
       }
     );
     // Report the experiment to the Glean Experiment API
     Services.fog.setExperimentActive(experiment.slug, experiment.branch.slug, {
       type: `${TELEMETRY_EXPERIMENT_ACTIVE_PREFIX}${experiment.experimentType}`,
-      enrollmentId:
-        experiment.enrollmentId || lazy.TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
     });
   }
 

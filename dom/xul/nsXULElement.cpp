@@ -22,7 +22,7 @@
 #include "XULTreeElement.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/CompileOptions.h"  // JS::CompileOptions, JS::OwningCompileOptions, , JS::ReadOnlyCompileOptions, JS::ReadOnlyDecodeOptions, JS::DecodeOptions
-#include "js/experimental/CompileScript.h"  // JS::NewFrontendContext, JS::DestroyFrontendContext, JS::SetNativeStackQuota, JS::CompileGlobalScriptToStencil, JS::CompilationStorage
+#include "js/experimental/CompileScript.h"  // JS::NewFrontendContext, JS::DestroyFrontendContext, JS::SetNativeStackQuota, JS::ThreadStackQuotaForSize, JS::CompileGlobalScriptToStencil, JS::CompilationStorage
 #include "js/experimental/JSStencil.h"      // JS::Stencil, JS::FrontendContext
 #include "js/SourceText.h"
 #include "js/Transcoding.h"
@@ -373,91 +373,57 @@ static bool IsNonList(mozilla::dom::NodeInfo* aNodeInfo) {
          !aNodeInfo->Equals(nsGkAtoms::richlistbox);
 }
 
-bool nsXULElement::IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) {
-  /*
-   * Returns true if an element may be focused, and false otherwise. The inout
-   * argument aTabIndex will be set to the tab order index to be used; -1 for
-   * elements that should not be part of the tab order and a greater value to
-   * indicate its tab order.
-   *
-   * Confusingly, the supplied value for the aTabIndex argument may indicate
-   * whether the element may be focused as a result of the -moz-user-focus
-   * property, where -1 means no and 0 means yes.
-   *
-   * For controls, the element cannot be focused and is not part of the tab
-   * order if it is disabled.
-   *
-   * -moz-user-focus is overridden if a tabindex (even -1) is specified.
-   *
-   * Specifically, the behaviour for all XUL elements is as follows:
-   *  *aTabIndex = -1  no tabindex     Not focusable or tabbable
-   *  *aTabIndex = -1  tabindex="-1"   Focusable but not tabbable
-   *  *aTabIndex = -1  tabindex=">=0"  Focusable and tabbable
-   *  *aTabIndex >= 0  no tabindex     Focusable and tabbable
-   *  *aTabIndex >= 0  tabindex="-1"   Focusable but not tabbable
-   *  *aTabIndex >= 0  tabindex=">=0"  Focusable and tabbable
-   *
-   * If aTabIndex is null, then the tabindex is not computed, and
-   * true is returned for non-disabled controls and false otherwise.
-   */
-
-  // elements are not focusable by default
-  bool shouldFocus = false;
-
+nsXULElement::XULFocusability nsXULElement::GetXULFocusability(
+    bool aWithMouse) {
 #ifdef XP_MACOSX
-  // on Mac, mouse interactions only focus the element if it's a list,
+  // On Mac, mouse interactions only focus the element if it's a list,
   // or if it's a remote target, since the remote target must handle
   // the focus.
   if (aWithMouse && IsNonList(mNodeInfo) &&
       !EventStateManager::IsTopLevelRemoteTarget(this)) {
-    return false;
+    return XULFocusability::NeverFocusable();
   }
 #endif
 
+  XULFocusability result;
   nsCOMPtr<nsIDOMXULControlElement> xulControl = AsXULControl();
   if (xulControl) {
-    // a disabled element cannot be focused and is not part of the tab order
+    // A disabled element cannot be focused and is not part of the tab order
     bool disabled;
     xulControl->GetDisabled(&disabled);
     if (disabled) {
-      if (aTabIndex) *aTabIndex = -1;
-      return false;
+      return XULFocusability::NeverFocusable();
     }
-    shouldFocus = true;
+    result.mDefaultFocusable = true;
   }
-
-  if (aTabIndex) {
-    Maybe<int32_t> attrVal = GetTabIndexAttrValue();
-    if (attrVal.isSome()) {
-      // The tabindex attribute was specified, so the element becomes
-      // focusable.
-      shouldFocus = true;
-      *aTabIndex = attrVal.value();
-    } else {
-      // otherwise, if there is no tabindex attribute, just use the value of
-      // *aTabIndex to indicate focusability. Reset any supplied tabindex to 0.
-      shouldFocus = *aTabIndex >= 0;
-      if (shouldFocus) {
-        *aTabIndex = 0;
-      }
-    }
-
-    if (xulControl && shouldFocus && sTabFocusModelAppliesToXUL &&
-        !(sTabFocusModel & eTabFocus_formElementsMask)) {
-      // By default, the tab focus model doesn't apply to xul element on any
-      // system but OS X. on OS X we're following it for UI elements (XUL) as
-      // sTabFocusModel is based on "Full Keyboard Access" system setting (see
-      // mac/nsILookAndFeel). both textboxes and list elements (i.e. trees and
-      // list) should always be focusable (textboxes are handled as html:input)
-      // For compatibility, we only do this for controls, otherwise elements
-      // like <browser> cannot take this focus.
-      if (IsNonList(mNodeInfo)) {
-        *aTabIndex = -1;
-      }
-    }
+  if (Maybe<int32_t> attrVal = GetTabIndexAttrValue()) {
+    // The tabindex attribute was specified, so the element becomes
+    // focusable.
+    result.mDefaultFocusable = true;
+    result.mForcedFocusable.emplace(true);
+    result.mForcedTabIndexIfFocusable.emplace(attrVal.value());
   }
+  if (xulControl && sTabFocusModelAppliesToXUL &&
+      !(sTabFocusModel & eTabFocus_formElementsMask) && IsNonList(mNodeInfo)) {
+    // By default, the tab focus model doesn't apply to xul element on any
+    // system but OS X. on OS X we're following it for UI elements (XUL) as
+    // sTabFocusModel is based on "Full Keyboard Access" system setting (see
+    // mac/nsILookAndFeel). both textboxes and list elements (i.e. trees and
+    // list) should always be focusable (textboxes are handled as html:input)
+    // For compatibility, we only do this for controls, otherwise elements
+    // like <browser> cannot take this focus.
+    result.mForcedTabIndexIfFocusable = Some(-1);
+  }
+  return result;
+}
 
-  return shouldFocus;
+// XUL elements are not focusable unless explicitly opted-into it with
+// -moz-user-focus: normal, or the tabindex attribute.
+Focusable nsXULElement::IsFocusableWithoutStyle(bool aWithMouse) {
+  const auto focusability = GetXULFocusability(aWithMouse);
+  const bool focusable = focusability.mDefaultFocusable;
+  return {focusable,
+          focusable ? focusability.mForcedTabIndexIfFocusable.valueOr(-1) : -1};
 }
 
 bool nsXULElement::HasMenu() {
@@ -1856,17 +1822,11 @@ class ScriptCompileTask final : public Task {
   }
 
  private:
-  static size_t ThreadStackQuotaForSize(size_t size) {
-    // Set the stack quota to 10% less that the actual size.
-    // NOTE: This follows what JS helper thread does.
-    return size_t(double(size) * 0.9);
-  }
-
   void Compile() {
     // NOTE: The stack limit must be set from the same thread that compiles.
     size_t stackSize = TaskController::GetThreadStackSize();
     JS::SetNativeStackQuota(mFrontendContext,
-                            ThreadStackQuotaForSize(stackSize));
+                            JS::ThreadStackQuotaForSize(stackSize));
 
     JS::SourceText<Utf8Unit> srcBuf;
     if (NS_WARN_IF(!srcBuf.init(mFrontendContext, mText.get(), mTextLength,
@@ -1885,9 +1845,9 @@ class ScriptCompileTask final : public Task {
   }
 
  public:
-  bool Run() override {
+  TaskResult Run() override {
     Compile();
-    return true;
+    return TaskResult::Complete;
   }
 
   already_AddRefed<JS::Stencil> StealStencil() { return mStencil.forget(); }
@@ -1923,11 +1883,11 @@ class NotifyOffThreadScriptCompletedTask : public Task {
         mReceiver(aReceiver),
         mCompileTask(aCompileTask) {}
 
-  bool Run() override {
+  TaskResult Run() override {
     MOZ_ASSERT(NS_IsMainThread());
 
     if (PastShutdownPhase(ShutdownPhase::XPCOMShutdownFinal)) {
-      return true;
+      return TaskResult::Complete;
     }
 
     RefPtr<JS::Stencil> stencil = mCompileTask->StealStencil();
@@ -1936,7 +1896,7 @@ class NotifyOffThreadScriptCompletedTask : public Task {
     (void)mReceiver->OnScriptCompileComplete(
         stencil, stencil ? NS_OK : NS_ERROR_FAILURE);
 
-    return true;
+    return TaskResult::Complete;
   }
 
 #ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY

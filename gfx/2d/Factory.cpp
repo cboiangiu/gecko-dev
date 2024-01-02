@@ -51,6 +51,9 @@
 #  include <stdlib.h>
 #  include "HelpersD2D.h"
 #  include "DXVA2Manager.h"
+#  include "ImageContainer.h"
+#  include "mozilla/gfx/D3D11Checks.h"
+#  include "mozilla/layers/LayersSurfaces.h"
 #  include "mozilla/layers/TextureD3D11.h"
 #  include "nsWindowsHelpers.h"
 #endif
@@ -594,11 +597,10 @@ already_AddRefed<UnscaledFont> Factory::CreateUnscaledFontFromFontDescriptor(
 #ifdef XP_DARWIN
 already_AddRefed<ScaledFont> Factory::CreateScaledFontForMacFont(
     CGFontRef aCGFont, const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize,
-    const DeviceColor& aFontSmoothingBackgroundColor, bool aUseFontSmoothing,
-    bool aApplySyntheticBold, bool aHasColorGlyphs) {
-  return MakeAndAddRef<ScaledFontMac>(
-      aCGFont, aUnscaledFont, aSize, false, aFontSmoothingBackgroundColor,
-      aUseFontSmoothing, aApplySyntheticBold, aHasColorGlyphs);
+    bool aUseFontSmoothing, bool aApplySyntheticBold, bool aHasColorGlyphs) {
+  return MakeAndAddRef<ScaledFontMac>(aCGFont, aUnscaledFont, aSize, false,
+                                      aUseFontSmoothing, aApplySyntheticBold,
+                                      aHasColorGlyphs);
 }
 #endif
 
@@ -1155,6 +1157,34 @@ Factory::CreateBGRA8DataSourceSurfaceForD3D11Texture(
   return destTexture.forget();
 }
 
+/* static */ nsresult Factory::CreateSdbForD3D11Texture(
+    ID3D11Texture2D* aSrcTexture, const IntSize& aSrcSize,
+    layers::SurfaceDescriptorBuffer& aSdBuffer,
+    const std::function<layers::MemoryOrShmem(uint32_t)>& aAllocate) {
+  D3D11_TEXTURE2D_DESC srcDesc = {0};
+  aSrcTexture->GetDesc(&srcDesc);
+  if (srcDesc.Width != uint32_t(aSrcSize.width) ||
+      srcDesc.Height != uint32_t(aSrcSize.height) ||
+      srcDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+
+  const auto format = gfx::SurfaceFormat::B8G8R8A8;
+  uint8_t* buffer = nullptr;
+  int32_t stride = 0;
+  nsresult rv = layers::Image::AllocateSurfaceDescriptorBufferRgb(
+      aSrcSize, format, buffer, aSdBuffer, stride, aAllocate);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  if (!ReadbackTexture(buffer, stride, aSrcTexture)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
 /* static */
 template <typename DestTextureT>
 bool Factory::ConvertSourceAndRetryReadback(DestTextureT* aDestCpuTexture,
@@ -1267,40 +1297,33 @@ bool Factory::ReadbackTexture(uint8_t* aDestData, int32_t aDestStride,
     return false;
   }
 
-  RefPtr<IDXGIKeyedMutex> mutex;
-  HRESULT hr = aSrcTexture->QueryInterface(__uuidof(IDXGIKeyedMutex),
-                                           (void**)getter_AddRefs(mutex));
-  if (SUCCEEDED(hr) && mutex) {
-    hr = mutex->AcquireSync(0, 2000);
-    if (hr != S_OK) {
-      gfxWarning() << "Could not acquire DXGI surface lock in 2 seconds";
+  D3D11_TEXTURE2D_DESC srcDesc = {0};
+  RefPtr<ID3D11Texture2D> srcCpuTexture;
+  HRESULT hr;
+
+  {
+    RefPtr<IDXGIKeyedMutex> mutex;
+    hr = aSrcTexture->QueryInterface(__uuidof(IDXGIKeyedMutex),
+                                     (void**)getter_AddRefs(mutex));
+    layers::AutoTextureLock lock(__func__, mutex, hr, 2000);
+    if (NS_WARN_IF(!lock.Succeeded())) {
       return false;
     }
-  }
 
-  D3D11_TEXTURE2D_DESC srcDesc = {0};
-  aSrcTexture->GetDesc(&srcDesc);
-  srcDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-  srcDesc.Usage = D3D11_USAGE_STAGING;
-  srcDesc.BindFlags = 0;
-  srcDesc.MiscFlags = 0;
-  srcDesc.MipLevels = 1;
-  RefPtr<ID3D11Texture2D> srcCpuTexture;
-  hr =
-      device->CreateTexture2D(&srcDesc, nullptr, getter_AddRefs(srcCpuTexture));
-  if (FAILED(hr)) {
-    gfxWarning() << "Could not create source texture for mapping";
-    if (mutex) {
-      mutex->ReleaseSync(0);
+    aSrcTexture->GetDesc(&srcDesc);
+    srcDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    srcDesc.Usage = D3D11_USAGE_STAGING;
+    srcDesc.BindFlags = 0;
+    srcDesc.MiscFlags = 0;
+    srcDesc.MipLevels = 1;
+    hr = device->CreateTexture2D(&srcDesc, nullptr,
+                                 getter_AddRefs(srcCpuTexture));
+    if (FAILED(hr)) {
+      gfxWarning() << "Could not create source texture for mapping";
+      return false;
     }
-    return false;
-  }
 
-  context->CopyResource(srcCpuTexture, aSrcTexture);
-
-  if (mutex) {
-    mutex->ReleaseSync(0);
-    mutex = nullptr;
+    context->CopyResource(srcCpuTexture, aSrcTexture);
   }
 
   D3D11_MAPPED_SUBRESOURCE srcMap;

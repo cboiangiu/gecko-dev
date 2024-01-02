@@ -11,8 +11,10 @@
 #include "ErrorList.h"
 #include "PLDHashTable.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/ContentBlockingLog.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/TypedEnumBits.h"
+#include "js/RealmOptions.h"
 #include "nsHashtablesFwd.h"
 #include "nsICookieJarSettings.h"
 #include "nsIFingerprintingWebCompatService.h"
@@ -72,7 +74,8 @@ namespace mozilla {
 class WidgetKeyboardEvent;
 namespace dom {
 class Document;
-}
+enum class CanvasContextType : uint8_t;
+}  // namespace dom
 
 enum KeyboardLang { EN = 0x01 };
 
@@ -138,6 +141,19 @@ enum class RTPCallerType : uint8_t {
   CrossOriginIsolated = (1 << 2)
 };
 
+inline JS::RTPCallerTypeToken RTPCallerTypeToToken(RTPCallerType aType) {
+  return JS::RTPCallerTypeToken{uint8_t(aType)};
+}
+
+inline RTPCallerType RTPCallerTypeFromToken(JS::RTPCallerTypeToken aToken) {
+  MOZ_RELEASE_ASSERT(
+      aToken.value == uint8_t(RTPCallerType::Normal) ||
+      aToken.value == uint8_t(RTPCallerType::SystemPrincipal) ||
+      aToken.value == uint8_t(RTPCallerType::ResistFingerprinting) ||
+      aToken.value == uint8_t(RTPCallerType::CrossOriginIsolated));
+  return static_cast<RTPCallerType>(aToken.value);
+}
+
 enum TimerPrecisionType {
   DangerouslyNone = 1,
   UnconditionalAKAHighRes = 2,
@@ -147,9 +163,35 @@ enum TimerPrecisionType {
 
 // ============================================================================
 
+enum class CanvasFeatureUsage : uint8_t {
+  None = 0,
+  KnownFingerprintText = 1 << 0,
+  SetFont = 1 << 1,
+  FillRect = 1 << 2,
+  LineTo = 1 << 3,
+  Stroke = 1 << 4
+};
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(CanvasFeatureUsage);
+
+class CanvasUsage {
+ public:
+  nsIntSize mSize;
+  dom::CanvasContextType mType;
+  CanvasFeatureUsage mFeatureUsage;
+
+  CanvasUsage(nsIntSize aSize, dom::CanvasContextType aType,
+              CanvasFeatureUsage aFeatureUsage)
+      : mSize(aSize), mType(aType), mFeatureUsage(aFeatureUsage) {}
+};
+
+// ============================================================================
+
 // NOLINTNEXTLINE(bugprone-macro-parentheses)
 #define ITEM_VALUE(name, val) name = val,
 
+// The definition for fingerprinting protections. Each enum represents one
+// fingerprinting protection that targets one specific WebAPI our fingerprinting
+// surface. The enums can be found in RFPTargets.inc.
 enum class RFPTarget : uint64_t {
 #include "RFPTargets.inc"
 };
@@ -172,7 +214,10 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
   // 98% of the time you should use nsContentUtils::ShouldResistFingerprinting
   // as the difference will not matter to you.
   static bool IsRFPPrefEnabled(bool aIsPrivateMode);
-  static bool IsRFPEnabledFor(RFPTarget aTarget);
+
+  static bool IsRFPEnabledFor(
+      bool aIsPrivateMode, RFPTarget aTarget,
+      const Maybe<RFPTarget>& aOverriddenFingerprintingSettings);
 
   // --------------------------------------------------------------------------
   static double TimerResolution(RTPCallerType aRTPCallerType);
@@ -192,10 +237,6 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
   static double ReduceTimePrecisionAsSecsRFPOnly(double aTime,
                                                  int64_t aContextMixin,
                                                  RTPCallerType aRTPCallerType);
-
-  // Used by the JS Engine, as it doesn't know about the TimerPrecisionType enum
-  static double ReduceTimePrecisionAsUSecsWrapper(double aTime, JSContext* aCx);
-
   // Public only for testing purposes
   static double ReduceTimePrecisionImpl(double aTime, TimeScale aTimeScale,
                                         double aResolutionUSec,
@@ -286,10 +327,44 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
   // The method to add random noises to the image data based on the random key
   // of the given cookieJarSettings.
   static nsresult RandomizePixels(nsICookieJarSettings* aCookieJarSettings,
-                                  uint8_t* aData, uint32_t aSize,
+                                  uint8_t* aData, uint32_t aWidth,
+                                  uint32_t aHeight, uint32_t aSize,
                                   mozilla::gfx::SurfaceFormat aSurfaceFormat);
 
   // --------------------------------------------------------------------------
+
+  // The method for getting the granular fingerprinting protection override of
+  // the given channel. Due to WebCompat reason, there can be a granular
+  // overrides to replace default enabled RFPTargets for the context of the
+  // channel. The method will return Nothing() to indicate using the default
+  // RFPTargets
+  static Maybe<RFPTarget> GetOverriddenFingerprintingSettingsForChannel(
+      nsIChannel* aChannel);
+
+  // The method for getting the granular fingerprinting protection override of
+  // the given first-party and third-party URIs. It will return the granular
+  // overrides if there is one defined for the context of the first-party URI
+  // and third-party URI. Otherwise, it will return Nothing() to indicate using
+  // the default RFPTargets.
+  static Maybe<RFPTarget> GetOverriddenFingerprintingSettingsForURI(
+      nsIURI* aFirstPartyURI, nsIURI* aThirdPartyURI);
+
+  // --------------------------------------------------------------------------
+
+  static void MaybeReportCanvasFingerprinter(nsTArray<CanvasUsage>& aUses,
+                                             nsIChannel* aChannel,
+                                             nsACString& aOriginNoSuffix);
+
+  static void MaybeReportFontFingerprinter(nsIChannel* aChannel,
+                                           nsACString& aOriginNoSuffix);
+
+  // --------------------------------------------------------------------------
+
+  // A helper function to check if there is a suspicious fingerprinting
+  // activity from given content blocking origin logs. It returns true if we
+  // detect suspicious fingerprinting activities.
+  static bool CheckSuspiciousFingerprintingActivity(
+      nsTArray<ContentBlockingLog::LogEntry>& aLogs);
 
  private:
   nsresult Init();
@@ -323,6 +398,10 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
       sSpoofingKeyboardCodes;
 
   // --------------------------------------------------------------------------
+
+  // Used by the JS Engine
+  static double ReduceTimePrecisionAsUSecsWrapper(
+      double aTime, JS::RTPCallerTypeToken aCallerType, JSContext* aCx);
 
   static TimerPrecisionType GetTimerPrecisionType(RTPCallerType aRTPCallerType);
 

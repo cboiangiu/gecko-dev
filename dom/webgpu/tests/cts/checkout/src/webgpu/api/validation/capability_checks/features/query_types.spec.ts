@@ -14,7 +14,7 @@ g.test('createQuerySet')
   'timestamp-query'.
     - createQuerySet
       - type {occlusion, timestamp}
-      - x= {pipeline statistics, timestamp} query {enable, disable}
+      - x= timestamp query {enable, disable}
   `
   )
   .params(u =>
@@ -32,7 +32,7 @@ g.test('createQuerySet')
 
     t.selectDeviceOrSkipTestCase({ requiredFeatures });
   })
-  .fn(async t => {
+  .fn(t => {
     const { type, featureContainsTimestampQuery } = t.params;
 
     const count = 1;
@@ -61,7 +61,7 @@ g.test('writeTimestamp')
 
     t.selectDeviceOrSkipTestCase({ requiredFeatures });
   })
-  .fn(async t => {
+  .fn(t => {
     const { featureContainsTimestampQuery } = t.params;
 
     const querySet = t.device.createQuerySet({

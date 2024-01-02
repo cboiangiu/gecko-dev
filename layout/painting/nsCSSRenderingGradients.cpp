@@ -37,6 +37,8 @@
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "Units.h"
 
+#include "mozilla/StaticPrefs_layout.h"
+
 using namespace mozilla;
 using namespace mozilla::gfx;
 
@@ -1187,6 +1189,45 @@ bool nsCSSGradientRenderer::TryPaintTilesWithExtendMode(
   return true;
 }
 
+class MOZ_STACK_CLASS WrColorStopInterpolator
+    : public ColorStopInterpolator<WrColorStopInterpolator> {
+ public:
+  WrColorStopInterpolator(
+      const nsTArray<ColorStop>& aStops,
+      const StyleColorInterpolationMethod& aStyleColorInterpolationMethod,
+      float aOpacity, nsTArray<wr::GradientStop>& aResult)
+      : ColorStopInterpolator(aStops, aStyleColorInterpolationMethod),
+        mResult(aResult),
+        mOpacity(aOpacity),
+        mOutputStop(0) {}
+
+  void CreateStops() {
+    mResult.SetLengthAndRetainStorage(0);
+    // we always emit at least two stops (start and end) for each input stop,
+    // which avoids ambiguity with incomplete oklch/lch/hsv/hsb color stops for
+    // the last stop pair, where the last color stop can't be interpreted on its
+    // own because it actually depends on the previous stop.
+    mResult.SetLength(mStops.Length() * 2 + kFullRangeExtraStops);
+    mOutputStop = 0;
+    ColorStopInterpolator::CreateStops();
+    mResult.SetLength(mOutputStop);
+  }
+
+  void CreateStop(float aPosition, DeviceColor aColor) {
+    if (mOutputStop < mResult.Capacity()) {
+      mResult[mOutputStop].color = wr::ToColorF(aColor);
+      mResult[mOutputStop].color.a *= mOpacity;
+      mResult[mOutputStop].offset = aPosition;
+      mOutputStop++;
+    }
+  }
+
+ private:
+  nsTArray<wr::GradientStop>& mResult;
+  float mOpacity;
+  uint32_t mOutputStop;
+};
+
 void nsCSSGradientRenderer::BuildWebRenderParameters(
     float aOpacity, wr::ExtendMode& aMode, nsTArray<wr::GradientStop>& aStops,
     LayoutDevicePoint& aLineStart, LayoutDevicePoint& aLineEnd,
@@ -1195,11 +1236,40 @@ void nsCSSGradientRenderer::BuildWebRenderParameters(
   aMode =
       mGradient->Repeating() ? wr::ExtendMode::Repeat : wr::ExtendMode::Clamp;
 
-  aStops.SetLength(mStops.Length());
-  for (uint32_t i = 0; i < mStops.Length(); i++) {
-    aStops[i].color = wr::ToColorF(ToDeviceColor(mStops[i].mColor));
-    aStops[i].color.a *= aOpacity;
-    aStops[i].offset = mStops[i].mPosition;
+  // If the interpolation space is not sRGB, or if color management is active,
+  // we need to add additional stops so that the sRGB interpolation in WebRender
+  // still closely approximates the correct curves.  We prefer avoiding this if
+  // the gradient is simple because WebRender has fast rendering of linear
+  // gradients with 2 stops (which represent >99% of all gradients on the web).
+  //
+  // WebRender doesn't have easy access to StyleAbsoluteColor and CMS display
+  // color correction, so we just expand the gradient stop table significantly
+  // so that gamma and hue interpolation errors become imperceptible.
+  //
+  // This always turns into 128 pairs of stops inside WebRender as an
+  // implementation detail, so the number of stops we generate here should have
+  // very little impact on performance as the texture upload is always the same,
+  // except for the special linear gradient 2-stop case, and it is gpucache so
+  // if it does not change it is not re-uploaded.
+  //
+  // Color management bugs that this addresses:
+  // * https://bugzilla.mozilla.org/show_bug.cgi?id=939387
+  // * https://bugzilla.mozilla.org/show_bug.cgi?id=1248178
+  StyleColorInterpolationMethod styleColorInterpolationMethod =
+      mGradient->ColorInterpolationMethod();
+  if (mStops.Length() >= 2 &&
+      (styleColorInterpolationMethod.space != StyleColorSpace::Srgb ||
+       gfxPlatform::GetCMSMode() == CMSMode::All)) {
+    WrColorStopInterpolator interpolator(mStops, styleColorInterpolationMethod,
+                                         aOpacity, aStops);
+    interpolator.CreateStops();
+  } else {
+    aStops.SetLength(mStops.Length());
+    for (uint32_t i = 0; i < mStops.Length(); i++) {
+      aStops[i].color = wr::ToColorF(ToDeviceColor(mStops[i].mColor));
+      aStops[i].color.a *= aOpacity;
+      aStops[i].offset = (float)mStops[i].mPosition;
+    }
   }
 
   aLineStart = LayoutDevicePoint(mLineStart.x, mLineStart.y);

@@ -45,9 +45,16 @@ class AutofillTelemetryBase {
    * @param {string} undetected Default value when a field is not detected: 'undetected' (Glean) and 'false' in (Legacy)
    * @param {string} autocomplete Value when a field is identified with autocomplete property: 'autocomplete' (Glean), 'true' (Legacy)
    * @param {string} regexp Value when a field is identified with regex expression heuristics: 'regexp' (Glean), '0' (Legacy)
+   * @param {boolean} includeMultiPart Include multi part data or not
    * @returns {object} Extra keys to include in the form event
    */
-  #buildFormDetectedEventExtra(section, undetected, autocomplete, regexp) {
+  #buildFormDetectedEventExtra(
+    section,
+    undetected,
+    autocomplete,
+    regexp,
+    includeMultiPart
+  ) {
     let extra = this.#initFormEventExtra(undetected);
 
     let identified = new Set();
@@ -67,6 +74,14 @@ class AutofillTelemetryBase {
           confidence ? confidence.toString() : regexp
         );
       }
+
+      if (
+        detail.fieldName === "cc-number" &&
+        this.SUPPORTED_FIELDS[detail.fieldName] &&
+        includeMultiPart
+      ) {
+        extra.cc_number_multi_parts = detail.part ?? 1;
+      }
     });
     return extra;
   }
@@ -75,7 +90,7 @@ class AutofillTelemetryBase {
     this.recordFormEvent(
       "detected",
       section.flowId,
-      this.#buildFormDetectedEventExtra(section, "false", "true", "0")
+      this.#buildFormDetectedEventExtra(section, "false", "true", "0", false)
     );
 
     this.recordGleanFormEvent(
@@ -85,7 +100,8 @@ class AutofillTelemetryBase {
         section,
         "undetected",
         "autocomplete",
-        "regexp"
+        "regexp",
+        true
       )
     );
   }
@@ -198,17 +214,12 @@ class AutofillTelemetryBase {
     return undefined;
   }
 
-  recordDoorhangerEvent(method, flowId, isCapture) {
-    Services.telemetry.recordEvent(
-      this.EVENT_CATEGORY,
-      method,
-      isCapture ? "capture_doorhanger" : "update_doorhanger",
-      flowId
-    );
+  recordDoorhangerEvent(method, object, flowId) {
+    Services.telemetry.recordEvent(this.EVENT_CATEGORY, method, object, flowId);
   }
 
-  recordManageEvent(method, object) {
-    Services.telemetry.recordEvent(this.EVENT_CATEGORY, method, object);
+  recordManageEvent(method) {
+    Services.telemetry.recordEvent(this.EVENT_CATEGORY, method, "manage");
   }
 
   recordAutofillProfileCount(count) {
@@ -526,19 +537,19 @@ export class AutofillTelemetry {
       ? this.#creditCardTelemetry
       : this.#addressTelemetry;
   }
+
   /**
    * Utility functions for `doorhanger` event (defined in Events.yaml)
    *
    * Category: address or creditcard
    * Event name: doorhanger
    */
-
-  static recordDoorhangerShown(type, flowId, isCapture) {
+  static recordDoorhangerShown(type, object, flowId) {
     const telemetry = this.#getTelemetryByType(type);
-    telemetry.recordDoorhangerEvent("show", flowId, isCapture);
+    telemetry.recordDoorhangerEvent("show", object, flowId);
   }
 
-  static recordDoorhangerClicked(type, method, flowId, isCapture) {
+  static recordDoorhangerClicked(type, method, object, flowId) {
     const telemetry = this.#getTelemetryByType(type);
 
     // We don't have `create` method in telemetry, we treat `create` as `save`
@@ -549,9 +560,12 @@ export class AutofillTelemetry {
       case "open-pref":
         method = "pref";
         break;
+      case "learn-more":
+        method = "learn_more";
+        break;
     }
 
-    telemetry.recordDoorhangerEvent(method, flowId, isCapture);
+    telemetry.recordDoorhangerEvent(method, object, flowId);
   }
 
   /**
@@ -593,7 +607,7 @@ export class AutofillTelemetry {
 
   static recordManageEvent(type, method) {
     const telemetry = this.#getTelemetryByType(type);
-    telemetry.recordManageEvent(method, "manage");
+    telemetry.recordManageEvent(method);
   }
 
   static recordAutofillProfileCount(type, count) {

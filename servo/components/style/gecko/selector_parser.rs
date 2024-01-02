@@ -41,6 +41,10 @@ bitflags! {
 #[css(comma)]
 pub struct Lang(#[css(iterable)] pub ThinVec<AtomIdent>);
 
+/// The type used to store the state argument to the `:state` pseudo-class.
+#[derive(Clone, Debug, Eq, MallocSizeOf, PartialEq, ToCss, ToShmem)]
+pub struct CustomState(pub AtomIdent);
+
 macro_rules! pseudo_class_name {
     ([$(($css:expr, $name:ident, $state:tt, $flags:tt),)*]) => {
         /// Our representation of a non tree-structural pseudo-class.
@@ -54,6 +58,8 @@ macro_rules! pseudo_class_name {
             Lang(Lang),
             /// The `:dir` pseudo-class.
             Dir(Direction),
+            /// The :state` pseudo-class.
+            CustomState(CustomState),
             /// The non-standard `:-moz-locale-dir` pseudo-class.
             MozLocaleDir(Direction),
         }
@@ -73,6 +79,11 @@ impl ToCss for NonTSPseudoClass {
                     NonTSPseudoClass::Lang(ref lang) => {
                         dest.write_str(":lang(")?;
                         lang.to_css(&mut CssWriter::new(dest))?;
+                        return dest.write_char(')');
+                    },
+                    NonTSPseudoClass::CustomState(ref state) => {
+                        dest.write_str(":state(")?;
+                        state.to_css(&mut CssWriter::new(dest))?;
                         return dest.write_char(')');
                     },
                     NonTSPseudoClass::MozLocaleDir(ref dir) => {
@@ -131,6 +142,7 @@ impl NonTSPseudoClass {
                 match *self {
                     $(NonTSPseudoClass::$name => check_flag!($flags),)*
                     NonTSPseudoClass::MozLocaleDir(_) => check_flag!(PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME),
+                    NonTSPseudoClass::CustomState(_) |
                     NonTSPseudoClass::Lang(_) |
                     NonTSPseudoClass::Dir(_) => false,
                 }
@@ -144,6 +156,9 @@ impl NonTSPseudoClass {
     fn is_enabled_in_content(&self) -> bool {
         if matches!(*self, Self::PopoverOpen) {
             return static_prefs::pref!("dom.element.popover.enabled");
+        }
+        if matches!(*self, Self::CustomState(_)) {
+            return static_prefs::pref!("dom.element.customstateset.enabled");
         }
         !self.has_any_flag(NonTSPseudoClassFlag::PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME)
     }
@@ -164,6 +179,7 @@ impl NonTSPseudoClass {
                     $(NonTSPseudoClass::$name => flag!($state),)*
                     NonTSPseudoClass::Dir(ref dir) => dir.element_state(),
                     NonTSPseudoClass::MozLocaleDir(..) |
+                    NonTSPseudoClass::CustomState(..) |
                     NonTSPseudoClass::Lang(..) => ElementState::empty(),
                 }
             }
@@ -284,7 +300,7 @@ impl<'a> SelectorParser<'a> {
         }
 
         if matches!(*pseudo_class, NonTSPseudoClass::MozBroken) {
-            return static_prefs::pref!("layout.css.moz-broken.content.enabled")
+            return static_prefs::pref!("layout.css.moz-broken.content.enabled");
         }
 
         return false;
@@ -377,9 +393,10 @@ impl<'a, 'i> ::selectors::Parser<'i> for SelectorParser<'a> {
         &self,
         name: CowRcStr<'i>,
         parser: &mut Parser<'i, 't>,
+        after_part: bool,
     ) -> Result<NonTSPseudoClass, ParseError<'i>> {
         let pseudo_class = match_ignore_ascii_case! { &name,
-            "lang" => {
+            "lang" if !after_part => {
                 let result = parser.parse_comma_separated(|input| {
                     Ok(AtomIdent::from(input.expect_ident_or_string()?.as_ref()))
                 })?;
@@ -388,10 +405,14 @@ impl<'a, 'i> ::selectors::Parser<'i> for SelectorParser<'a> {
                 }
                 NonTSPseudoClass::Lang(Lang(result.into()))
             },
-            "-moz-locale-dir" => {
+            "state" => {
+                let result = AtomIdent::from(parser.expect_ident()?.as_ref());
+                NonTSPseudoClass::CustomState(CustomState(result))
+            },
+            "-moz-locale-dir" if !after_part => {
                 NonTSPseudoClass::MozLocaleDir(Direction::parse(parser)?)
             },
-            "dir" => {
+            "dir" if !after_part => {
                 NonTSPseudoClass::Dir(Direction::parse(parser)?)
             },
             _ => return Err(parser.new_custom_error(

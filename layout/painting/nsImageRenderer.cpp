@@ -53,7 +53,7 @@ nsImageRenderer::nsImageRenderer(nsIFrame* aForFrame, const StyleImage* aImage,
                                  uint32_t aFlags)
     : mForFrame(aForFrame),
       mImage(&aImage->FinalImage()),
-      mImageResolution(aImage->GetResolution()),
+      mImageResolution(aImage->GetResolution(*aForFrame->Style())),
       mType(mImage->tag),
       mImageContainer(nullptr),
       mGradientData(nullptr),
@@ -171,12 +171,11 @@ bool nsImageRenderer::PrepareImage() {
           paintElement ? paintElement->GetPrimaryFrame() : nullptr;
       // If there's no referenced frame, or the referenced frame is
       // non-displayable SVG, then we have nothing valid to paint.
-      if (!paintServerFrame ||
-          (paintServerFrame->IsFrameOfType(nsIFrame::eSVG) &&
-           !static_cast<SVGPaintServerFrame*>(
-               do_QueryFrame(paintServerFrame)) &&
-           !static_cast<ISVGDisplayableFrame*>(
-               do_QueryFrame(paintServerFrame)))) {
+      if (!paintServerFrame || (paintServerFrame->IsSVGFrame() &&
+                                !static_cast<SVGPaintServerFrame*>(
+                                    do_QueryFrame(paintServerFrame)) &&
+                                !static_cast<ISVGDisplayableFrame*>(
+                                    do_QueryFrame(paintServerFrame)))) {
         mPrepareResult = ImgDrawResult::BAD_IMAGE;
         return false;
       }
@@ -219,11 +218,11 @@ CSSSizeOrRatio nsImageRenderer::ComputeIntrinsicSize() {
       // If we know the aspect ratio and one of the dimensions,
       // we can compute the other missing width or height.
       if (!haveHeight && haveWidth && result.mRatio) {
-        nscoord intrinsicHeight =
+        CSSIntCoord intrinsicHeight =
             result.mRatio.Inverted().ApplyTo(imageIntSize.width);
         result.SetHeight(nsPresContext::CSSPixelsToAppUnits(intrinsicHeight));
       } else if (haveHeight && !haveWidth && result.mRatio) {
-        nscoord intrinsicWidth = result.mRatio.ApplyTo(imageIntSize.height);
+        CSSIntCoord intrinsicWidth = result.mRatio.ApplyTo(imageIntSize.height);
         result.SetWidth(nsPresContext::CSSPixelsToAppUnits(intrinsicWidth));
       }
 
@@ -238,7 +237,7 @@ CSSSizeOrRatio nsImageRenderer::ComputeIntrinsicSize() {
       //     when fixing this!
       if (mPaintServerFrame) {
         // SVG images have no intrinsic size
-        if (!mPaintServerFrame->IsFrameOfType(nsIFrame::eSVG)) {
+        if (!mPaintServerFrame->IsSVGFrame()) {
           // The intrinsic image size for a generic nsIFrame paint server is
           // the union of the border-box rects of all of its continuations,
           // rounded to device pixels.

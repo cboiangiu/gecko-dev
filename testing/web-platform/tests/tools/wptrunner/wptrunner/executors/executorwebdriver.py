@@ -32,7 +32,9 @@ from .protocol import (BaseProtocolPart,
                        WindowProtocolPart,
                        DebugProtocolPart,
                        SPCTransactionsProtocolPart,
+                       RPHRegistrationsProtocolPart,
                        FedCMProtocolPart,
+                       VirtualSensorProtocolPart,
                        merge_dicts)
 
 from webdriver.client import Session
@@ -362,6 +364,13 @@ class WebDriverSPCTransactionsProtocolPart(SPCTransactionsProtocolPart):
         body = {"mode": mode}
         return self.webdriver.send_session_command("POST", "secure-payment-confirmation/set-mode", body)
 
+class WebDriverRPHRegistrationsProtocolPart(RPHRegistrationsProtocolPart):
+    def setup(self):
+        self.webdriver = self.parent.webdriver
+
+    def set_rph_registration_mode(self, mode):
+        body = {"mode": mode}
+        return self.webdriver.send_session_command("POST", "custom-handlers/set-mode", body)
 
 class WebDriverFedCMProtocolPart(FedCMProtocolPart):
     def setup(self):
@@ -369,6 +378,10 @@ class WebDriverFedCMProtocolPart(FedCMProtocolPart):
 
     def cancel_fedcm_dialog(self):
         return self.webdriver.send_session_command("POST", "fedcm/canceldialog")
+
+    def click_fedcm_dialog_button(self, dialog_button):
+        body = {"dialogButton": dialog_button}
+        return self.webdriver.send_session_command("POST", "fedcm/clickdialogbutton", body)
 
     def select_fedcm_account(self, account_index):
         body = {"accountIndex": account_index}
@@ -396,6 +409,26 @@ class WebDriverDebugProtocolPart(DebugProtocolPart):
         raise NotImplementedError()
 
 
+class WebDriverVirtualSensorPart(VirtualSensorProtocolPart):
+    def setup(self):
+        self.webdriver = self.parent.webdriver
+
+    def create_virtual_sensor(self, sensor_type, sensor_params):
+        body = {"type": sensor_type}
+        body.update(sensor_params)
+        return self.webdriver.send_session_command("POST", "sensor", body)
+
+    def update_virtual_sensor(self, sensor_type, reading):
+        body = {"reading": reading}
+        return self.webdriver.send_session_command("POST", "sensor/%s" % sensor_type, body)
+
+    def remove_virtual_sensor(self, sensor_type):
+        return self.webdriver.send_session_command("DELETE", "sensor/%s" % sensor_type)
+
+    def get_virtual_sensor_information(self, sensor_type):
+        return self.webdriver.send_session_command("GET", "sensor/%s" % sensor_type)
+
+
 class WebDriverProtocol(Protocol):
     implements = [WebDriverBaseProtocolPart,
                   WebDriverTestharnessProtocolPart,
@@ -411,8 +444,10 @@ class WebDriverProtocol(Protocol):
                   WebDriverSetPermissionProtocolPart,
                   WebDriverVirtualAuthenticatorProtocolPart,
                   WebDriverSPCTransactionsProtocolPart,
+                  WebDriverRPHRegistrationsProtocolPart,
                   WebDriverFedCMProtocolPart,
-                  WebDriverDebugProtocolPart]
+                  WebDriverDebugProtocolPart,
+                  WebDriverVirtualSensorPart]
 
     def __init__(self, executor, browser, capabilities, **kwargs):
         super().__init__(executor, browser)

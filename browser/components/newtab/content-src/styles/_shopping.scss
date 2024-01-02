@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+/* stylelint-disable max-nesting-depth */
+
 .onboardingContainer.shopping {
   height: auto;
 
@@ -87,6 +89,13 @@
           text-decoration: underline;
         }
       }
+
+      .brand-logo {
+        width: 100%;
+        max-width: 294px;
+        max-height: 290px;
+        height: auto;
+      }
     }
 
     .dismiss-button {
@@ -162,6 +171,7 @@
         overflow: visible;
         font-size: 1em;
         gap: 12px;
+        width: 100%;
 
         .multi-select-item input {
           margin-block: 0;

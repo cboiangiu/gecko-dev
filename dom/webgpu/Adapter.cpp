@@ -77,9 +77,6 @@ void AdapterInfo::GetWgpuBackend(nsString& s) const {
     case ffi::WGPUBackend_Dx12:
       s.AssignLiteral("Dx12");
       return;
-    case ffi::WGPUBackend_Dx11:
-      s.AssignLiteral("Dx11");
-      return;
     case ffi::WGPUBackend_Gl:
       s.AssignLiteral("Gl");
       return;
@@ -127,16 +124,10 @@ static Maybe<ffi::WGPUFeatures> ToWGPUFeatures(
       return Some(WGPUFeatures_RG11B10UFLOAT_RENDERABLE);
 
     case dom::GPUFeatureName::Bgra8unorm_storage:
-#ifdef WGPUFeatures_BGRA8UNORM_STORAGE
-#  error fix todo
-#endif
-      return Nothing();  // TODO
+      return Some(WGPUFeatures_BGRA8UNORM_STORAGE);
 
     case dom::GPUFeatureName::Float32_filterable:
-#ifdef WGPUFeatures_FLOAT32_FILTERABLE
-#  error fix todo
-#endif
-      return Nothing();  // TODO
+      return Some(WGPUFeatures_FLOAT32_FILTERABLE);
 
     case dom::GPUFeatureName::EndGuard_:
       break;
@@ -218,7 +209,7 @@ Adapter::~Adapter() { Cleanup(); }
 void Adapter::Cleanup() {
   if (mValid && mBridge && mBridge->CanSend()) {
     mValid = false;
-    mBridge->SendAdapterDestroy(mId);
+    mBridge->SendAdapterDrop(mId);
   }
 }
 
@@ -457,15 +448,16 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
     // -
 
     ffi::WGPUDeviceDescriptor ffiDesc = {};
-    ffiDesc.features = *MakeFeatureBits(aDesc.mRequiredFeatures);
-    ffiDesc.limits = deviceLimits;
+    ffiDesc.required_features = *MakeFeatureBits(aDesc.mRequiredFeatures);
+    ffiDesc.required_limits = deviceLimits;
     auto request = mBridge->AdapterRequestDevice(mId, ffiDesc);
     if (!request) {
       promise->MaybeRejectWithNotSupportedError(
           "Unable to instantiate a Device");
       return;
     }
-    RefPtr<Device> device = new Device(this, request->mId, ffiDesc.limits);
+    RefPtr<Device> device =
+        new Device(this, request->mId, ffiDesc.required_limits);
     for (const auto& feature : aDesc.mRequiredFeatures) {
       device->mFeatures->Add(feature, aRv);
     }

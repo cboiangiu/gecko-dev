@@ -151,10 +151,13 @@ skip-if = ["win10_2004"] # Bug 1723573
 skip-if = ["verify && !debug && os == 'win'"]
 
 ["browser_rules_completion-new-property_03.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_completion-new-property_04.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_completion-new-property_multiline.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_completion-on-empty.js"]
 
@@ -171,6 +174,7 @@ skip-if = ["verify && !debug && os == 'win'"]
 ["browser_rules_conditional_import.js"]
 
 ["browser_rules_container-queries.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_content_01.js"]
 
@@ -197,10 +201,12 @@ skip-if = ["verify && !debug && os == 'win'"]
 ["browser_rules_edit-property-cancel.js"]
 
 ["browser_rules_edit-property-click.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_edit-property-commit.js"]
 
 ["browser_rules_edit-property-computed.js"]
+skip-if = ["a11y_checks"] # Bugs 1849028 and 1858041 clicked span.ruleview-expander.theme-twisty is inconsistently not accessible
 
 ["browser_rules_edit-property-increments.js"]
 
@@ -212,6 +218,7 @@ skip-if = ["verify && !debug && os == 'win'"]
 skip-if = ["verify && debug && os == 'win'"]
 
 ["browser_rules_edit-property-remove_02.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_edit-property-remove_03.js"]
 
@@ -234,6 +241,7 @@ skip-if = ["verify && debug && os == 'win'"]
 ["browser_rules_edit-property_08.js"]
 
 ["browser_rules_edit-property_09.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_edit-property_10.js"]
 
@@ -241,6 +249,7 @@ skip-if = ["verify && debug && os == 'win'"]
 skip-if = ["os == 'mac'"] # Bug 1245996 : click on scrollbar not working on OSX
 
 ["browser_rules_edit-selector-click.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_edit-selector-commit.js"]
 
@@ -271,6 +280,7 @@ skip-if = ["os == 'mac'"] # Bug 1245996 : click on scrollbar not working on OSX
 ["browser_rules_edit-selector_12.js"]
 
 ["browser_rules_edit-size-property-dragging.js"]
+fail-if = ["a11y_checks"] # Bug 1849028 clicked element may not be focusable and/or labeled
 
 ["browser_rules_edit-value-after-name_01.js"]
 

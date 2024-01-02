@@ -331,6 +331,10 @@ NS_IMETHODIMP EditorEventListener::HandleEvent(Event* aEvent) {
         mEditorBase != originalEventTargetNode->OwnerDoc()->GetHTMLEditor()) {
       return NS_OK;
     }
+    if (!originalEventTargetNode && internalEvent->mMessage == eFocus &&
+        aEvent->GetCurrentTarget()->IsRootWindow()) {
+      return NS_OK;
+    }
   }
 
   switch (internalEvent->mMessage) {
@@ -1075,8 +1079,8 @@ bool EditorEventListener::CanInsertAtDropPosition(DragEvent* aDragEvent) {
     return false;
   }
 
-  return !EditorUtils::IsPointInSelection(*selection, *dropParentContent,
-                                          dropOffset);
+  return !nsContentUtils::IsPointInSelection(*selection, *dropParentContent,
+                                             dropOffset);
 }
 
 nsresult EditorEventListener::HandleStartComposition(
@@ -1210,8 +1214,8 @@ bool EditorEventListener::ShouldHandleNativeKeyBindings(
   // unnecessary.  IsAcceptableInputEvent currently makes a similar check for
   // mouse events.
 
-  nsCOMPtr<nsIContent> targetContent =
-      do_QueryInterface(aKeyboardEvent->GetDOMEventTarget());
+  nsCOMPtr<nsIContent> targetContent = nsIContent::FromEventTargetOrNull(
+      aKeyboardEvent->GetOriginalDOMEventTarget());
   if (NS_WARN_IF(!targetContent)) {
     return false;
   }

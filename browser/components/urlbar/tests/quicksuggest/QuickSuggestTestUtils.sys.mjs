@@ -3,11 +3,6 @@
 
 /* eslint-disable mozilla/valid-lazy */
 
-import {
-  CONTEXTUAL_SERVICES_PING_TYPES,
-  PartnerLinkAttribution,
-} from "resource:///modules/PartnerLinkAttribution.sys.mjs";
-
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -16,8 +11,14 @@ ChromeUtils.defineESModuleGetters(lazy, {
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
   QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
   RemoteSettings: "resource://services-settings/remote-settings.sys.mjs",
+  RemoteSettingsConfig: "resource://gre/modules/RustRemoteSettings.sys.mjs",
+  RemoteSettingsServer:
+    "resource://testing-common/RemoteSettingsServer.sys.mjs",
   SearchUtils: "resource://gre/modules/SearchUtils.sys.mjs",
+  SuggestBackendRust:
+    "resource:///modules/urlbar/private/SuggestBackendRust.sys.mjs",
   Suggestion: "resource://gre/modules/RustSuggest.sys.mjs",
+  SuggestionProvider: "resource://gre/modules/RustSuggest.sys.mjs",
   SuggestStore: "resource://gre/modules/RustSuggest.sys.mjs",
   TelemetryTestUtils: "resource://testing-common/TelemetryTestUtils.sys.mjs",
   TestUtils: "resource://testing-common/TestUtils.sys.mjs",
@@ -78,47 +79,6 @@ Object.defineProperty(lazy, "MerinoTestUtils", {
 
 const DEFAULT_CONFIG = {};
 
-const BEST_MATCH_CONFIG = {
-  best_match: {
-    blocked_suggestion_ids: [],
-    min_search_string_length: 4,
-  },
-};
-
-const DEFAULT_PING_PAYLOADS = {
-  [CONTEXTUAL_SERVICES_PING_TYPES.QS_BLOCK]: {
-    advertiser: "testadvertiser",
-    block_id: 1,
-    context_id: () => actual => !!actual,
-    iab_category: "22 - Shopping",
-    improve_suggest_experience_checked: false,
-    match_type: "firefox-suggest",
-    request_id: null,
-    source: "remote-settings",
-  },
-  [CONTEXTUAL_SERVICES_PING_TYPES.QS_SELECTION]: {
-    advertiser: "testadvertiser",
-    block_id: 1,
-    context_id: () => actual => !!actual,
-    improve_suggest_experience_checked: false,
-    match_type: "firefox-suggest",
-    reporting_url: "https://example.com/click",
-    request_id: null,
-    source: "remote-settings",
-  },
-  [CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION]: {
-    advertiser: "testadvertiser",
-    block_id: 1,
-    context_id: () => actual => !!actual,
-    improve_suggest_experience_checked: false,
-    is_clicked: false,
-    match_type: "firefox-suggest",
-    reporting_url: "https://example.com/impression",
-    request_id: null,
-    source: "remote-settings",
-  },
-};
-
 // The following properties and methods are copied from the test scope to the
 // test utils object so they can be easily accessed. Be careful about assuming a
 // particular property will be defined because depending on the scope -- browser
@@ -129,190 +89,6 @@ const TEST_SCOPE_PROPERTIES = [
   "info",
   "registerCleanupFunction",
 ];
-
-/**
- * Mock RemoteSettings.
- *
- * @param {object} options
- *   Options object
- * @param {object} options.config
- *   Dummy config in the RemoteSettings.
- * @param {Array} options.data
- *   Dummy data in the RemoteSettings.
- */
-class MockRemoteSettings {
-  constructor({ config = DEFAULT_CONFIG, data = [] }) {
-    this.#config = config;
-    this.#data = data;
-
-    // Make a stub for "get" function to return dummy data.
-    const rs = lazy.RemoteSettings("quicksuggest");
-    this.#sandbox = lazy.sinon.createSandbox();
-    this.#sandbox.stub(rs, "get").callsFake(async query => {
-      return query.filters.type === "configuration"
-        ? [{ configuration: this.#config }]
-        : this.#data.filter(r => r.type === query.filters.type);
-    });
-
-    // Make a stub for "download" in attachments.
-    this.#sandbox.stub(rs.attachments, "download").callsFake(async record => {
-      if (!record.attachment) {
-        throw new Error("No attachmet in the record");
-      }
-      const encoder = new TextEncoder();
-      return {
-        buffer: encoder.encode(JSON.stringify(record.attachment)),
-      };
-    });
-  }
-
-  async sync() {
-    if (!lazy.QuickSuggest.jsBackend.rs) {
-      // There are no registered features that use remote settings.
-      return;
-    }
-
-    // Observe config-set event to recognize that the config is synced.
-    const onConfigSync = new Promise(resolve => {
-      lazy.QuickSuggest.jsBackend.emitter.once("config-set", resolve);
-    });
-
-    // Make a stub for each feature to recognize that the features are synced.
-    const features = lazy.QuickSuggest.jsBackend.features;
-    const onFeatureSyncs = features.map(feature => {
-      return new Promise(resolve => {
-        const stub = this.#sandbox
-          .stub(feature, "onRemoteSettingsSync")
-          .callsFake(async (...args) => {
-            // Call and wait for the original function.
-            await stub.wrappedMethod.apply(feature, args);
-            stub.restore();
-            resolve();
-          });
-      });
-    });
-
-    // Force to sync.
-    const rs = lazy.RemoteSettings("quicksuggest");
-    rs.emit("sync");
-
-    // Wait for sync.
-    await Promise.all([onConfigSync, ...onFeatureSyncs]);
-  }
-
-  /*
-   * Update the config and data in RemoteSettings. If the config or the data are
-   * undefined, use the current one.
-   *
-   * @param {object} options
-   *   Options object
-   * @param {object} options.config
-   *   Dummy config in the RemoteSettings.
-   * @param {Array} options.data
-   *   Dummy data in the RemoteSettings.
-   */
-  async update({ config = this.#config, data = this.#data }) {
-    this.#config = config;
-    this.#data = data;
-
-    await this.sync();
-  }
-
-  cleanup() {
-    this.#sandbox.restore();
-  }
-
-  #config = null;
-  #data = null;
-  #sandbox = null;
-}
-
-/**
- * Mock `RustSuggest` implementation.
- *
- * @param {object} options
- *   Options object
- * @param {Array} options.data
- *   Mock remote settings records.
- */
-class MockRustSuggest {
-  constructor({ data = [] }) {
-    this.#data = data;
-
-    this.#sandbox = lazy.sinon.createSandbox();
-    this.#sandbox.stub(lazy.SuggestStore, "init").returns(this);
-  }
-
-  /**
-   * Updates the mock data.
-   *
-   * @param {object} options
-   *   Options object
-   * @param {Array} options.data
-   *   Mock remote settings records.
-   */
-  async update({ data }) {
-    this.#data = data;
-  }
-
-  cleanup() {
-    this.#sandbox.restore();
-  }
-
-  // `RustSuggest` methods below.
-
-  ingest() {
-    return Promise.resolve();
-  }
-
-  interrupt() {}
-
-  clear() {}
-
-  async query(query) {
-    let records = this.#data.filter(record => record.type == "data");
-    let suggestions = records
-      .map(record => record.attachment)
-      .flat()
-      .filter(suggestion => suggestion.keywords.includes(query.keyword));
-
-    let matchedSuggestions = [];
-    for (let suggestion of suggestions) {
-      let isSponsored = suggestion.hasOwnProperty("is_sponsored")
-        ? suggestion.is_sponsored
-        : suggestion.iab_category == "22 - Shopping";
-      if (
-        (isSponsored && query.includeSponsored) ||
-        (!isSponsored && query.includeNonSponsored)
-      ) {
-        matchedSuggestions.push(
-          isSponsored
-            ? new lazy.Suggestion.Amp(
-                suggestion.title,
-                suggestion.url,
-                [], // icon
-                query.keyword, // fullKeyword
-                suggestion.id, // blockId
-                suggestion.advertiser,
-                suggestion.iab_category,
-                suggestion.impression_url,
-                suggestion.click_url
-              )
-            : new lazy.Suggestion.Wikipedia(
-                suggestion.title,
-                suggestion.url,
-                [], // icon
-                query.keyword // fullKeyword
-              )
-        );
-      }
-    }
-    return matchedSuggestions;
-  }
-
-  #data = null;
-  #sandbox = null;
-}
 
 /**
  * Test utils for quick suggest.
@@ -359,21 +135,17 @@ class _QuickSuggestTestUtils {
     return Cu.cloneInto(DEFAULT_CONFIG, this);
   }
 
-  get BEST_MATCH_CONFIG() {
-    // Return a clone so callers can modify it.
-    return Cu.cloneInto(BEST_MATCH_CONFIG, this);
-  }
-
   /**
-   * Waits for quick suggest initialization to finish, ensures its data will not
-   * be updated again during the test, and also optionally sets it up with mock
-   * suggestions.
+   * Sets up local remote settings and Merino servers, registers test
+   * suggestions, and initializes Suggest.
    *
    * @param {object} options
    *   Options object
-   * @param {Array} options.remoteSettingsResults
-   *   Array of remote settings result objects. If not given, no suggestions
-   *   will be present in remote settings.
+   * @param {Array} options.remoteSettingsRecords
+   *   Array of remote settings records. Each item in this array should be a
+   *   realistic remote settings record with some exceptions, e.g.,
+   *   `record.attachment`, if defined, should be the attachment itself and not
+   *   its metadata. For details see `RemoteSettingsServer.addRecords()`.
    * @param {Array} options.merinoSuggestions
    *   Array of Merino suggestion objects. If given, this function will start
    *   the mock Merino server and set `quicksuggest.dataCollection.enabled` to
@@ -381,119 +153,152 @@ class _QuickSuggestTestUtils {
    *   Otherwise Merino will not serve suggestions, but you can still set up
    *   Merino without using this function by using `MerinoTestUtils` directly.
    * @param {object} options.config
-   *   The quick suggest configuration object.
-   * @param {object} options.rustEnabled
-   *   Whether the Rust backend should be enabled. If false, the JS backend will
-   *   be used. (There's no way to tell this function not to change the backend.
-   *   If you need that, please modify this function to support it!)
+   *   The Suggest configuration object. This should not be the full remote
+   *   settings record; only pass the object that should be set to the nested
+   *   `configuration` object inside the record.
+   * @param {Array} options.prefs
+   *   An array of Suggest-related prefs to set. This is useful because setting
+   *   some prefs, like feature gates, can cause Suggest to sync from remote
+   *   settings; this function will set them, wait for sync to finish, and clear
+   *   them when the cleanup function is called. Each item in this array should
+   *   itself be a two-element array `[prefName, prefValue]` similar to the
+   *   `set` array passed to `SpecialPowers.pushPrefEnv()`, except here pref
+   *   names are relative to `browser.urlbar`.
    * @returns {Function}
-   *   An async cleanup function. This function is automatically registered as
-   *   a cleanup function, so you only need to call it if your test needs to
-   *   clean up quick suggest before it ends, for example if you have a small
-   *   number of tasks that need quick suggest and it's not enabled throughout
-   *   your test. The cleanup function is idempotent so there's no harm in
-   *   calling it more than once. Be sure to `await` it.
+   *   An async cleanup function. This function is automatically registered as a
+   *   cleanup function, so you only need to call it if your test needs to clean
+   *   up Suggest before it ends, for example if you have a small number of
+   *   tasks that need Suggest and it's not enabled throughout your test. The
+   *   cleanup function is idempotent so there's no harm in calling it more than
+   *   once. Be sure to `await` it.
    */
   async ensureQuickSuggestInit({
-    remoteSettingsResults,
+    remoteSettingsRecords = [],
     merinoSuggestions = null,
     config = DEFAULT_CONFIG,
-    rustEnabled = false,
+    prefs = [],
   } = {}) {
-    this.#mockRemoteSettings = new MockRemoteSettings({
-      config,
-      data: remoteSettingsResults,
-    });
-    this.#mockRustSuggest = new MockRustSuggest({
-      data: remoteSettingsResults,
-    });
+    prefs.push(["quicksuggest.enabled", true]);
 
-    this.info?.("ensureQuickSuggestInit calling QuickSuggest.init()");
-    lazy.QuickSuggest.init();
-
-    // Set the Rust pref and wait for the backend to become enabled/disabled.
-    // This must happen after setting up `MockRustSuggest`. Otherwise the real
-    // Rust component will be used and the Rust remote settings client will try
-    // to access the real remote settings server on ingestion.
-    this.info?.(
-      "ensureQuickSuggestInit setting rustEnabled and awaiting enablePromise"
+    // Set up the local remote settings server. We do this even for tests that
+    // aren't specifically related to remote settings so Suggest doesn't hit the
+    // real remote settings server during testing.
+    this.#log(
+      "ensureQuickSuggestInit",
+      "Started, preparing remote settings server"
     );
-    lazy.UrlbarPrefs.set("quicksuggest.rustEnabled", rustEnabled);
-    await lazy.QuickSuggest.rustBackend.enablePromise;
-    this.info?.("ensureQuickSuggestInit done awaiting enablePromise");
+    if (!this.#remoteSettingsServer) {
+      this.#remoteSettingsServer = new lazy.RemoteSettingsServer();
+    }
+    await this.#remoteSettingsServer.setRecords({
+      collection: "quicksuggest",
+      records: [
+        ...remoteSettingsRecords,
+        { type: "configuration", configuration: config },
+      ],
+    });
+    this.#log("ensureQuickSuggestInit", "Starting remote settings server");
+    await this.#remoteSettingsServer.start();
 
-    if (!rustEnabled) {
-      // Sync with current data.
-      this.info?.("ensureQuickSuggestInit syncing MockRemoteSettings");
-      await this.#mockRemoteSettings.sync();
-      this.info?.("ensureQuickSuggestInit done syncing MockRemoteSettings");
+    // Get the cached `RemoteSettings` client used by the JS backend and tell it
+    // to ignore signatures and to always force sync. Otherwise it won't sync if
+    // the previous sync was recent enough, which is incompatible with testing.
+    let rs = lazy.RemoteSettings("quicksuggest");
+    let { get, verifySignature } = rs;
+    rs.verifySignature = false;
+    rs.get = opts => get.call(rs, { forceSync: true, ...opts });
+    this.#restoreRemoteSettings = () => {
+      rs.verifySignature = verifySignature;
+      rs.get = get;
+    };
+
+    // Tell the Rust backend to use the local remote setting server.
+    lazy.SuggestBackendRust._test_remoteSettingsConfig =
+      new lazy.RemoteSettingsConfig(
+        this.#remoteSettingsServer.url.toString(),
+        "main",
+        "quicksuggest"
+      );
+
+    // Finally, init Suggest and set prefs. Do this after setting up remote
+    // settings because the current backend will immediately try to sync.
+    this.#log(
+      "ensureQuickSuggestInit",
+      "Calling QuickSuggest.init() and setting prefs"
+    );
+    lazy.QuickSuggest.init();
+    for (let [name, value] of prefs) {
+      lazy.UrlbarPrefs.set(name, value);
     }
 
-    // Set up Merino.
+    // Wait for the current backend to finish syncing.
+    await this.forceSync();
+
+    // Set up Merino. This can happen any time relative to Suggest init.
     if (merinoSuggestions) {
-      this.info?.("ensureQuickSuggestInit setting up Merino server");
+      this.#log("ensureQuickSuggestInit", "Setting up Merino server");
       await lazy.MerinoTestUtils.server.start();
       lazy.MerinoTestUtils.server.response.body.suggestions = merinoSuggestions;
       lazy.UrlbarPrefs.set("quicksuggest.dataCollection.enabled", true);
-      this.info?.("ensureQuickSuggestInit done setting up Merino server");
+      this.#log("ensureQuickSuggestInit", "Done setting up Merino server");
     }
 
     let cleanupCalled = false;
     let cleanup = async () => {
       if (!cleanupCalled) {
         cleanupCalled = true;
-        await this.#uninitQuickSuggest(!!merinoSuggestions);
+        await this.#uninitQuickSuggest(prefs, !!merinoSuggestions);
       }
     };
     this.registerCleanupFunction?.(cleanup);
 
+    this.#log("ensureQuickSuggestInit", "Done");
     return cleanup;
   }
 
-  async #uninitQuickSuggest(clearDataCollectionEnabled) {
-    this.info?.("uninitQuickSuggest started");
+  async #uninitQuickSuggest(prefs, clearDataCollectionEnabled) {
+    this.#log("#uninitQuickSuggest", "Started");
 
-    // We need to reset the Rust enabled status. If the status changes, it will
-    // either trigger the Rust backend to enable itself and ingest from remote
-    // settings (if Rust was disabled) or trigger the JS backend to enable
-    // itself and re-sync all features (if Rust was enabled). Wait for each to
-    // finish *before* cleaning up MockRustSuggest and MockRemoteSettings. This
-    // will ensure that all activity has stopped before this function returns.
-    let rustEnabled = lazy.UrlbarPrefs.get("quicksuggest.rustEnabled");
-    lazy.UrlbarPrefs.clear("quicksuggest.rustEnabled");
-    this.info?.(
-      "uninitQuickSuggest setting rustEnabled and awaiting enablePromise"
-    );
-    await lazy.QuickSuggest.rustBackend.enablePromise;
-    this.info?.("uninitQuickSuggest done awaiting enablePromise");
-
-    if (rustEnabled && !lazy.UrlbarPrefs.get("quicksuggest.rustEnabled")) {
-      this.info?.("uninitQuickSuggest syncing MockRemoteSettings");
-      await this.#mockRemoteSettings.sync();
-      this.info?.("uninitQuickSuggest done syncing MockRemoteSettings");
+    // Reset prefs, which can cause the current backend to start syncing. Wait
+    // for it to finish.
+    for (let [name] of prefs) {
+      lazy.UrlbarPrefs.clear(name);
     }
+    await this.forceSync();
 
-    this.#mockRemoteSettings.cleanup();
-    this.#mockRustSuggest.cleanup();
+    this.#log("#uninitQuickSuggest", "Stopping remote settings server");
+    await this.#remoteSettingsServer.stop();
+    this.#restoreRemoteSettings();
 
     if (clearDataCollectionEnabled) {
       lazy.UrlbarPrefs.clear("quicksuggest.dataCollection.enabled");
     }
 
-    this.info?.("uninitQuickSuggest done");
+    this.#log("#uninitQuickSuggest", "Done");
   }
 
   /**
-   * Clears the current remote settings data and adds a new set of data.
-   * This can be used to add remote settings data after
-   * `ensureQuickSuggestInit()` has been called.
+   * Removes all records from the local remote settings server and adds a new
+   * batch of records.
    *
-   * @param {Array} data
-   *   Array of remote settings data objects.
+   * @param {Array} records
+   *   Array of remote settings records. See `ensureQuickSuggestInit()`.
+   * @param {object} options
+   *   Options object.
+   * @param {boolean} options.forceSync
+   *   Whether to force Suggest to sync after updating the records.
    */
-  async setRemoteSettingsResults(data) {
-    await this.#mockRemoteSettings.update({ data });
-    this.#mockRustSuggest.update({ data });
+  async setRemoteSettingsRecords(records, { forceSync = true } = {}) {
+    this.#log("setRemoteSettingsRecords", "Started");
+    await this.#remoteSettingsServer.setRecords({
+      collection: "quicksuggest",
+      records,
+    });
+    if (forceSync) {
+      this.#log("setRemoteSettingsRecords", "Forcing sync");
+      await this.forceSync();
+    }
+    this.#log("setRemoteSettingsRecords", "Done");
   }
 
   /**
@@ -501,10 +306,40 @@ class _QuickSuggestTestUtils {
    * `DEFAULT_CONFIG` before your test finishes. See also `withConfig()`.
    *
    * @param {object} config
-   *   The config to be applied. See
+   *   The quick suggest configuration object. This should not be the full
+   *   remote settings record; only pass the object that should be set to the
+   *   `configuration` nested object inside the record.
    */
   async setConfig(config) {
-    await this.#mockRemoteSettings.update({ config });
+    this.#log("setConfig", "Started");
+    let type = "configuration";
+    this.#remoteSettingsServer.removeRecords({ type });
+    await this.#remoteSettingsServer.addRecords({
+      collection: "quicksuggest",
+      records: [{ type, configuration: config }],
+    });
+    this.#log("setConfig", "Forcing sync");
+    await this.forceSync();
+    this.#log("setConfig", "Done");
+  }
+
+  /**
+   * Forces Suggest to sync with remote settings. This can be used to ensure
+   * Suggest has finished all sync activity.
+   */
+  async forceSync() {
+    this.#log("forceSync", "Started");
+    if (lazy.QuickSuggest.rustBackend.isEnabled) {
+      this.#log("forceSync", "Syncing Rust backend");
+      await lazy.QuickSuggest.rustBackend._test_ingest();
+      this.#log("forceSync", "Done syncing Rust backend");
+    }
+    if (lazy.QuickSuggest.jsBackend.isEnabled) {
+      this.#log("forceSync", "Syncing JS backend");
+      await lazy.QuickSuggest.jsBackend._test_syncAll();
+      this.#log("forceSync", "Done syncing JS backend");
+    }
+    this.#log("forceSync", "Done");
   }
 
   /**
@@ -610,7 +445,8 @@ class _QuickSuggestTestUtils {
     );
     let { result } = details;
 
-    this.info?.(
+    this.#log(
+      "assertIsQuickSuggest",
       `Checking actual result at index ${index}: ` + JSON.stringify(result)
     );
 
@@ -657,30 +493,10 @@ class _QuickSuggestTestUtils {
       "Result helpURL"
     );
 
-    if (lazy.UrlbarPrefs.get("resultMenu")) {
-      this.Assert.ok(
-        row._buttons.get("menu"),
-        "The menu button should be present"
-      );
-    } else {
-      let helpButton = row._buttons.get("help");
-      this.Assert.ok(helpButton, "The help button should be present");
-
-      let blockButton = row._buttons.get("block");
-      if (!isBestMatch) {
-        this.Assert.equal(
-          !!blockButton,
-          lazy.UrlbarPrefs.get("quickSuggestBlockingEnabled"),
-          "The block button is present iff quick suggest blocking is enabled"
-        );
-      } else {
-        this.Assert.equal(
-          !!blockButton,
-          lazy.UrlbarPrefs.get("bestMatchBlockingEnabled"),
-          "The block button is present iff best match blocking is enabled"
-        );
-      }
-    }
+    this.Assert.ok(
+      row._buttons.get("menu"),
+      "The menu button should be present"
+    );
 
     return details;
   }
@@ -787,128 +603,6 @@ class _QuickSuggestTestUtils {
   }
 
   /**
-   * Creates a `sinon.sandbox` and `sinon.spy` that can be used to instrument
-   * the quick suggest custom telemetry pings. If `init` was called with a test
-   * scope where `registerCleanupFunction` is defined, the sandbox will
-   * automically be restored at the end of the test.
-   *
-   * @returns {object}
-   *   An object: { sandbox, spy, spyCleanup }
-   *   `spyCleanup` is a cleanup function that should be called if you're in a
-   *   browser chrome test and you did not also call `init`, or if you need to
-   *   remove the spy before the test ends for some other reason. You can ignore
-   *   it otherwise.
-   */
-  createTelemetryPingSpy() {
-    let sandbox = lazy.sinon.createSandbox();
-    let spy = sandbox.spy(
-      PartnerLinkAttribution._pingCentre,
-      "sendStructuredIngestionPing"
-    );
-    let spyCleanup = () => sandbox.restore();
-    this.registerCleanupFunction?.(spyCleanup);
-    return { sandbox, spy, spyCleanup };
-  }
-
-  /**
-   * Asserts that custom telemetry pings are recorded in the order they appear
-   * in the given `pings` array and that no other pings are recorded.
-   *
-   * @param {object} spy
-   *   A `sinon.spy` object. See `createTelemetryPingSpy()`. This method resets
-   *   the spy before returning.
-   * @param {Array} pings
-   *   The expected pings in the order they are expected to be recorded. Each
-   *   item in this array should be an object: `{ type, payload }`
-   *
-   *   {string} type
-   *     The ping's expected type, one of the `CONTEXTUAL_SERVICES_PING_TYPES`
-   *     values.
-   *   {object} payload
-   *     The ping's expected payload. For convenience, you can leave out
-   *     properties whose values are expected to be the default values defined
-   *     in `DEFAULT_PING_PAYLOADS`.
-   */
-  assertPings(spy, pings) {
-    let calls = spy.getCalls();
-    this.Assert.equal(
-      calls.length,
-      pings.length,
-      "Expected number of ping calls"
-    );
-
-    for (let i = 0; i < pings.length; i++) {
-      let ping = pings[i];
-      this.info?.(
-        `Checking ping at index ${i}, expected is: ` + JSON.stringify(ping)
-      );
-
-      // Add default properties to the expected payload for any that aren't
-      // already defined.
-      let { type, payload } = ping;
-      let defaultPayload = DEFAULT_PING_PAYLOADS[type];
-      this.Assert.ok(
-        defaultPayload,
-        `Sanity check: Default payload exists for type: ${type}`
-      );
-      payload = { ...defaultPayload, ...payload };
-
-      // Check the endpoint URL.
-      let call = calls[i];
-      let endpointURL = call.args[1];
-      this.Assert.ok(
-        endpointURL.includes(type),
-        `Endpoint URL corresponds to the expected ping type: ${type}`
-      );
-
-      // Check the payload.
-      let actualPayload = call.args[0];
-      this._assertPingPayload(actualPayload, payload);
-    }
-
-    spy.resetHistory();
-  }
-
-  /**
-   * Helper for checking contextual services ping payloads.
-   *
-   * @param {object} actualPayload
-   *   The actual payload in the ping.
-   * @param {object} expectedPayload
-   *   An object describing the expected payload. Non-function values in this
-   *   object are checked for equality against the corresponding actual payload
-   *   values. Function values are called and passed the corresponding actual
-   *   values and should return true if the actual values are correct.
-   */
-  _assertPingPayload(actualPayload, expectedPayload) {
-    this.info?.(
-      "Checking ping payload. Actual: " +
-        JSON.stringify(actualPayload) +
-        " -- Expected (excluding function properties): " +
-        JSON.stringify(expectedPayload)
-    );
-
-    this.Assert.equal(
-      Object.entries(actualPayload).length,
-      Object.entries(expectedPayload).length,
-      "Payload has expected number of properties"
-    );
-
-    for (let [key, expectedValue] of Object.entries(expectedPayload)) {
-      let actualValue = actualPayload[key];
-      if (typeof expectedValue == "function") {
-        this.Assert.ok(expectedValue(actualValue), "Payload property: " + key);
-      } else {
-        this.Assert.equal(
-          actualValue,
-          expectedValue,
-          "Payload property: " + key
-        );
-      }
-    }
-  }
-
-  /**
    * Asserts that URLs in a result's payload have the timestamp template
    * substring replaced with real timestamps.
    *
@@ -944,7 +638,10 @@ class _QuickSuggestTestUtils {
       urls[key] = { url, value, timestamp };
     }
 
-    this.info?.("Parsed timestamps: " + JSON.stringify(urls));
+    this.#log(
+      "assertTimestampsReplaced",
+      "Parsed timestamps: " + JSON.stringify(urls)
+    );
 
     // Make a set of unique timestamp strings. There should only be one.
     let { timestamp } = Object.values(urls)[0];
@@ -1000,7 +697,7 @@ class _QuickSuggestTestUtils {
    *   The experiment cleanup function (async).
    */
   async enrollExperiment({ valueOverrides = {} }) {
-    this.info?.("Awaiting ExperimentAPI.ready");
+    this.#log("enrollExperiment", "Awaiting ExperimentAPI.ready");
     await lazy.ExperimentAPI.ready();
 
     // Wait for any prior scenario updates to finish. If updates are ongoing,
@@ -1018,16 +715,22 @@ class _QuickSuggestTestUtils {
       });
 
     // Wait for the pref updates triggered by the experiment enrollment.
-    this.info?.("Awaiting update after enrolling in experiment");
+    this.#log(
+      "enrollExperiment",
+      "Awaiting update after enrolling in experiment"
+    );
     await this.waitForScenarioUpdated();
 
     return async () => {
-      this.info?.("Awaiting experiment cleanup");
+      this.#log("enrollExperiment.cleanup", "Awaiting experiment cleanup");
       await doExperimentCleanup();
 
       // The same pref updates will be triggered by unenrollment, so wait for
       // them again.
-      this.info?.("Awaiting update after unenrolling in experiment");
+      this.#log(
+        "enrollExperiment.cleanup",
+        "Awaiting update after unenrolling in experiment"
+      );
       await this.waitForScenarioUpdated();
     };
   }
@@ -1099,7 +802,8 @@ class _QuickSuggestTestUtils {
    */
   async withLocales(locales, callback) {
     let promiseChanges = async desiredLocales => {
-      this.info?.(
+      this.#log(
+        "withLocales",
         "Changing locales from " +
           JSON.stringify(Services.locale.requestedLocales) +
           " to " +
@@ -1111,32 +815,38 @@ class _QuickSuggestTestUtils {
         return;
       }
 
-      this.info?.("Waiting for intl:requested-locales-changed");
+      this.#log("withLocales", "Waiting for intl:requested-locales-changed");
       await lazy.TestUtils.topicObserved("intl:requested-locales-changed");
-      this.info?.("Observed intl:requested-locales-changed");
+      this.#log("withLocales", "Observed intl:requested-locales-changed");
 
       // Wait for the search service to reload engines. Otherwise tests can fail
       // in strange ways due to internal search service state during shutdown.
       // It won't always reload engines but it's hard to tell in advance when it
       // won't, so also set a timeout.
-      this.info?.("Waiting for TOPIC_SEARCH_SERVICE");
+      this.#log("withLocales", "Waiting for TOPIC_SEARCH_SERVICE");
       await Promise.race([
         lazy.TestUtils.topicObserved(
           lazy.SearchUtils.TOPIC_SEARCH_SERVICE,
           (subject, data) => {
-            this.info?.("Observed TOPIC_SEARCH_SERVICE with data: " + data);
+            this.#log(
+              "withLocales",
+              "Observed TOPIC_SEARCH_SERVICE with data: " + data
+            );
             return data == "engines-reloaded";
           }
         ),
         new Promise(resolve => {
           lazy.setTimeout(() => {
-            this.info?.("Timed out waiting for TOPIC_SEARCH_SERVICE");
+            this.#log(
+              "withLocales",
+              "Timed out waiting for TOPIC_SEARCH_SERVICE"
+            );
             resolve();
           }, 2000);
         }),
       ]);
 
-      this.info?.("Done waiting for locale changes");
+      this.#log("withLocales", "Done waiting for locale changes");
     };
 
     let available = Services.locale.availableLocales;
@@ -1162,8 +872,12 @@ class _QuickSuggestTestUtils {
     await promise;
   }
 
-  #mockRemoteSettings = null;
-  #mockRustSuggest = null;
+  #log(fnName, msg) {
+    this.info?.(`QuickSuggestTestUtils.${fnName} ${msg}`);
+  }
+
+  #remoteSettingsServer;
+  #restoreRemoteSettings;
 }
 
 export var QuickSuggestTestUtils = new _QuickSuggestTestUtils();

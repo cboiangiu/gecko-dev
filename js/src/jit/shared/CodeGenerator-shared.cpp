@@ -48,12 +48,10 @@ MacroAssembler& CodeGeneratorShared::ensureMasm(MacroAssembler* masmArg,
 
 CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph,
                                          MacroAssembler* masmArg)
-    : maybeMasm_(),
-      masm(ensureMasm(masmArg, gen->alloc(), gen->realm)),
+    : masm(ensureMasm(masmArg, gen->alloc(), gen->realm)),
       gen(gen),
       graph(*graph),
       current(nullptr),
-      snapshots_(),
       recovers_(),
 #ifdef DEBUG
       pushedArgs_(0),
@@ -99,6 +97,23 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph,
       // regular array where all slots are sizeof(Value), it maintains the max
       // argument stack depth separately.
       MOZ_ASSERT(graph->argumentSlotCount() == 0);
+
+#ifdef ENABLE_WASM_TAIL_CALLS
+      // An MWasmCall does not align the stack pointer at calls sites but
+      // instead relies on the a priori stack adjustment. We need to insert
+      // padding so that pushing the callee's frame maintains frame alignment.
+      uint32_t calleeFramePadding = ComputeByteAlignment(
+          sizeof(wasm::Frame) + frameDepth_, WasmStackAlignment);
+
+      // Tail calls expect the size of stack arguments to be a multiple of
+      // stack alignment when collapsing frames. This ensures that future tail
+      // calls don't overwrite any locals.
+      uint32_t stackArgsWithPadding =
+          AlignBytes(gen->wasmMaxStackArgBytes(), WasmStackAlignment);
+
+      // Add the callee frame padding and stack args to frameDepth.
+      frameDepth_ += calleeFramePadding + stackArgsWithPadding;
+#else
       frameDepth_ += gen->wasmMaxStackArgBytes();
 
       // An MWasmCall does not align the stack pointer at calls sites but
@@ -106,6 +121,7 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph,
       // last adjustment of frameDepth_.
       frameDepth_ += ComputeByteAlignment(sizeof(wasm::Frame) + frameDepth_,
                                           WasmStackAlignment);
+#endif
     }
 
 #ifdef JS_CODEGEN_ARM64
@@ -306,7 +322,7 @@ void CodeGeneratorShared::dumpNativeToBytecodeEntries() {
   InlineScriptTree* topTree = gen->outerInfo().inlineScriptTree();
   JitSpewStart(JitSpew_Profiling, "Native To Bytecode Entries for %s:%u:%u\n",
                topTree->script()->filename(), topTree->script()->lineno(),
-               topTree->script()->column().zeroOriginValue());
+               topTree->script()->column().oneOriginValue());
   for (unsigned i = 0; i < nativeToBytecodeList_.length(); i++) {
     dumpNativeToBytecodeEntry(i);
   }
@@ -332,12 +348,12 @@ void CodeGeneratorShared::dumpNativeToBytecodeEntry(uint32_t idx) {
       JitSpew_Profiling, "    %08zx [+%-6u] => %-6ld [%-4u] {%-10s} (%s:%u:%u",
       ref.nativeOffset.offset(), nativeDelta, (long)(ref.pc - script->code()),
       pcDelta, CodeName(JSOp(*ref.pc)), script->filename(), script->lineno(),
-      script->column().zeroOriginValue());
+      script->column().oneOriginValue());
 
   for (tree = tree->caller(); tree; tree = tree->caller()) {
     JitSpewCont(JitSpew_Profiling, " <= %s:%u:%u", tree->script()->filename(),
                 tree->script()->lineno(),
-                tree->script()->column().zeroOriginValue());
+                tree->script()->column().oneOriginValue());
   }
   JitSpewCont(JitSpew_Profiling, ")");
   JitSpewFin(JitSpew_Profiling);

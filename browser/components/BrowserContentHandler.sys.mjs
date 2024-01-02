@@ -61,6 +61,25 @@ function shouldLoadURI(aURI) {
 }
 
 function resolveURIInternal(aCmdLine, aArgument) {
+  // If using Firefox protocol handler remove it from URI
+  // at this stage. This is before we would otherwise
+  // record telemetry so do that here.
+  if (aArgument.startsWith("firefox:")) {
+    aArgument = aArgument.substring("firefox:".length);
+    Services.telemetry.keyedScalarAdd(
+      "os.environment.launched_to_handle",
+      "firefox",
+      1
+    );
+  }
+  if (aArgument.startsWith("firefox-private:")) {
+    aArgument = aArgument.substring("firefox-private:".length);
+    Services.telemetry.keyedScalarAdd(
+      "os.environment.launched_to_handle",
+      "firefox-private",
+      1
+    );
+  }
   var uri = aCmdLine.resolveURI(aArgument);
   var uriFixup = Services.uriFixup;
 
@@ -524,7 +543,13 @@ nsBrowserContentHandler.prototype = {
         "private-window",
         false
       );
-      if (privateWindowParam) {
+      // Check for Firefox private browsing protocol handler here.
+      let url = null;
+      let urlFlagIdx = cmdLine.findFlag("url", false);
+      if (urlFlagIdx > -1 && cmdLine.length > 1) {
+        url = cmdLine.getArgument(urlFlagIdx + 1);
+      }
+      if (privateWindowParam || url?.startsWith("firefox-private:")) {
         let forcePrivate = true;
         let resolvedURI;
         if (!lazy.PrivateBrowsingUtils.enabled) {
@@ -532,6 +557,10 @@ nsBrowserContentHandler.prototype = {
           // access to private browsing has been disabled.
           forcePrivate = false;
           resolvedURI = Services.io.newURI("about:privatebrowsing");
+        } else if (url?.startsWith("firefox-private:")) {
+          // We can safely remove the flag and parameter now.
+          cmdLine.removeArguments(urlFlagIdx, urlFlagIdx + 1);
+          resolvedURI = resolveURIInternal(cmdLine, url);
         } else {
           resolvedURI = resolveURIInternal(cmdLine, privateWindowParam);
         }
@@ -584,7 +613,13 @@ nsBrowserContentHandler.prototype = {
       }
     }
     if (cmdLine.handleFlag("setDefaultBrowser", false)) {
-      lazy.ShellService.setDefaultBrowser(true);
+      // Note that setDefaultBrowser is an async function, but "handle" (the method being executed)
+      // is an implementation of an interface method and changing it to be async would be complicated
+      // and ultimately nothing here needs the result of setDefaultBrowser, so we do not bother doing
+      // an await.
+      lazy.ShellService.setDefaultBrowser(true).catch(e => {
+        console.error("setDefaultBrowser failed:", e);
+      });
     }
 
     if (cmdLine.handleFlag("first-startup", false)) {
@@ -1228,13 +1263,16 @@ nsDefaultCommandLineHandler.prototype = {
       return;
     }
 
-    if (AppConstants.platform == "win") {
-      // If we don't have a profile selected yet (e.g. the Profile Manager is
-      // displayed) we will crash if we open an url and then select a profile. To
-      // prevent this handle all url command line flags and set the command line's
-      // preventDefault to true to prevent the display of the ui. The initial
-      // command line will be retained when nsAppRunner calls LaunchChild though
-      // urls launched after the initial launch will be lost.
+    if (AppConstants.platform == "win" || AppConstants.platform == "macosx") {
+      // Handle the case where we don't have a profile selected yet (e.g. the
+      // Profile Manager is displayed).
+      // On Windows, we will crash if we open an url and then select a profile.
+      // On macOS, if we open an url we don't experience a crash but a broken
+      // window is opened.
+      // To prevent this handle all url command line flags and set the
+      // command line's preventDefault to true to prevent the display of the ui.
+      // The initial command line will be retained when nsAppRunner calls
+      // LaunchChild though urls launched after the initial launch will be lost.
       if (!this._haveProfile) {
         try {
           // This will throw when a profile has not been selected.

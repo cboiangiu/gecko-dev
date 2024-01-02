@@ -228,9 +228,7 @@ NS_IMPL_QUERY_INTERFACE(nsWindowWatcher, nsIWindowWatcher, nsIPromptFactory,
                         nsPIWindowWatcher)
 
 nsWindowWatcher::nsWindowWatcher()
-    : mEnumeratorList(),
-      mOldestWindow(nullptr),
-      mListLock("nsWindowWatcher.mListLock") {}
+    : mOldestWindow(nullptr), mListLock("nsWindowWatcher.mListLock") {}
 
 nsWindowWatcher::~nsWindowWatcher() {
   // delete data
@@ -1965,10 +1963,6 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsForSystem(
     chromeFlags |= nsIWebBrowserChrome::CHROME_FISSION_WINDOW;
   }
 
-  if (aFeatures.GetBoolWithDefault("popup", false, &presenceFlag)) {
-    chromeFlags |= nsIWebBrowserChrome::CHROME_WINDOW_POPUP;
-  }
-
   /* OK.
      Normal browser windows, in spite of a stated pattern of turning off
      all chrome not mentioned explicitly, will want the new OS chrome (window
@@ -1977,13 +1971,11 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsForSystem(
      to mean "OS' choice." */
 
   // default titlebar and closebox to "on," if not mentioned at all
-  if (!(chromeFlags & nsIWebBrowserChrome::CHROME_WINDOW_POPUP)) {
-    if (!aFeatures.Exists("titlebar")) {
-      chromeFlags |= nsIWebBrowserChrome::CHROME_TITLEBAR;
-    }
-    if (!aFeatures.Exists("close")) {
-      chromeFlags |= nsIWebBrowserChrome::CHROME_WINDOW_CLOSE;
-    }
+  if (!aFeatures.Exists("titlebar")) {
+    chromeFlags |= nsIWebBrowserChrome::CHROME_TITLEBAR;
+  }
+  if (!aFeatures.Exists("close")) {
+    chromeFlags |= nsIWebBrowserChrome::CHROME_WINDOW_CLOSE;
   }
 
   if (aDialog && !aFeatures.IsEmpty() && !presenceFlag) {
@@ -2023,23 +2015,11 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsForSystem(
     chromeFlags |= nsIWebBrowserChrome::CHROME_MODAL |
                    nsIWebBrowserChrome::CHROME_DEPENDENT;
   }
-
-  /* On mobile we want to ignore the dialog window feature, since the mobile UI
-     does not provide any affordance for dialog windows. This does not interfere
-     with dialog windows created through openDialog. */
-  bool disableDialogFeature = false;
-  nsCOMPtr<nsIPrefBranch> branch = do_GetService(NS_PREFSERVICE_CONTRACTID);
-
-  branch->GetBoolPref("dom.disable_window_open_dialog_feature",
-                      &disableDialogFeature);
-
-  if (!disableDialogFeature) {
-    if (aFeatures.GetBoolWithDefault("dialog", false)) {
-      chromeFlags |= nsIWebBrowserChrome::CHROME_OPENAS_DIALOG;
-    }
+  if (aFeatures.GetBoolWithDefault("dialog", false)) {
+    chromeFlags |= nsIWebBrowserChrome::CHROME_OPENAS_DIALOG;
   }
 
-  /* and dialogs need to have the last word. assume dialogs are dialogs,
+  /* dialogs need to have the last word. assume dialogs are dialogs,
      and opened as chrome, unless explicitly told otherwise. */
   if (aDialog) {
     if (!aFeatures.Exists("dialog")) {

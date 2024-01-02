@@ -39,6 +39,9 @@ from .perfselector.utils import LogProcessor
 here = os.path.abspath(os.path.dirname(__file__))
 build = MozbuildObject.from_environment(cwd=here)
 cache_file = pathlib.Path(get_state_dir(), "try_perf_revision_cache.json")
+PREVIEW_SCRIPT = pathlib.Path(
+    build.topsrcdir, "tools/tryselect/selectors/perf_preview.py"
+)
 
 PERFHERDER_BASE_URL = (
     "https://treeherder.mozilla.org/perfherder/"
@@ -124,6 +127,19 @@ class PerfParser(CompareParser):
             },
         ],
         [
+            # Bug 1866047 - Remove once monorepo changes are complete
+            ["--fenix"],
+            {
+                "action": "store_true",
+                "default": False,
+                "help": "Include Fenix in tasks to run (disabled by default). Must "
+                "be used in conjunction with --android. Fenix isn't built on mozilla-central "
+                "so we pull the APK being tested from the firefox-android project. This "
+                "means that the fenix APK being tested in the two pushes is the same, and "
+                "any local changes made won't impact it.",
+            },
+        ],
+        [
             ["--chrome"],
             {
                 "action": "store_true",
@@ -137,7 +153,8 @@ class PerfParser(CompareParser):
             {
                 "action": "store_true",
                 "default": False,
-                "help": "Show tests available for Custom Chromium-as-Release (disabled by default).",
+                "help": "Show tests available for Custom Chromium-as-Release (disabled by default). "
+                "Use with --android flag to select Custom CaR android tests (cstm-car-m)",
             },
         ],
         [
@@ -184,6 +201,7 @@ class PerfParser(CompareParser):
             },
         ],
         [
+            # Bug 1866047 - Remove once monorepo changes are complete
             ["--browsertime-upload-apk"],
             {
                 "type": str,
@@ -201,6 +219,7 @@ class PerfParser(CompareParser):
             },
         ],
         [
+            # Bug 1866047 - Remove once monorepo changes are complete
             ["--mozperftest-upload-apk"],
             {
                 "type": str,
@@ -571,12 +590,7 @@ class PerfParser(CompareParser):
             return True
         return False
 
-    def build_category_matrix(
-        requested_variants=[BASE_CATEGORY_NAME],
-        requested_platforms=[],
-        requested_apps=[],
-        **kwargs,
-    ):
+    def build_category_matrix(**kwargs):
         """Build a decision matrix for all the categories.
 
         It will have the form:
@@ -584,6 +598,10 @@ class PerfParser(CompareParser):
                 - Variants
                     - ...
         """
+        requested_variants = kwargs.get("requested_variants", [BASE_CATEGORY_NAME])
+        requested_platforms = kwargs.get("requested_platforms", [])
+        requested_apps = kwargs.get("requested_apps", [])
+
         # Build the base decision matrix
         decision_matrix = PerfParser._build_decision_matrix()
 
@@ -717,7 +735,7 @@ class PerfParser(CompareParser):
                 # a platform. This means categories with mixed suites will
                 # be available even if some suites will no longer run
                 # given this platform constraint. The reasoning for this is that
-                # it's unexpected to receive desktop tests when you explcitly
+                # it's unexpected to receive desktop tests when you explicitly
                 # request android.
                 platform_queries = {
                     suite: (
@@ -736,6 +754,7 @@ class PerfParser(CompareParser):
                     "suites": category_info["suites"],
                     "base-category": base_category,
                     "base-category-name": category,
+                    "description": category_info["description"],
                 }
                 for app in Apps:
                     if not any(
@@ -778,6 +797,7 @@ class PerfParser(CompareParser):
                         "app": app,
                         "suites": category_info["suites"],
                         "base-category": base_category,
+                        "description": category_info["description"],
                     }
 
                 if not base_category:
@@ -850,6 +870,20 @@ class PerfParser(CompareParser):
                 # We only need to handle this for categories that
                 # don't specify an app
                 continue
+
+            if PerfParser.apps[app.value].get("restriction", None) is None:
+                # If this app has no restriction flag, it means we should select it
+                # as much as possible and not negate it. However, if specific apps were requested,
+                # we should allow the negation to proceed since a `negation` field
+                # was provided (checked above), assuming this app was requested.
+                requested_apps = kwargs.get("requested_apps", [])
+                if requested_apps and app.value in requested_apps:
+                    # Apps were requested, and this was is included
+                    continue
+                elif not requested_apps:
+                    # Apps were not requested, so we should keep this one
+                    continue
+
             if PerfParser._enable_restriction(
                 PerfParser.apps[app.value].get("restriction", None), **kwargs
             ):
@@ -1076,10 +1110,13 @@ class PerfParser(CompareParser):
             vcs, None
         )
 
-        # Build commit message
-        msg = "Perf selections={} (queries={})".format(
-            ",".join(selected_categories),
-            "&".join([q for q in queries if q is not None and len(q) > 0]),
+        # Build commit message, and limit first line to 200 characters
+        selected_categories_msg = ", ".join(selected_categories)
+        if len(selected_categories_msg) > 200:
+            selected_categories_msg = f"{selected_categories_msg[:200]}...\n...{selected_categories_msg[200:]}"
+        msg = "Perf selections={} \nQueries={}".format(
+            selected_categories_msg,
+            json.dumps(queries, indent=4),
         )
         if alert_summary_id:
             msg = f"Perf alert summary id={alert_summary_id}"
@@ -1207,7 +1244,13 @@ class PerfParser(CompareParser):
             full=True,
             disable_target_task_filter=False,
         )
-        base_cmd = build_base_cmd(fzf, dep_cache, cache_dir, show_estimates=False)
+        base_cmd = build_base_cmd(
+            fzf,
+            dep_cache,
+            cache_dir,
+            show_estimates=False,
+            preview_script=PREVIEW_SCRIPT,
+        )
 
         # Perform the selection, then push to try and return the revisions
         queries = []
@@ -1238,6 +1281,8 @@ class PerfParser(CompareParser):
         elif not show_all:
             # Expand the categories first
             categories = PerfParser.get_categories(**kwargs)
+            PerfParser.build_category_description(base_cmd, categories)
+
             selected_tasks, selected_categories, queries = PerfParser.get_perf_tasks(
                 base_cmd, all_tasks, categories, query=query
             )
@@ -1372,8 +1417,31 @@ class PerfParser(CompareParser):
             "\nAPK is setup for uploading. Please commit the changes, "
             "and re-run this command. \nEnsure you supply the --android, "
             "and select the correct tasks (fenix, geckoview) or use "
-            "--show-all for mozperftest task selection.\n"
+            "--show-all for mozperftest task selection. \nFor Fenix, ensure "
+            "you also provide the --fenix flag."
         )
+
+    def build_category_description(base_cmd, categories):
+        descriptions = {}
+
+        for category in categories:
+            if categories[category].get("description"):
+                descriptions[category] = categories[category].get("description")
+
+        description_file = pathlib.Path(
+            get_state_dir(), "try_perf_categories_info.json"
+        )
+        with description_file.open("w") as f:
+            json.dump(descriptions, f, indent=4)
+
+        preview_option = base_cmd.index("--preview") + 1
+        base_cmd[preview_option] = (
+            base_cmd[preview_option] + f' -d "{description_file}" -l "{{}}"'
+        )
+
+        for idx, cmd in enumerate(base_cmd):
+            if "--preview-window" in cmd:
+                base_cmd[idx] += ":wrap"
 
 
 def get_compare_url(revisions, perfcompare_beta=False):

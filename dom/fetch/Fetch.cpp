@@ -588,11 +588,10 @@ already_AddRefed<Promise> FetchRequest(nsIGlobalObject* aGlobal,
 
     RefPtr<MainThreadFetchResolver> resolver = new MainThreadFetchResolver(
         p, observer, signalImpl, request->MozErrors());
-    RefPtr<FetchDriver> fetch =
-        new FetchDriver(std::move(r), principal, loadGroup,
-                        aGlobal->EventTargetFor(TaskCategory::Other),
-                        cookieJarSettings, nullptr,  // PerformanceStorage
-                        isTrackingFetch);
+    RefPtr<FetchDriver> fetch = new FetchDriver(
+        std::move(r), principal, loadGroup, aGlobal->SerialEventTarget(),
+        cookieJarSettings, nullptr,  // PerformanceStorage
+        isTrackingFetch);
     fetch->SetDocument(doc);
     resolver->SetLoadGroup(loadGroup);
     aRv = fetch->Fetch(signalImpl, resolver);
@@ -1197,7 +1196,7 @@ FetchBody<Derived>::FetchBody(nsIGlobalObject* aOwner)
     MOZ_ASSERT(wp);
     mMainThreadEventTarget = wp->MainThreadEventTarget();
   } else {
-    mMainThreadEventTarget = aOwner->EventTargetFor(TaskCategory::Other);
+    mMainThreadEventTarget = GetMainThreadSerialEventTarget();
   }
 
   MOZ_ASSERT(mMainThreadEventTarget);
@@ -1237,7 +1236,7 @@ template bool FetchBody<Response>::BodyUsed() const;
 template <class Derived>
 void FetchBody<Derived>::SetBodyUsed(JSContext* aCx, ErrorResult& aRv) {
   MOZ_ASSERT(aCx);
-  MOZ_ASSERT(mOwner->EventTargetFor(TaskCategory::Other)->IsOnCurrentThread());
+  MOZ_ASSERT(mOwner->SerialEventTarget()->IsOnCurrentThread());
 
   MOZ_DIAGNOSTIC_ASSERT(!BodyUsed(), "Consuming already used body?");
   if (BodyUsed()) {
@@ -1249,19 +1248,18 @@ void FetchBody<Derived>::SetBodyUsed(JSContext* aCx, ErrorResult& aRv) {
   // If we already have a ReadableStreamBody and it has been created by DOM, we
   // have to lock it now because it can have been shared with other objects.
   if (mReadableStreamBody) {
-    if (mReadableStreamBody->MaybeGetInputStreamIfUnread()) {
-      LockStream(aCx, mReadableStreamBody, aRv);
-      if (NS_WARN_IF(aRv.Failed())) {
-        return;
-      }
-    } else {
-      MOZ_ASSERT(mFetchStreamReader);
-      //  Let's activate the FetchStreamReader.
+    if (mFetchStreamReader) {
+      // Having FetchStreamReader means there's no nsIInputStream underlying it
+      MOZ_ASSERT(!mReadableStreamBody->MaybeGetInputStreamIfUnread());
       mFetchStreamReader->StartConsuming(aCx, mReadableStreamBody, aRv);
-      if (NS_WARN_IF(aRv.Failed())) {
-        return;
-      }
+      return;
     }
+    // We should have nsIInputStream at this point as long as it's still
+    // readable
+    MOZ_ASSERT_IF(
+        mReadableStreamBody->State() == ReadableStream::ReaderState::Readable,
+        mReadableStreamBody->MaybeGetInputStreamIfUnread());
+    LockStream(aCx, mReadableStreamBody, aRv);
   }
 }
 

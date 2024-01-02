@@ -93,8 +93,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 HTMLVideoElement::HTMLVideoElement(already_AddRefed<NodeInfo>&& aNodeInfo)
     : HTMLMediaElement(std::move(aNodeInfo)),
-      mIsOrientationLocked(false),
-      mVideoWatchManager(this, mAbstractMainThread) {
+      mVideoWatchManager(this, AbstractThread::MainThread()) {
   DecoderDoctorLogger::LogConstruction(this);
 }
 
@@ -124,14 +123,14 @@ Maybe<CSSIntSize> HTMLVideoElement::GetVideoSize() const {
 
   CSSIntSize size;
   switch (mMediaInfo.mVideo.mRotation) {
-    case VideoInfo::Rotation::kDegree_90:
-    case VideoInfo::Rotation::kDegree_270: {
+    case VideoRotation::kDegree_90:
+    case VideoRotation::kDegree_270: {
       size.width = mMediaInfo.mVideo.mDisplay.height;
       size.height = mMediaInfo.mVideo.mDisplay.width;
       break;
     }
-    case VideoInfo::Rotation::kDegree_0:
-    case VideoInfo::Rotation::kDegree_180:
+    case VideoRotation::kDegree_0:
+    case VideoRotation::kDegree_180:
     default: {
       size.height = mMediaInfo.mVideo.mDisplay.height;
       size.width = mMediaInfo.mVideo.mDisplay.width;
@@ -232,8 +231,8 @@ uint32_t HTMLVideoElement::VideoWidth() {
     return 0;
   }
   gfx::IntSize size = GetVideoIntrinsicDimensions();
-  if (mMediaInfo.mVideo.mRotation == VideoInfo::Rotation::kDegree_90 ||
-      mMediaInfo.mVideo.mRotation == VideoInfo::Rotation::kDegree_270) {
+  if (mMediaInfo.mVideo.mRotation == VideoRotation::kDegree_90 ||
+      mMediaInfo.mVideo.mRotation == VideoRotation::kDegree_270) {
     return size.height;
   }
   return size.width;
@@ -244,8 +243,8 @@ uint32_t HTMLVideoElement::VideoHeight() {
     return 0;
   }
   gfx::IntSize size = GetVideoIntrinsicDimensions();
-  if (mMediaInfo.mVideo.mRotation == VideoInfo::Rotation::kDegree_90 ||
-      mMediaInfo.mVideo.mRotation == VideoInfo::Rotation::kDegree_270) {
+  if (mMediaInfo.mVideo.mRotation == VideoRotation::kDegree_90 ||
+      mMediaInfo.mVideo.mRotation == VideoRotation::kDegree_270) {
     return size.width;
   }
   return size.height;
@@ -583,8 +582,8 @@ void HTMLVideoElement::MaybeBeginCloningVisually() {
     VideoFrameContainer* container =
         mVisualCloneTarget->GetVideoFrameContainer();
     if (container) {
-      mSecondaryVideoOutput =
-          MakeRefPtr<FirstFrameVideoOutput>(container, mAbstractMainThread);
+      mSecondaryVideoOutput = MakeRefPtr<FirstFrameVideoOutput>(
+          container, AbstractThread::MainThread());
       mVideoWatchManager.Watch(
           mSecondaryVideoOutput->mFirstFrameRendered,
           &HTMLVideoElement::OnSecondaryVideoOutputFirstFrameRendered);
@@ -635,7 +634,7 @@ void HTMLVideoElement::OnSecondaryVideoContainerInstalled(
     return;
   }
 
-  mMainThreadEventTarget->Dispatch(NewRunnableMethod(
+  NS_DispatchToCurrentThread(NewRunnableMethod(
       "Promise::MaybeResolveWithUndefined", mVisualCloneTargetPromise,
       &Promise::MaybeResolveWithUndefined));
   mVisualCloneTargetPromise = nullptr;

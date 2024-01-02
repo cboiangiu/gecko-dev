@@ -747,9 +747,12 @@ bool shell::enableArrayGrouping = false;
 // Pref for new Set.prototype methods.
 bool shell::enableNewSetMethods = false;
 // Pref for ArrayBuffer.prototype.transfer{,ToFixedLength}() methods.
-bool shell::enableArrayBufferTransfer = false;
+bool shell::enableSymbolsAsWeakMapKeys = false;
 #endif
+
+bool shell::enableArrayBufferTransfer = true;
 bool shell::enableImportAssertions = false;
+bool shell::enableDestructuringFuse = false;
 #ifdef JS_GC_ZEAL
 uint32_t shell::gZealBits = 0;
 uint32_t shell::gZealFrequency = 0;
@@ -4132,9 +4135,10 @@ static void SetStandardRealmOptions(JS::RealmOptions& options) {
       .setShadowRealmsEnabled(enableShadowRealms)
       .setWellFormedUnicodeStringsEnabled(enableWellFormedUnicodeStrings)
       .setArrayGroupingEnabled(enableArrayGrouping)
+      .setArrayBufferTransferEnabled(enableArrayBufferTransfer)
 #ifdef NIGHTLY_BUILD
       .setNewSetMethodsEnabled(enableNewSetMethods)
-      .setArrayBufferTransferEnabled(enableArrayBufferTransfer)
+      .setSymbolsAsWeakMapKeysEnabled(enableSymbolsAsWeakMapKeys)
 #endif
       ;
 }
@@ -5623,13 +5627,13 @@ static bool DumpAST(JSContext* cx, const JS::ReadOnlyCompileOptions& options,
 
   js::frontend::ParseNode* pn;
   if (goal == frontend::ParseGoal::Script) {
-    pn = parser.parse();
+    pn = parser.parse().unwrapOr(nullptr);
   } else {
     ModuleBuilder builder(&fc, &parser);
 
     SourceExtent extent = SourceExtent::makeGlobalExtent(length);
     ModuleSharedContext modulesc(&fc, options, builder, extent);
-    pn = parser.moduleBody(&modulesc);
+    pn = parser.moduleBody(&modulesc).unwrapOr(nullptr);
   }
 
   if (!pn) {
@@ -5985,7 +5989,7 @@ static bool SyntaxParse(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  bool succeeded = parser.parse();
+  bool succeeded = parser.parse().isOk();
   if (fc.hadErrors()) {
     return false;
   }
@@ -8294,7 +8298,7 @@ class ShellAutoEntryMonitor : JS::dbg::AutoEntryMonitor {
     MOZ_ASSERT(!enteredWithoutExit);
     enteredWithoutExit = true;
 
-    RootedString displayId(cx, JS_GetFunctionDisplayId(function));
+    RootedString displayId(cx, JS_GetMaybePartialFunctionDisplayId(function));
     if (displayId) {
       UniqueChars displayIdStr = JS_EncodeStringToUTF8(cx, displayId);
       if (!displayIdStr) {
@@ -11678,14 +11682,18 @@ bool InitOptionParser(OptionParser& op) {
                         "(Well-Formed Unicode Strings) (default: Enabled)") ||
       !op.addBoolOption('\0', "enable-new-set-methods",
                         "Enable New Set methods") ||
-      !op.addBoolOption('\0', "enable-arraybuffer-transfer",
-                        "Enable ArrayBuffer.prototype.transfer() methods") ||
+      !op.addBoolOption('\0', "disable-arraybuffer-transfer",
+                        "Disable ArrayBuffer.prototype.transfer() methods") ||
+      !op.addBoolOption('\0', "enable-symbols-as-weakmap-keys",
+                        "Enable Symbols As WeakMap keys") ||
       !op.addBoolOption('\0', "enable-top-level-await",
                         "Enable top-level await") ||
       !op.addBoolOption('\0', "enable-class-static-blocks",
                         "(no-op) Enable class static blocks") ||
       !op.addBoolOption('\0', "enable-import-assertions",
                         "Enable import assertions") ||
+      !op.addBoolOption('\0', "enable-destructuring-fuse",
+                        "Enable Destructuring Fuse") ||
       !op.addStringOption('\0', "shared-memory", "on/off",
                           "SharedArrayBuffer and Atomics "
 #if SHARED_MEMORY_DEFAULT
@@ -11792,6 +11800,14 @@ bool InitOptionParser(OptionParser& op) {
       !op.addBoolOption('\0', "no-baseline", "Disable baseline compiler") ||
       !op.addBoolOption('\0', "baseline-eager",
                         "Always baseline-compile methods") ||
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+      !op.addBoolOption('\0', "portable-baseline-eager",
+                        "Always use the porbale baseline interpreter") ||
+      !op.addBoolOption('\0', "portable-baseline",
+                        "Enable Portable Baseline Interpreter (default)") ||
+      !op.addBoolOption('\0', "no-portable-baseline",
+                        "Disable Portable Baseline Interpreter") ||
+#endif
       !op.addIntOption(
           '\0', "baseline-warmup-threshold", "COUNT",
           "Wait for COUNT calls or iterations before baseline-compiling "
@@ -12190,16 +12206,20 @@ bool SetContextOptions(JSContext* cx, const OptionParser& op) {
   enableArrayGrouping = !op.getBoolOption("disable-array-grouping");
 #ifdef NIGHTLY_BUILD
   enableNewSetMethods = op.getBoolOption("enable-new-set-methods");
-  enableArrayBufferTransfer = op.getBoolOption("enable-arraybuffer-transfer");
+  enableSymbolsAsWeakMapKeys =
+      op.getBoolOption("enable-symbols-as-weakmap-keys");
 #endif
+  enableArrayBufferTransfer = !op.getBoolOption("disable-arraybuffer-transfer");
   enableImportAssertions = op.getBoolOption("enable-import-assertions");
+  enableDestructuringFuse = op.getBoolOption("enable-destructuring-fuse");
   useFdlibmForSinCosTan = op.getBoolOption("use-fdlibm-for-sin-cos-tan");
 
   JS::ContextOptionsRef(cx)
       .setSourcePragmas(enableSourcePragmas)
       .setAsyncStack(enableAsyncStacks)
       .setAsyncStackCaptureDebuggeeOnly(enableAsyncStackCaptureDebuggeeOnly)
-      .setImportAssertions(enableImportAssertions);
+      .setImportAssertions(enableImportAssertions)
+      .setEnableDestructuringFuse(enableDestructuringFuse);
 
   JS::SetUseFdlibmForSinCosTan(useFdlibmForSinCosTan);
 
@@ -12590,6 +12610,18 @@ bool SetContextJITOptions(JSContext* cx, const OptionParser& op) {
   if (op.getBoolOption("baseline-eager")) {
     jit::JitOptions.setEagerBaselineCompilation();
   }
+
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+  if (op.getBoolOption("portable-baseline-eager")) {
+    jit::JitOptions.setEagerPortableBaselineInterpreter();
+  }
+  if (op.getBoolOption("portable-baseline")) {
+    jit::JitOptions.portableBaselineInterpreter = true;
+  }
+  if (op.getBoolOption("no-portable-baseline")) {
+    jit::JitOptions.portableBaselineInterpreter = false;
+  }
+#endif
 
   if (op.getBoolOption("blinterp")) {
     jit::JitOptions.baselineInterpreter = true;

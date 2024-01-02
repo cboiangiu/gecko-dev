@@ -122,7 +122,7 @@ WebIDL Interfaces
 WebIDL interfaces are also valid XPIDL types. To declare a WebIDL interface in
 XPIDL, write:
 
-.. code-block::
+.. code-block:: JavaScript
 
     webidl InterfaceName;
 
@@ -148,7 +148,7 @@ the ``cenum`` construct can be used to group constants together. Constants
 grouped in a ``cenum`` will be reflected as-if they were declared directly on
 the interface, in Rust and Javascript code.
 
-.. code-block::
+.. code-block:: JavaScript
 
    cenum MyCEnum : 8 {
      eSomeValue,  // starts at 0
@@ -340,7 +340,7 @@ properties they may have. The ``array`` property turns the parameter into an arr
 the parameter must also have a corresponding ``size_is`` property whose argument is
 the parameter that has the size of the array. In native code, the type gains
 another pointer indirection, and JavaScript arrays are used in script code.
-Script code callers can ignore the value of array parameter, but implementors
+Script code callers can ignore the value of array parameter, but implementers
 must still set the values appropriately.
 
 .. note::

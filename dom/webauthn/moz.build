@@ -43,6 +43,7 @@ UNIFIED_SOURCES += [
     "AuthenticatorResponse.cpp",
     "PublicKeyCredential.cpp",
     "WebAuthnArgs.cpp",
+    "WebAuthnAutoFillEntry.cpp",
     "WebAuthnManager.cpp",
     "WebAuthnManagerBase.cpp",
     "WebAuthnPromiseHolder.cpp",
@@ -69,6 +70,14 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
         "AndroidWebAuthnService.cpp",
     ]
 
+if CONFIG["OS_ARCH"] == "Darwin":
+    UNIFIED_SOURCES += [
+        "MacOSWebAuthnService.mm",
+    ]
+    OS_LIBS += [
+        "-framework AuthenticationServices",
+    ]
+
 if CONFIG["OS_ARCH"] == "WINNT":
     OS_LIBS += [
         "hid",
@@ -76,13 +85,13 @@ if CONFIG["OS_ARCH"] == "WINNT":
 
 if CONFIG["OS_TARGET"] == "WINNT":
     EXPORTS.mozilla.dom += [
-        "WinWebAuthnManager.h",
+        "WinWebAuthnService.h",
     ]
     UNIFIED_SOURCES += [
-        "WinWebAuthnManager.cpp",
+        "WinWebAuthnService.cpp",
     ]
 
-MOCHITEST_MANIFESTS += ["tests/mochitest.ini"]
+MOCHITEST_MANIFESTS += ["tests/mochitest.toml"]
 BROWSER_CHROME_MANIFESTS += [
     "tests/browser/browser.toml",
 ]

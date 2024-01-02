@@ -744,10 +744,11 @@ def target_tasks_custom_car_perf_testing(full_task_graph, parameters, graph_conf
         if "windows10-32" in platform:
             return False
 
-        # Desktop selection only for CaR
-        if "android" not in platform:
-            if "browsertime" in try_name and "custom-car" in try_name:
-                return True
+        # Desktop and Android selection for CaR
+        if "browsertime" in try_name and (
+            "custom-car" in try_name or "cstm-car-m" in try_name
+        ):
+            return True
         return False
 
     return [l for l, t in full_task_graph.tasks.items() if filter(t)]
@@ -775,13 +776,24 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
         if "windows7" in platform or "windows10-32" in platform:
             return False
 
+        if "tp6-bench" in try_name:
+            return False
+
+        # Bug 1867669 - Temporarily disable all live site tests
+        if "live" in try_name and "sheriffed" not in try_name:
+            return False
+
         # Desktop selection
         if "android" not in platform:
             # Select some browsertime tasks as desktop smoke-tests
             if "browsertime" in try_name:
                 if "chrome" in try_name:
+                    if "tp6" in try_name and "essential" not in try_name:
+                        return False
                     return True
                 if "chromium" in try_name:
+                    if "tp6" in try_name and "essential" not in try_name:
+                        return False
                     return True
                 # chromium-as-release has it's own cron
                 if "custom-car" in try_name:
@@ -798,10 +810,6 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
                     if "speedometer3" in try_name:
                         return False
                     return True
-            else:
-                # Don't run tp6 raptor tests
-                if "tp6" in try_name:
-                    return False
         # Android selection
         elif accept_raptor_android_build(platform):
             if "chrome-m" in try_name and (
@@ -845,6 +853,9 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
                     return "browsertime" in try_name
             # Select browsertime-specific tests
             if "browsertime" in try_name:
+                # Don't run android CaR sp tests as we already have a cron for this.
+                if "m-car" in try_name:
+                    return False
                 if "speedometer" in try_name:
                     return True
         return False
@@ -1048,9 +1059,12 @@ def target_tasks_chromium_update(full_task_graph, parameters, graph_config):
         "fetch-win32-chromium",
         "fetch-win64-chromium",
         "fetch-mac-chromium",
+        "fetch-mac-chromium-arm",
         "toolchain-linux64-custom-car",
         "toolchain-win64-custom-car",
         "toolchain-macosx64-custom-car",
+        "toolchain-macosx-arm64-custom-car",
+        "toolchain-android-custom-car",
     ]
 
 

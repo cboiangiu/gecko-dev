@@ -18,7 +18,6 @@
 #include "mozilla/dom/SVGSVGElement.h"
 #include "mozilla/dom/SVGDocument.h"
 #include "mozilla/gfx/2D.h"
-#include "mozilla/PendingAnimationTracker.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/RefPtr.h"
@@ -64,8 +63,7 @@ class SVGRootRenderingObserver final : public SVGRenderingObserver {
 
   SVGRootRenderingObserver(SVGDocumentWrapper* aDocWrapper,
                            VectorImage* aVectorImage)
-      : SVGRenderingObserver(),
-        mDocWrapper(aDocWrapper),
+      : mDocWrapper(aDocWrapper),
         mVectorImage(aVectorImage),
         mHonoringInvalidations(true) {
     MOZ_ASSERT(mDocWrapper, "Need a non-null SVG document wrapper");
@@ -485,11 +483,6 @@ VectorImage::RequestRefresh(const TimeStamp& aTime) {
   if (!doc) {
     // We are racing between shutdown and a refresh.
     return;
-  }
-
-  PendingAnimationTracker* tracker = doc->GetPendingAnimationTracker();
-  if (tracker && ShouldAnimate()) {
-    tracker->TriggerPendingAnimationsOnNextTick(aTime);
   }
 
   EvaluateAnimation();

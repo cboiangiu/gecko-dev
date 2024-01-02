@@ -529,6 +529,17 @@ reftest.Runner = class {
         lazy.logger.debug(
           `rhs canvas size ${rhs.canvas.width}x${rhs.canvas.height}`
         );
+        if (
+          lhs.canvas.width != rhs.canvas.width ||
+          lhs.canvas.height != rhs.canvas.height
+        ) {
+          msg =
+            `Got different page sizes; test is ` +
+            `${lhs.canvas.width}x${lhs.canvas.height}px, ref is ` +
+            `${rhs.canvas.width}x${rhs.canvas.height}px`;
+          passed = false;
+          break;
+        }
         try {
           pixelsDifferent = this.windowUtils.compareCanvases(
             lhs.canvas,
@@ -807,13 +818,14 @@ browserRect.height: ${browserRect.height}`);
     await new Promise((resolve, reject) => {
       const doc = this.parentWindow.document;
       const script = doc.createElement("script");
-      script.src = "resource://pdf.js/build/pdf.js";
+      script.type = "module";
+      script.src = "resource://pdf.js/build/pdf.mjs";
       script.onload = resolve;
       script.onerror = () => reject(new Error("pdfjs load failed"));
       doc.documentElement.appendChild(script);
     });
     this.parentWindow.pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "resource://pdf.js/build/pdf.worker.js";
+      "resource://pdf.js/build/pdf.worker.mjs";
   }
 
   async loadPdf(data) {

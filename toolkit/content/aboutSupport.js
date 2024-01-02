@@ -1105,6 +1105,100 @@ var snapshotFormatters = {
         .catch(e => {});
     }
 
+    function createCDMInfoRow(cdmInfo) {
+      function findElementInArray(array, name) {
+        const rv = array.find(element => element.includes(name));
+        return rv ? rv.split("=")[1] : "Unknown";
+      }
+
+      function getAudioRobustness(array) {
+        return findElementInArray(array, "audio-robustness");
+      }
+
+      function getVideoRobustness(array) {
+        return findElementInArray(array, "video-robustness");
+      }
+
+      function getSupportedCodecs(array) {
+        const mp4Content = findElementInArray(array, "MP4");
+        const webContent = findElementInArray(array, "WEBM");
+
+        const mp4DecodingAndDecryptingCodecs = mp4Content
+          .match(/decoding-and-decrypting:\[([^\]]*)\]/)[1]
+          .split(",");
+        const webmDecodingAndDecryptingCodecs = webContent
+          .match(/decoding-and-decrypting:\[([^\]]*)\]/)[1]
+          .split(",");
+
+        const mp4DecryptingOnlyCodecs = mp4Content
+          .match(/decrypting-only:\[([^\]]*)\]/)[1]
+          .split(",");
+        const webmDecryptingOnlyCodecs = webContent
+          .match(/decrypting-only:\[([^\]]*)\]/)[1]
+          .split(",");
+
+        // Combine and get unique codecs for decoding-and-decrypting (always)
+        // and decrypting-only (only set when it's not empty)
+        let rv = {};
+        rv.decodingAndDecrypting = [
+          ...new Set(
+            [
+              ...mp4DecodingAndDecryptingCodecs,
+              ...webmDecodingAndDecryptingCodecs,
+            ].filter(Boolean)
+          ),
+        ];
+        let temp = [
+          ...new Set(
+            [...mp4DecryptingOnlyCodecs, ...webmDecryptingOnlyCodecs].filter(
+              Boolean
+            )
+          ),
+        ];
+        if (temp.length) {
+          rv.decryptingOnly = temp;
+        }
+        return rv;
+      }
+
+      function getCapabilities(array) {
+        let capabilities = {};
+        capabilities.persistent = findElementInArray(array, "persistent");
+        capabilities.distinctive = findElementInArray(array, "distinctive");
+        capabilities.sessionType = findElementInArray(array, "sessionType");
+        capabilities.scheme = findElementInArray(array, "scheme");
+        capabilities.codec = getSupportedCodecs(array);
+        return JSON.stringify(capabilities);
+      }
+
+      const rvArray = cdmInfo.capabilities.split(" ");
+      return $.new("tr", [
+        $.new("td", cdmInfo.keySystemName),
+        $.new("td", getVideoRobustness(rvArray)),
+        $.new("td", getAudioRobustness(rvArray)),
+        $.new("td", getCapabilities(rvArray)),
+        $.new("td", cdmInfo.clearlead ? "Yes" : "No"),
+      ]);
+    }
+
+    async function insertContentDecryptionModuleInfo() {
+      let rows = [];
+      // Retrieve information from GMPCDM
+      let cdmInfo =
+        await ChromeUtils.getGMPContentDecryptionModuleInformation();
+      for (let info of cdmInfo) {
+        rows.push(createCDMInfoRow(info));
+      }
+      // Retrieve information from WMFCDM, only works when MOZ_WMF_CDM is true
+      if (ChromeUtils.getWMFContentDecryptionModuleInformation !== undefined) {
+        cdmInfo = await ChromeUtils.getWMFContentDecryptionModuleInformation();
+        for (let info of cdmInfo) {
+          rows.push(createCDMInfoRow(info));
+        }
+      }
+      $.append($("media-content-decryption-modules-tbody"), rows);
+    }
+
     // Basic information
     insertBasicInfo("audio-backend", data.currentAudioBackend);
     insertBasicInfo("max-audio-channels", data.currentMaxAudioChannels);
@@ -1141,12 +1235,14 @@ var snapshotFormatters = {
         codecNameHeaderText,
         codecSWDecodeText,
         codecHWDecodeText,
+        lackOfExtensionText,
       ] = await document.l10n.formatValues([
         "media-codec-support-supported",
         "media-codec-support-unsupported",
         "media-codec-support-codec-name",
         "media-codec-support-sw-decoding",
         "media-codec-support-hw-decoding",
+        "media-codec-support-lack-of-extension",
       ]);
 
       function formatCodecRowHeader(a, b, c) {
@@ -1175,6 +1271,23 @@ var snapshotFormatters = {
         return $.new("tr", [$.new("td", codec), swCell, hwCell]);
       }
 
+      function formatCodecRowForLackOfExtension(codec, sw) {
+        let swCell = $.new("td", sw ? supportText : unsupportedText);
+        // Link to AV1 extension on MS store.
+        let hwCell = $.new("td", [
+          $.new("a", lackOfExtensionText, null, {
+            href: "ms-windows-store://pdp/?ProductId=9MVZQVXJBQ9V",
+          }),
+        ]);
+        if (sw) {
+          swCell.classList.add("supported");
+        } else {
+          swCell.classList.add("unsupported");
+        }
+        hwCell.classList.add("lack-of-extension");
+        return $.new("tr", [$.new("td", codec), swCell, hwCell]);
+      }
+
       // Parse codec support string and create dictionary containing
       // SW/HW support information for each codec found
       let codecs = {};
@@ -1188,6 +1301,7 @@ var snapshotFormatters = {
             name: codec_name,
             sw: false,
             hw: false,
+            lackOfExtension: false,
           };
         }
 
@@ -1197,6 +1311,9 @@ var snapshotFormatters = {
         if (codec_support.includes("HW")) {
           codecs[codec_name].hw = true;
         }
+        if (codec_support.includes("LACK_OF_EXTENSION")) {
+          codecs[codec_name].lackOfExtension = true;
+        }
       }
 
       // Create row in support table for each codec
@@ -1205,9 +1322,15 @@ var snapshotFormatters = {
         if (!codecs.hasOwnProperty(c)) {
           continue;
         }
-        codecSupportRows.push(
-          formatCodecRow(codecs[c].name, codecs[c].sw, codecs[c].hw)
-        );
+        if (codecs[c].lackOfExtension) {
+          codecSupportRows.push(
+            formatCodecRowForLackOfExtension(codecs[c].name, codecs[c].sw)
+          );
+        } else {
+          codecSupportRows.push(
+            formatCodecRow(codecs[c].name, codecs[c].sw, codecs[c].hw)
+          );
+        }
       }
 
       let codecSupportTable = $.new("table", [
@@ -1229,6 +1352,9 @@ var snapshotFormatters = {
     if (["win", "macosx", "linux", "android"].includes(AppConstants.platform)) {
       insertBasicInfo("media-codec-support-info", supportInfo);
     }
+
+    // CDM info
+    insertContentDecryptionModuleInfo();
   },
 
   remoteAgent(data) {

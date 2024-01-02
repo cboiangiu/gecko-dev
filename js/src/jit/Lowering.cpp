@@ -1133,11 +1133,15 @@ void LIRGenerator::visitTest(MTest* test) {
   if (opd->isIsNullOrUndefined() && opd->isEmittedAtUses()) {
     MIsNullOrUndefined* isNullOrUndefined = opd->toIsNullOrUndefined();
     MDefinition* input = isNullOrUndefined->value();
-    MOZ_ASSERT(input->type() == MIRType::Value);
 
-    auto* lir = new (alloc()) LIsNullOrUndefinedAndBranch(
-        isNullOrUndefined, ifTrue, ifFalse, useBoxAtStart(input));
-    add(lir, test);
+    if (input->type() == MIRType::Value) {
+      auto* lir = new (alloc()) LIsNullOrUndefinedAndBranch(
+          isNullOrUndefined, ifTrue, ifFalse, useBoxAtStart(input));
+      add(lir, test);
+    } else {
+      auto* target = IsNullOrUndefined(input->type()) ? ifTrue : ifFalse;
+      add(new (alloc()) LGoto(target));
+    }
     return;
   }
 
@@ -1217,20 +1221,6 @@ static inline bool CanEmitCompareAtUses(MInstruction* ins) {
   return iter == ins->usesEnd();
 }
 
-static bool CanCompareCharactersInline(const JSLinearString* linear) {
-  size_t length = linear->length();
-
-  // Limit the number of inline instructions used for character comparisons. Use
-  // the same instruction limit for both encodings, i.e. two-byte uses half the
-  // limit of Latin-1 strings.
-  constexpr size_t Latin1StringCompareCutoff = 32;
-  constexpr size_t TwoByteStringCompareCutoff = 16;
-
-  return length > 0 &&
-         (linear->hasLatin1Chars() ? length <= Latin1StringCompareCutoff
-                                   : length <= TwoByteStringCompareCutoff);
-}
-
 void LIRGenerator::visitCompare(MCompare* comp) {
   MDefinition* left = comp->lhs();
   MDefinition* right = comp->rhs();
@@ -1246,23 +1236,39 @@ void LIRGenerator::visitCompare(MCompare* comp) {
   // LCompareSAndBranch. Doing this now wouldn't be wrong, but doesn't
   // make sense and avoids confusion.
   if (comp->compareType() == MCompare::Compare_String) {
-    if (IsEqualityOp(comp->jsop())) {
-      MConstant* constant = nullptr;
-      if (left->isConstant()) {
-        constant = left->toConstant();
-      } else if (right->isConstant()) {
-        constant = right->toConstant();
-      }
+    MConstant* constant = nullptr;
+    MDefinition* input = nullptr;
+    if (left->isConstant()) {
+      constant = left->toConstant();
+      input = right;
+    } else if (right->isConstant()) {
+      constant = right->toConstant();
+      input = left;
+    }
 
-      if (constant) {
-        JSLinearString* linear = &constant->toString()->asLinear();
+    if (constant) {
+      JSLinearString* linear = &constant->toString()->asLinear();
 
-        if (CanCompareCharactersInline(linear)) {
-          MDefinition* input = left->isConstant() ? right : left;
-
+      if (IsEqualityOp(comp->jsop())) {
+        if (MacroAssembler::canCompareStringCharsInline(linear)) {
           auto* lir = new (alloc()) LCompareSInline(useRegister(input), linear);
           define(lir, comp);
           assignSafepoint(lir, comp);
+          return;
+        }
+      } else {
+        MOZ_ASSERT(IsRelationalOp(comp->jsop()));
+
+        if (linear->length() == 1) {
+          // Move the constant value into the right-hand side operand.
+          JSOp op = comp->jsop();
+          if (left == constant) {
+            op = ReverseCompareOp(op);
+          }
+
+          auto* lir = new (alloc())
+              LCompareSSingle(useRegister(input), temp(), op, linear);
+          define(lir, comp);
           return;
         }
       }
@@ -2548,7 +2554,7 @@ void LIRGenerator::visitStringStartsWith(MStringStartsWith* ins) {
   if (searchStr->isConstant()) {
     JSLinearString* linear = &searchStr->toConstant()->toString()->asLinear();
 
-    if (CanCompareCharactersInline(linear)) {
+    if (MacroAssembler::canCompareStringCharsInline(linear)) {
       auto* lir = new (alloc())
           LStringStartsWithInline(useRegister(string), temp(), linear);
       define(lir, ins);
@@ -2573,7 +2579,7 @@ void LIRGenerator::visitStringEndsWith(MStringEndsWith* ins) {
   if (searchStr->isConstant()) {
     JSLinearString* linear = &searchStr->toConstant()->toString()->asLinear();
 
-    if (CanCompareCharactersInline(linear)) {
+    if (MacroAssembler::canCompareStringCharsInline(linear)) {
       auto* lir = new (alloc())
           LStringEndsWithInline(useRegister(string), temp(), linear);
       define(lir, ins);
@@ -4103,6 +4109,25 @@ void LIRGenerator::visitArrayJoin(MArrayJoin* ins) {
   assignSafepoint(lir, ins);
 }
 
+void LIRGenerator::visitObjectKeys(MObjectKeys* ins) {
+  MOZ_ASSERT(ins->object()->type() == MIRType::Object);
+  MOZ_ASSERT(ins->type() == MIRType::Object);
+
+  auto* lir = new (alloc()) LObjectKeys(useRegisterAtStart(ins->object()));
+  defineReturn(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitObjectKeysLength(MObjectKeysLength* ins) {
+  MOZ_ASSERT(ins->object()->type() == MIRType::Object);
+  MOZ_ASSERT(ins->type() == MIRType::Int32);
+
+  auto* lir =
+      new (alloc()) LObjectKeysLength(useRegisterAtStart(ins->object()));
+  defineReturn(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
 void LIRGenerator::visitStringSplit(MStringSplit* ins) {
   MOZ_ASSERT(ins->type() == MIRType::Object);
   MOZ_ASSERT(ins->string()->type() == MIRType::String);
@@ -4758,6 +4783,12 @@ void LIRGenerator::visitGuardIsNativeObject(MGuardIsNativeObject* ins) {
 
 void LIRGenerator::visitGuardGlobalGeneration(MGuardGlobalGeneration* ins) {
   auto* lir = new (alloc()) LGuardGlobalGeneration(temp());
+  assignSnapshot(lir, ins->bailoutKind());
+  add(lir, ins);
+}
+
+void LIRGenerator::visitGuardFuse(MGuardFuse* ins) {
+  auto* lir = new (alloc()) LGuardFuse(temp());
   assignSnapshot(lir, ins->bailoutKind());
   add(lir, ins);
 }
@@ -5424,10 +5455,12 @@ void LIRGenerator::visitIsNullOrUndefined(MIsNullOrUndefined* ins) {
   }
 
   MDefinition* opd = ins->input();
-  MOZ_ASSERT(opd->type() == MIRType::Value);
-  LIsNullOrUndefined* lir =
-      new (alloc()) LIsNullOrUndefined(useBoxAtStart(opd));
-  define(lir, ins);
+  if (opd->type() == MIRType::Value) {
+    auto* lir = new (alloc()) LIsNullOrUndefined(useBoxAtStart(opd));
+    define(lir, ins);
+  } else {
+    define(new (alloc()) LInteger(IsNullOrUndefined(opd->type())), ins);
+  }
 }
 
 void LIRGenerator::visitHasClass(MHasClass* ins) {
@@ -7297,6 +7330,14 @@ void LIRGenerator::visitWasmRefIsSubtypeOfConcrete(
   define(new (alloc())
              LWasmRefIsSubtypeOfConcrete(ref, superSTV, scratch1, scratch2),
          ins);
+}
+
+void LIRGenerator::visitWasmNewStructObject(MWasmNewStructObject* ins) {
+  LWasmNewStructObject* lir = new (alloc())
+      LWasmNewStructObject(useFixed(ins->instance(), InstanceReg),
+                           useRegister(ins->typeDefData()), temp(), temp());
+  define(lir, ins);
+  assignWasmSafepoint(lir);
 }
 
 #ifdef FUZZING_JS_FUZZILLI

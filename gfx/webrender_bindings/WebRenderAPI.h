@@ -226,6 +226,9 @@ class TransactionWrapper final {
       const layers::ScrollableLayerGuid::ViewID& aScrollId,
       const nsTArray<wr::SampledScrollOffset>& aSampledOffsets);
   void UpdateIsTransformAsyncZooming(uint64_t aAnimationId, bool aIsZooming);
+  void AddMinimapData(const wr::WrPipelineId& aPipelineId,
+                      const layers::ScrollableLayerGuid::ViewID& aScrollId,
+                      const MinimapData& aMinimapData);
 
  private:
   Transaction* mTxn;
@@ -310,20 +313,25 @@ class WebRenderAPI final {
   void FlushPendingWrTransactionEventsWithoutWait();
   void FlushPendingWrTransactionEventsWithWait();
 
+  wr::WebRenderAPI* GetRootAPI();
+
  protected:
   WebRenderAPI(wr::DocumentHandle* aHandle, wr::WindowId aId,
                layers::WebRenderBackend aBackend,
                layers::WebRenderCompositor aCompositor,
                uint32_t aMaxTextureSize, bool aUseANGLE, bool aUseDComp,
                bool aUseTripleBuffering, bool aSupportsExternalBufferTextures,
-               layers::SyncHandle aSyncHandle);
+               layers::SyncHandle aSyncHandle,
+               wr::WebRenderAPI* aRootApi = nullptr,
+               wr::WebRenderAPI* aRootDocumentApi = nullptr);
 
   ~WebRenderAPI();
   // Should be used only for shutdown handling
   void WaitFlushed();
 
   void UpdateDebugFlags(uint32_t aFlags);
-  bool CheckIsRemoteTextureReady(layers::RemoteTextureInfoList* aList);
+  bool CheckIsRemoteTextureReady(layers::RemoteTextureInfoList* aList,
+                                 const TimeStamp& aTimeStamp);
   void WaitRemoteTextureReady(layers::RemoteTextureInfoList* aList);
 
   enum class RemoteTextureWaitType : uint8_t {
@@ -341,6 +349,7 @@ class WebRenderAPI final {
       PendingRemoteTextures,
     };
     const Tag mTag;
+    const TimeStamp mTimeStamp;
 
     struct TransactionWrapper {
       TransactionWrapper(wr::Transaction* aTxn, bool aUseSceneBuilderThread)
@@ -359,13 +368,16 @@ class WebRenderAPI final {
    private:
     WrTransactionEvent(const Tag aTag,
                        UniquePtr<TransactionWrapper>&& aTransaction)
-        : mTag(aTag), mTransaction(std::move(aTransaction)) {
+        : mTag(aTag),
+          mTimeStamp(TimeStamp::Now()),
+          mTransaction(std::move(aTransaction)) {
       MOZ_ASSERT(mTag == Tag::Transaction);
     }
     WrTransactionEvent(
         const Tag aTag,
         UniquePtr<layers::RemoteTextureInfoList>&& aPendingRemoteTextures)
         : mTag(aTag),
+          mTimeStamp(TimeStamp::Now()),
           mPendingRemoteTextures(std::move(aPendingRemoteTextures)) {
       MOZ_ASSERT(mTag == Tag::PendingRemoteTextures);
     }
@@ -437,8 +449,8 @@ class WebRenderAPI final {
   // objects in the same window use the same channel, and some api objects write
   // to the same document (but there is only one owner for each channel and for
   // each document).
-  RefPtr<wr::WebRenderAPI> mRootApi;
-  RefPtr<wr::WebRenderAPI> mRootDocumentApi;
+  const RefPtr<wr::WebRenderAPI> mRootApi;
+  const RefPtr<wr::WebRenderAPI> mRootDocumentApi;
 
   friend class DisplayListBuilder;
   friend class layers::WebRenderBridgeParent;
@@ -859,8 +871,6 @@ class DisplayListBuilder final {
 
   wr::PipelineId mPipelineId;
   layers::WebRenderBackend mBackend;
-
-  nsTArray<wr::PipelineId> mRemotePipelineIds;
 
   layers::DisplayItemCache* mDisplayItemCache;
   Maybe<uint16_t> mCurrentCacheSlot;

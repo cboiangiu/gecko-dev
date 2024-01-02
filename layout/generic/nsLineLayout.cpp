@@ -204,21 +204,38 @@ void nsLineLayout::BeginLineReflow(nscoord aICoord, nscoord aBCoord,
   psd->mNoWrap = !mStyleText->WhiteSpaceCanWrapStyle() || mSuppressLineWrap;
   psd->mWritingMode = aWritingMode;
 
-  // If this is the first line of a block then see if the text-indent
-  // property amounts to anything.
+  // Determine if this is the first line of the block (or first after a hard
+  // line-break, if `each-line` is in effect).
+  nsIFrame* containerFrame = LineContainerFrame();
+  if (!containerFrame->IsRubyTextContainerFrame()) {
+    bool isFirstLineOrAfterHardBreak = [&] {
+      if (mLineNumber > 0) {
+        return mStyleText->mTextIndent.each_line && GetLine() &&
+               !GetLine()->prev()->IsLineWrapped();
+      }
+      if (nsBlockFrame* prevBlock =
+              do_QueryFrame(containerFrame->GetPrevInFlow())) {
+        return mStyleText->mTextIndent.each_line &&
+               (prevBlock->Lines().empty() ||
+                !prevBlock->LinesEnd().prev()->IsLineWrapped());
+      }
+      return true;
+    }();
 
-  if (0 == mLineNumber && !HasPrevInFlow(LineContainerFrame())) {
-    nscoord pctBasis = mLineContainerRI.ComputedISize();
-    mTextIndent = mStyleText->mTextIndent.Resolve(pctBasis);
-    psd->mICoord += mTextIndent;
+    // Resolve and apply the text-indent value if this line requires it.
+    // The `hanging` option inverts which lines are to be indented.
+    if (isFirstLineOrAfterHardBreak != mStyleText->mTextIndent.hanging) {
+      nscoord pctBasis = mLineContainerRI.ComputedISize();
+      mTextIndent = mStyleText->mTextIndent.length.Resolve(pctBasis);
+      psd->mICoord += mTextIndent;
+    }
   }
 
-  PerFrameData* pfd = NewPerFrameData(LineContainerFrame());
+  PerFrameData* pfd = NewPerFrameData(containerFrame);
   pfd->mAscent = 0;
   pfd->mSpan = psd;
   psd->mFrame = pfd;
-  nsIFrame* frame = LineContainerFrame();
-  if (frame->IsRubyTextContainerFrame()) {
+  if (containerFrame->IsRubyTextContainerFrame()) {
     // Ruby text container won't be reflowed via ReflowFrame, hence the
     // relative positioning information should be recorded here.
     MOZ_ASSERT(mBaseLineLayout != this);
@@ -1360,7 +1377,7 @@ void nsLineLayout::PlaceFrame(PerFrameData* pfd, ReflowOutput& aMetrics) {
     // vertically aligned, which happens after this.
     const auto baselineSource = pfd->mFrame->StyleDisplay()->mBaselineSource;
     if (baselineSource == StyleBaselineSource::Auto ||
-        pfd->mFrame->IsFrameOfType(nsIFrame::eLineParticipant)) {
+        pfd->mFrame->IsLineParticipant()) {
       if (aMetrics.BlockStartAscent() == ReflowOutput::ASK_FOR_BASELINE) {
         pfd->mAscent = pfd->mFrame->GetLogicalBaseline(lineWM);
       } else {
@@ -1741,6 +1758,21 @@ static float GetInflationForBlockDirAlignment(nsIFrame* aFrame,
         ->GetFontSizeScaleFactor();
   }
   return nsLayoutUtils::FontSizeInflationInner(aFrame, aInflationMinFontSize);
+}
+
+bool nsLineLayout::ShouldApplyLineHeightInPreserveWhiteSpace(
+    const PerSpanData* psd) {
+  if (psd->mFrame->mFrame->Style()->IsAnonBox()) {
+    // e.g. An empty `input[type=button]` should still be line-height sized.
+    return true;
+  }
+
+  for (PerFrameData* pfd = psd->mFirstFrame; pfd; pfd = pfd->mNext) {
+    if (!pfd->mIsEmpty) {
+      return true;
+    }
+  }
+  return false;
 }
 
 #define BLOCKDIR_ALIGN_FRAMES_NO_MINIMUM nscoord_MAX
@@ -2277,7 +2309,9 @@ void nsLineLayout::VerticalAlignFrames(PerSpanData* psd) {
       }
     }
     if (applyMinLH) {
-      if (psd->mHasNonemptyContent || preMode || mHasMarker) {
+      if (psd->mHasNonemptyContent ||
+          (preMode && ShouldApplyLineHeightInPreserveWhiteSpace(psd)) ||
+          mHasMarker) {
 #ifdef NOISY_BLOCKDIR_ALIGN
         printf("  [span]==> adjusting min/maxBCoord: currentValues: %d,%d",
                minBCoord, maxBCoord);

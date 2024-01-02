@@ -159,10 +159,10 @@ impl ExpressionInfo {
             ref_count: 0,
             assignable_global: None,
             // this doesn't matter at this point, will be overwritten
-            ty: TypeResolution::Value(crate::TypeInner::Scalar {
+            ty: TypeResolution::Value(crate::TypeInner::Scalar(crate::Scalar {
                 kind: crate::ScalarKind::Bool,
                 width: 0,
-            }),
+            })),
         }
     }
 }
@@ -421,13 +421,29 @@ impl FunctionInfo {
         })
     }
 
-    /// Computes the expression info and stores it in `self.expressions`.
-    /// Also, bumps the reference counts on dependent expressions.
+    /// Compute the [`ExpressionInfo`] for `handle`.
+    ///
+    /// Replace the dummy entry in [`self.expressions`] for `handle`
+    /// with a real `ExpressionInfo` value describing that expression.
+    ///
+    /// This function is called as part of a forward sweep through the
+    /// arena, so we can assume that all earlier expressions in the
+    /// arena already have valid info. Since expressions only depend
+    /// on earlier expressions, this includes all our subexpressions.
+    ///
+    /// Adjust the reference counts on all expressions we use.
+    ///
+    /// Also populate the [`sampling_set`], [`sampling`] and
+    /// [`global_uses`] fields of `self`.
+    ///
+    /// [`self.expressions`]: FunctionInfo::expressions
+    /// [`sampling_set`]: FunctionInfo::sampling_set
+    /// [`sampling`]: FunctionInfo::sampling
+    /// [`global_uses`]: FunctionInfo::global_uses
     #[allow(clippy::or_fun_call)]
     fn process_expression(
         &mut self,
         handle: Handle<crate::Expression>,
-        expression: &crate::Expression,
         expression_arena: &Arena<crate::Expression>,
         other_functions: &[FunctionInfo],
         resolve_context: &ResolveContext,
@@ -435,6 +451,7 @@ impl FunctionInfo {
     ) -> Result<(), ExpressionError> {
         use crate::{Expression as E, SampleLevel as Sl};
 
+        let expression = &expression_arena[handle];
         let mut assignable_global = None;
         let uniformity = match *expression {
             E::Access { base, index } => {
@@ -761,7 +778,6 @@ impl FunctionInfo {
                     let mut requirements = UniformityRequirements::empty();
                     for expr in range.clone() {
                         let req = self.expressions[expr.index()].uniformity.requirements;
-                        #[cfg(feature = "validate")]
                         if self
                             .flags
                             .contains(super::ValidationFlags::CONTROL_FLOW_UNIFORMITY)
@@ -806,7 +822,7 @@ impl FunctionInfo {
                     // The uniformity analysis Naga uses now is less accurate than the one in the WGSL standard,
                     // causing Naga to reject correct uses of `workgroupUniformLoad` in some interesting programs.
 
-                    /* #[cfg(feature = "validate")]
+                    /*
                     if self
                         .flags
                         .contains(super::ValidationFlags::CONTROL_FLOW_UNIFORMITY)
@@ -1011,10 +1027,9 @@ impl ModuleInfo {
         let resolve_context =
             ResolveContext::with_locals(module, &fun.local_variables, &fun.arguments);
 
-        for (handle, expr) in fun.expressions.iter() {
+        for (handle, _) in fun.expressions.iter() {
             if let Err(source) = info.process_expression(
                 handle,
-                expr,
                 &fun.expressions,
                 &self.functions,
                 &resolve_context,
@@ -1022,6 +1037,12 @@ impl ModuleInfo {
             ) {
                 return Err(FunctionError::Expression { handle, source }
                     .with_span_handle(handle, &fun.expressions));
+            }
+        }
+
+        for (_, expr) in fun.local_variables.iter() {
+            if let Some(init) = expr.init {
+                let _ = info.add_ref(init);
             }
         }
 
@@ -1038,7 +1059,6 @@ impl ModuleInfo {
 }
 
 #[test]
-#[cfg(feature = "validate")]
 fn uniform_control_flow() {
     use crate::{Expression as E, Statement as S};
 
@@ -1048,8 +1068,7 @@ fn uniform_control_flow() {
             name: None,
             inner: crate::TypeInner::Vector {
                 size: crate::VectorSize::Bi,
-                kind: crate::ScalarKind::Float,
-                width: 4,
+                scalar: crate::Scalar::F32,
             },
         },
         Default::default(),
@@ -1127,10 +1146,9 @@ fn uniform_control_flow() {
         functions: &Arena::new(),
         arguments: &[],
     };
-    for (handle, expression) in expressions.iter() {
+    for (handle, _) in expressions.iter() {
         info.process_expression(
             handle,
-            expression,
             &expressions,
             &[],
             &resolve_context,

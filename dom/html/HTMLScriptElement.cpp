@@ -63,19 +63,6 @@ nsresult HTMLScriptElement::BindToTree(BindContext& aContext,
   return NS_OK;
 }
 
-namespace {
-// <https://html.spec.whatwg.org/multipage/urls-and-fetching.html#fetch-priority-attributes>.
-static const nsAttrValue::EnumTable kFetchPriorityEnumTable[] = {
-    {kFetchPriorityAttributeValueHigh, FetchPriority::High},
-    {kFetchPriorityAttributeValueLow, FetchPriority::Low},
-    {kFetchPriorityAttributeValueAuto, FetchPriority::Auto},
-    {nullptr, 0}};
-
-// <https://html.spec.whatwg.org/multipage/urls-and-fetching.html#fetch-priority-attributes>.
-static const nsAttrValue::EnumTable*
-    kFetchPriorityEnumTableInvalidValueDefault = &kFetchPriorityEnumTable[2];
-}  // namespace
-
 bool HTMLScriptElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
                                        const nsAString& aValue,
                                        nsIPrincipal* aMaybeScriptedPrincipal,
@@ -92,7 +79,7 @@ bool HTMLScriptElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
     }
 
     if (aAttribute == nsGkAtoms::fetchpriority) {
-      HTMLScriptElement::ParseFetchPriority(aValue, aResult);
+      ParseFetchPriority(aValue, aResult);
       return true;
     }
   }
@@ -197,7 +184,8 @@ void HTMLScriptElement::FreezeExecutionAttrs(const Document* aOwnerDoc) {
         nsContentUtils::ReportToConsole(
             nsIScriptError::warningFlag, "HTML"_ns, OwnerDoc(),
             nsContentUtils::eDOM_PROPERTIES, "ScriptSourceInvalidUri", params,
-            nullptr, u""_ns, GetScriptLineNumber(), GetScriptColumnNumber());
+            nullptr, u""_ns, GetScriptLineNumber(),
+            GetScriptColumnNumber().oneOriginValue());
       }
     } else {
       AutoTArray<nsString, 1> params = {u"src"_ns};
@@ -205,7 +193,8 @@ void HTMLScriptElement::FreezeExecutionAttrs(const Document* aOwnerDoc) {
       nsContentUtils::ReportToConsole(
           nsIScriptError::warningFlag, "HTML"_ns, OwnerDoc(),
           nsContentUtils::eDOM_PROPERTIES, "ScriptSourceEmpty", params, nullptr,
-          u""_ns, GetScriptLineNumber(), GetScriptColumnNumber());
+          u""_ns, GetScriptLineNumber(),
+          GetScriptColumnNumber().oneOriginValue());
     }
 
     // At this point mUri will be null for invalid URLs.
@@ -226,14 +215,7 @@ CORSMode HTMLScriptElement::GetCORSMode() const {
 }
 
 FetchPriority HTMLScriptElement::GetFetchPriority() const {
-  const nsAttrValue* fetchpriorityAttribute =
-      GetParsedAttr(nsGkAtoms::fetchpriority);
-  if (fetchpriorityAttribute) {
-    MOZ_ASSERT(fetchpriorityAttribute->Type() == nsAttrValue::eEnum);
-    return FetchPriority(fetchpriorityAttribute->GetEnumValue());
-  }
-
-  return FetchPriority::Auto;
+  return nsGenericHTMLElement::GetFetchPriority();
 }
 
 mozilla::dom::ReferrerPolicy HTMLScriptElement::GetReferrerPolicy() {
@@ -245,20 +227,6 @@ bool HTMLScriptElement::HasScriptContent() {
          nsContentUtils::HasNonEmptyTextContent(this);
 }
 
-void HTMLScriptElement::GetFetchPriority(nsAString& aFetchPriority) const {
-  // <https://html.spec.whatwg.org/multipage/urls-and-fetching.html#fetch-priority-attributes>.
-  GetEnumAttr(nsGkAtoms::fetchpriority, kFetchPriorityAttributeValueAuto,
-              aFetchPriority);
-}
-
-/* static */
-FetchPriority HTMLScriptElement::ToFetchPriority(const nsAString& aValue) {
-  nsAttrValue attrValue;
-  HTMLScriptElement::ParseFetchPriority(aValue, attrValue);
-  MOZ_ASSERT(attrValue.Type() == nsAttrValue::eEnum);
-  return FetchPriority(attrValue.GetEnumValue());
-}
-
 // https://html.spec.whatwg.org/multipage/scripting.html#dom-script-supports
 /* static */
 bool HTMLScriptElement::Supports(const GlobalObject& aGlobal,
@@ -267,14 +235,6 @@ bool HTMLScriptElement::Supports(const GlobalObject& aGlobal,
   return aType.EqualsLiteral("classic") || aType.EqualsLiteral("module") ||
          (StaticPrefs::dom_importMaps_enabled() &&
           aType.EqualsLiteral("importmap"));
-}
-
-/* static */
-void HTMLScriptElement::ParseFetchPriority(const nsAString& aValue,
-                                           nsAttrValue& aResult) {
-  aResult.ParseEnumValue(aValue, kFetchPriorityEnumTable,
-                         false /* aCaseSensitive */,
-                         kFetchPriorityEnumTableInvalidValueDefault);
 }
 
 }  // namespace mozilla::dom

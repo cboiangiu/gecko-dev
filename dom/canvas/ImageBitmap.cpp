@@ -1710,6 +1710,11 @@ class CreateImageBitmapFromBlobRunnable : public WorkerRunnable {
         mImage(aImage),
         mStatus(aStatus) {}
 
+  // Override Predispatch/PostDispatch to remove the noise of assertion for
+  // nested Worker.
+  virtual bool PreDispatch(WorkerPrivate*) override { return true; }
+  virtual void PostDispatch(WorkerPrivate*, bool) override {}
+
   bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override {
     mTask->MimeTypeAndDecodeAndCropBlobCompletedOwningThread(mImage, mStatus);
     return true;
@@ -1729,7 +1734,7 @@ static void AsyncCreateImageBitmapFromBlob(Promise* aPromise,
   // Let's identify the main-thread event target.
   nsCOMPtr<nsIEventTarget> mainThreadEventTarget;
   if (NS_IsMainThread()) {
-    mainThreadEventTarget = aGlobal->EventTargetFor(TaskCategory::Other);
+    mainThreadEventTarget = aGlobal->SerialEventTarget();
   } else {
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(workerPrivate);

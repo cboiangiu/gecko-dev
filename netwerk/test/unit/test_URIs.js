@@ -177,8 +177,8 @@ var gTests = [
   {
     spec: "gopher://mozilla.org/",
     scheme: "gopher",
-    prePath: "gopher:",
-    pathQueryRef: "//mozilla.org/",
+    prePath: "gopher://mozilla.org",
+    pathQueryRef: "/",
     ref: "",
     nsIURL: false,
     nsINestedURI: false,
@@ -493,10 +493,15 @@ function do_test_uri_basic(aTest) {
   do_check_property(aTest, URI, "password");
   do_check_property(aTest, URI, "host");
   do_check_property(aTest, URI, "specIgnoringRef");
-  if ("hasRef" in aTest) {
-    do_info("testing hasref: " + aTest.hasRef + " vs " + URI.hasRef);
-    Assert.equal(aTest.hasRef, URI.hasRef);
-  }
+
+  do_info("testing hasRef");
+  Assert.equal(URI.hasRef, !!aTest.ref, "URI.hasRef is correct");
+  do_info("testing hasUserPass");
+  Assert.equal(
+    URI.hasUserPass,
+    !!aTest.username || !!aTest.password,
+    "URI.hasUserPass is correct"
+  );
 }
 
 // Test that a given URI parses correctly when we add a given ref to the end

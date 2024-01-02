@@ -87,11 +87,6 @@ class nsRangeFrame final : public nsContainerFrame,
   virtual nscoord GetMinISize(gfxContext* aRenderingContext) override;
   virtual nscoord GetPrefISize(gfxContext* aRenderingContext) override;
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const override {
-    return nsContainerFrame::IsFrameOfType(
-        aFlags & ~(nsIFrame::eReplaced | nsIFrame::eReplacedContainsBlock));
-  }
-
   /**
    * Returns true if the slider's thumb moves horizontally, or else false if it
    * moves vertically.
@@ -177,9 +172,6 @@ class nsRangeFrame final : public nsContainerFrame,
   // Return our preferred size in the cross-axis (the axis perpendicular
   // to the direction of movement of the thumb).
   nscoord AutoCrossSize(mozilla::Length aEm);
-
-  nsresult MakeAnonymousDiv(Element** aResult, PseudoStyleType aPseudoType,
-                            nsTArray<ContentInfo>& aElements);
 
   // Helper function which reflows the anonymous div frames.
   void ReflowAnonymousContent(nsPresContext* aPresContext,

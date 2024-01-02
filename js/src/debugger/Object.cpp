@@ -26,7 +26,7 @@
 #include "debugger/Script.h"     // for DebuggerScript
 #include "debugger/Source.h"     // for DebuggerSource
 #include "gc/Tracer.h"        // for TraceManuallyBarrieredCrossCompartmentEdge
-#include "js/ColumnNumber.h"  // JS::ColumnNumberZeroOrigin
+#include "js/ColumnNumber.h"  // JS::ColumnNumberOneOrigin
 #include "js/CompilationAndEvaluation.h"  //  for Compile
 #include "js/Conversions.h"               // for ToObject
 #include "js/experimental/JitInfo.h"      // for JSJitInfo
@@ -311,7 +311,11 @@ bool DebuggerObject::CallData::nameGetter() {
     return true;
   }
 
-  RootedString result(cx, object->name(cx));
+  JS::Rooted<JSAtom*> result(cx);
+  if (!object->name(cx, &result)) {
+    return false;
+  }
+
   if (result) {
     args.rval().setString(result);
   } else {
@@ -326,7 +330,10 @@ bool DebuggerObject::CallData::displayNameGetter() {
     return true;
   }
 
-  RootedString result(cx, object->displayName(cx));
+  JS::Rooted<JSAtom*> result(cx);
+  if (!object->displayName(cx, &result)) {
+    return false;
+  }
   if (result) {
     args.rval().setString(result);
   } else {
@@ -1239,6 +1246,9 @@ bool DebuggerObject::CallData::createSource() {
   if (!ToUint32(cx, v, &startColumn)) {
     return false;
   }
+  if (startColumn == 0) {
+    startColumn = 1;
+  }
 
   if (!JS_GetProperty(cx, options, "sourceMapURL", &v)) {
     return false;
@@ -1260,7 +1270,7 @@ bool DebuggerObject::CallData::createSource() {
 
   JS::CompileOptions compileOptions(cx);
   compileOptions.lineno = startLine;
-  compileOptions.column = JS::ColumnNumberZeroOrigin(startColumn);
+  compileOptions.column = JS::ColumnNumberOneOrigin(startColumn);
 
   if (!JS::StringHasLatin1Chars(url)) {
     JS_ReportErrorASCII(cx, "URL must be a narrow string");
@@ -1667,13 +1677,29 @@ bool DebuggerObject::getClassName(JSContext* cx, Handle<DebuggerObject*> object,
   return true;
 }
 
-JSAtom* DebuggerObject::name(JSContext* cx) const {
+bool DebuggerObject::name(JSContext* cx,
+                          JS::MutableHandle<JSAtom*> result) const {
   if (isFunction()) {
-    JSAtom* atom = referent()->as<JSFunction>().explicitName();
-    if (atom) {
-      cx->markAtom(atom);
+    JSFunction* fun = &referent()->as<JSFunction>();
+    if (!fun->isAccessorWithLazyName()) {
+      result.set(fun->fullExplicitName());
+      if (result) {
+        cx->markAtom(result);
+      }
+      return true;
     }
-    return atom;
+
+    {
+      Maybe<AutoRealm> ar;
+      EnterDebuggeeObjectRealm(cx, ar, fun);
+
+      result.set(fun->getAccessorNameForLazy(cx));
+      if (!result) {
+        return false;
+      }
+    }
+    cx->markAtom(result);
+    return true;
   }
 
   MOZ_ASSERT(isBoundFunction());
@@ -1683,7 +1709,6 @@ JSAtom* DebuggerObject::name(JSContext* cx) const {
   // this fails use "bound".
   Rooted<BoundFunctionObject*> bound(cx,
                                      &referent()->as<BoundFunctionObject>());
-  JSAtom* atom = nullptr;
   {
     Maybe<AutoRealm> ar;
     EnterDebuggeeObjectRealm(cx, ar, bound);
@@ -1692,30 +1717,40 @@ JSAtom* DebuggerObject::name(JSContext* cx) const {
     bool found;
     if (GetOwnPropertyPure(cx, bound, NameToId(cx->names().name), &v, &found) &&
         found && v.isString()) {
-      atom = AtomizeString(cx, v.toString());
-      if (!atom) {
-        return nullptr;
+      result.set(AtomizeString(cx, v.toString()));
+      if (!result) {
+        return false;
       }
     } else {
-      atom = cx->names().bound;
+      result.set(cx->names().bound);
     }
   }
 
-  cx->markAtom(atom);
-  return atom;
+  cx->markAtom(result);
+  return true;
 }
 
-JSAtom* DebuggerObject::displayName(JSContext* cx) const {
+bool DebuggerObject::displayName(JSContext* cx,
+                                 JS::MutableHandle<JSAtom*> result) const {
   if (isFunction()) {
-    JSAtom* atom = referent()->as<JSFunction>().displayAtom();
-    if (atom) {
-      cx->markAtom(atom);
+    {
+      JS::Rooted<JSFunction*> fun(cx, &referent()->as<JSFunction>());
+
+      Maybe<AutoRealm> ar;
+      EnterDebuggeeObjectRealm(cx, ar, fun);
+
+      if (!fun->getDisplayAtom(cx, result)) {
+        return false;
+      }
     }
-    return atom;
+    if (result) {
+      cx->markAtom(result);
+    }
+    return true;
   }
 
   MOZ_ASSERT(isBoundFunction());
-  return name(cx);
+  return name(cx, result);
 }
 
 JS::PromiseState DebuggerObject::promiseState() const {
@@ -2396,8 +2431,10 @@ Maybe<Completion> DebuggerObject::call(JSContext* cx,
 
   // Note whether we are in an evaluation that might invoke the OnNativeCall
   // hook, so that the JITs will be disabled.
-  AutoNoteDebuggerEvaluationWithOnNativeCallHook noteEvaluation(
-      cx, dbg->observesNativeCalls() ? dbg : nullptr);
+  Maybe<AutoNoteExclusiveDebuggerOnEval> noteEvaluation;
+  if (dbg->isExclusiveDebuggerOnEval()) {
+    noteEvaluation.emplace(cx, dbg);
+  }
 
   // Call the function.
   LeaveDebuggeeNoExecute nnx(cx);

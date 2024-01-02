@@ -12,18 +12,19 @@ describe("ASRouterParentProcessMessageHandler", () => {
     const router = new _ASRouter();
     [
       "addImpression",
-      "addPreviewEndpoint",
       "evaluateExpression",
       "forceAttribution",
       "forceWNPanel",
       "closeWNPanel",
       "forcePBWindow",
       "resetGroupsState",
+      "resetMessageState",
+      "resetScreenImpressions",
+      "editState",
     ].forEach(method => sandbox.stub(router, `${method}`).resolves());
     [
       "blockMessageById",
       "loadMessagesFromAllProviders",
-      "sendNewTabMessage",
       "sendTriggerMessage",
       "routeCFRMessage",
       "setMessageById",
@@ -214,32 +215,13 @@ describe("ASRouterParentProcessMessageHandler", () => {
         assert.deepEqual(result, { value: 1 });
       });
     });
-    describe("NEWTAB_MESSAGE_REQUEST action", () => {
-      it("default calls sendNewTabMessage and returns state", async () => {
-        const result = await handler.handleMessage(
-          msg.NEWTAB_MESSAGE_REQUEST,
-          {
-            stuff: {},
-          },
-          { id: 100, browser: { ownerGlobal: {} } }
-        );
-        assert.calledOnce(config.router.sendNewTabMessage);
-        assert.calledWith(config.router.sendNewTabMessage, {
-          stuff: {},
-          tabId: 100,
-          browser: { ownerGlobal: {} },
-        });
-        assert.deepEqual(result, { value: 1 });
-      });
-    });
     describe("ADMIN_CONNECT_STATE action", () => {
-      it("with endpoint url calls addPreviewEndpoint, loadMessagesFromAllProviders, and returns state", async () => {
+      it("with endpoint url calls loadMessagesFromAllProviders, and returns state", async () => {
         const result = await handler.handleMessage(msg.ADMIN_CONNECT_STATE, {
           endpoint: {
             url: "test",
           },
         });
-        assert.calledOnce(config.router.addPreviewEndpoint);
         assert.calledOnce(config.router.loadMessagesFromAllProviders);
         assert.deepEqual(result, { value: 1 });
       });
@@ -422,6 +404,24 @@ describe("ASRouterParentProcessMessageHandler", () => {
         assert.calledOnce(config.router.resetGroupsState);
         assert.calledOnce(config.router.loadMessagesFromAllProviders);
         assert.deepEqual(result, { value: 1 });
+      });
+    });
+    describe("RESET_MESSAGE_STATE action", () => {
+      it("default calls resetMessageState", () => {
+        handler.handleMessage(msg.RESET_MESSAGE_STATE);
+        assert.calledOnce(config.router.resetMessageState);
+      });
+    });
+    describe("RESET_SCREEN_IMPRESSIONS action", () => {
+      it("default calls resetScreenImpressions", () => {
+        handler.handleMessage(msg.RESET_SCREEN_IMPRESSIONS);
+        assert.calledOnce(config.router.resetScreenImpressions);
+      });
+    });
+    describe("EDIT_STATE action", () => {
+      it("default calls editState with correct args", () => {
+        handler.handleMessage(msg.EDIT_STATE, { property: "value" });
+        assert.calledWith(config.router.editState, "property", "value");
       });
     });
   });

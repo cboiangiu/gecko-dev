@@ -27,7 +27,7 @@ AddonTestUtils.createHttpServer({ hosts: ["pac.example.com"] });
 
 add_setup(async function () {
   // Bug 1646182: Force ExtensionPermissions to run in rkv mode, the legacy
-  // storage mode will run in xpcshell-legacy-ep.ini
+  // storage mode will run in xpcshell-legacy-ep.toml
   await ExtensionPermissions._uninit();
 
   Services.prefs.setBoolPref(
@@ -127,7 +127,7 @@ add_task(async function test_browser_settings() {
       proxyType: "none",
       autoConfigUrl: "",
       autoLogin: false,
-      proxyDNS: false,
+      proxyDNS: true,
       httpProxyAll: false,
       socksVersion: 5,
       passthrough: "",

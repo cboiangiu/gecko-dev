@@ -456,7 +456,7 @@ bool nsFrameMessageManager::GetParamsForMessage(JSContext* aCx,
       do_GetService(NS_CONSOLESERVICE_CONTRACTID));
   if (console) {
     nsAutoString filename;
-    uint32_t lineno = 0, column = 0;
+    uint32_t lineno = 0, column = 1;
     nsJSUtils::GetCallingLocation(aCx, filename, &lineno, &column);
     nsCOMPtr<nsIScriptError> error(
         do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
@@ -1403,8 +1403,7 @@ class nsAsyncMessageToSameProcessChild : public nsSameProcessAsyncMessageBase,
                                          public Runnable {
  public:
   nsAsyncMessageToSameProcessChild()
-      : nsSameProcessAsyncMessageBase(),
-        mozilla::Runnable("nsAsyncMessageToSameProcessChild") {}
+      : mozilla::Runnable("nsAsyncMessageToSameProcessChild") {}
   NS_IMETHOD Run() override {
     nsFrameMessageManager* ppm =
         nsFrameMessageManager::GetChildProcessManager();
@@ -1498,7 +1497,7 @@ class nsAsyncMessageToSameProcessParent
     : public nsSameProcessAsyncMessageBase,
       public SameProcessMessageQueue::Runnable {
  public:
-  nsAsyncMessageToSameProcessParent() : nsSameProcessAsyncMessageBase() {}
+  nsAsyncMessageToSameProcessParent() = default;
   nsresult HandleMessage() override {
     nsFrameMessageManager* ppm =
         nsFrameMessageManager::sSameProcessParentManager;

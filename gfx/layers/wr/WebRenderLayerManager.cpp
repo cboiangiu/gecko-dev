@@ -259,9 +259,6 @@ bool WebRenderLayerManager::EndEmptyTransaction(EndTransactionFlags aFlags) {
 
   mDisplayItemCache.SkipWaitingForPartialDisplayList();
 
-  // Since we don't do repeat transactions right now, just set the time
-  mAnimationReadyTime = TimeStamp::Now();
-
   // Don't block on hidden windows on Linux as it may block all rendering.
   const bool throttle = mWidget->IsMapped();
   mLatestTransactionId = mTransactionIdAllocator->GetTransactionId(throttle);
@@ -337,9 +334,6 @@ void WebRenderLayerManager::EndTransactionWithoutLayer(
   AUTO_PROFILER_TRACING_MARKER("Paint", "WrDisplayList", GRAPHICS);
 
   auto clearTarget = MakeScopeExit([&] { mTarget = nullptr; });
-
-  // Since we don't do repeat transactions right now, just set the time
-  mAnimationReadyTime = TimeStamp::Now();
 
   WrBridge()->BeginTransaction();
 
@@ -526,7 +520,10 @@ void WebRenderLayerManager::MakeSnapshotIfRequired(LayoutDeviceIntSize aSize) {
     return;
   }
 
-  texture->InitIPDLActor(WrBridge());
+  // The other side knows our ContentParentId and WebRenderBridgeChild will
+  // ignore the one provided here in favour of what WebRenderBridgeParent
+  // already has.
+  texture->InitIPDLActor(WrBridge(), dom::ContentParentId());
   if (!texture->GetIPDLActor()) {
     return;
   }

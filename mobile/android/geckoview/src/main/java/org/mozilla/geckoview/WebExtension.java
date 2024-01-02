@@ -1571,6 +1571,9 @@ public class WebExtension {
       /** The extension is incompatible. */
       public static final int ERROR_INCOMPATIBLE = -11;
 
+      /** The extension type is not supported by the platform. */
+      public static final int ERROR_UNSUPPORTED_ADDON_TYPE = -12;
+
       /** The extension install was canceled. */
       public static final int ERROR_USER_CANCELED = -100;
 
@@ -1624,6 +1627,7 @@ public class WebExtension {
           ErrorCodes.ERROR_INCOMPATIBLE,
           ErrorCodes.ERROR_USER_CANCELED,
           ErrorCodes.ERROR_POSTPONED,
+          ErrorCodes.ERROR_UNSUPPORTED_ADDON_TYPE,
         })
     public @interface Codes {}
 
@@ -1979,6 +1983,9 @@ public class WebExtension {
      */
     public final boolean temporary;
 
+    /** The link to the AMO detail page for this extension. See `AddonWrapper.amoListingURL`. */
+    public final @Nullable String amoListingUrl;
+
     /** Override for testing. */
     protected MetaData() {
       icon = null;
@@ -2006,6 +2013,7 @@ public class WebExtension {
       reviewUrl = null;
       updateDate = null;
       downloadUrl = null;
+      amoListingUrl = null;
     }
 
     /* package */ MetaData(final GeckoBundle bundle) {
@@ -2032,6 +2040,7 @@ public class WebExtension {
       reviewUrl = bundle.getString("reviewURL");
       updateDate = bundle.getString("updateDate");
       downloadUrl = bundle.getString("downloadUrl");
+      amoListingUrl = bundle.getString("amoListingURL");
 
       final int signedState = bundle.getInt("signedState", SignedStateFlags.UNKNOWN);
       if (signedState <= SignedStateFlags.LAST) {

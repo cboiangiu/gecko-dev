@@ -17,6 +17,7 @@ const CM_PREF = "privacy.trackingprotection.cryptomining.enabled";
 const FP_PREF = "privacy.trackingprotection.fingerprinting.enabled";
 const TP_PREF = "privacy.trackingprotection.enabled";
 const CB_PREF = "network.cookie.cookieBehavior";
+const GPC_PREF = "privacy.globalprivacycontrol.enabled";
 
 const PREF_REPORT_BREAKAGE_URL = "browser.contentblocking.reportBreakage.url";
 
@@ -33,12 +34,18 @@ let { Preferences } = ChromeUtils.importESModule(
 add_setup(async function () {
   await UrlClassifierTestUtils.addTestTrackers();
 
+  // Disable Report Broken Site, as it hides "Site not working?" when enabled.
+  await SpecialPowers.pushPrefEnv({
+    set: [["ui.new-webcompat-reporter.enabled", false]],
+  });
+
   registerCleanupFunction(() => {
     // Clear prefs that are touched in this test again for sanity.
     Services.prefs.clearUserPref(TP_PREF);
     Services.prefs.clearUserPref(CB_PREF);
     Services.prefs.clearUserPref(FP_PREF);
     Services.prefs.clearUserPref(CM_PREF);
+    Services.prefs.clearUserPref(GPC_PREF);
     Services.prefs.clearUserPref(PREF_REPORT_BREAKAGE_URL);
 
     UrlClassifierTestUtils.cleanupTestTrackers();
@@ -63,6 +70,7 @@ add_setup(async function () {
         "urlclassifier.features.cryptomining.annotate.blacklistHosts",
         "cryptomining.example.com",
       ],
+      ["privacy.globalprivacycontrol.enabled", true],
     ],
   });
 });
@@ -338,6 +346,7 @@ async function testReportBreakageSubmit(url, tags, error, hasException) {
         "privacy.restrict3rdpartystorage.expiration",
         "privacy.trackingprotection.fingerprinting.enabled",
         "privacy.trackingprotection.cryptomining.enabled",
+        "privacy.globalprivacycontrol.enabled",
       ];
       let prefsBody = "";
 

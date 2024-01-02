@@ -81,7 +81,7 @@ LazyLogModule gSenderLog("RTCRtpSender");
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(RTCRtpSender)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RTCRtpSender)
-  // We do not do anything here, we wait for BreakCycles to be called
+  tmp->Unlink();
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RTCRtpSender)
@@ -1320,6 +1320,12 @@ void RTCRtpSender::BreakCycles() {
   mDtmf = nullptr;
 }
 
+void RTCRtpSender::Unlink() {
+  if (mTransceiver) {
+    mTransceiver->Unlink();
+  }
+}
+
 void RTCRtpSender::UpdateTransport() {
   MOZ_ASSERT(NS_IsMainThread());
   if (!mHaveSetupTransport) {
@@ -1537,6 +1543,37 @@ Maybe<RTCRtpSender::VideoConfig> RTCRtpSender::GetNewVideoConfig() {
     }
   }
 
+  if (!mHaveLoggedUlpfecInfo) {
+    bool ulpfecNegotiated = false;
+    for (const auto& codec : configs) {
+      if (nsCRT::strcasestr(codec.mName.c_str(), "ulpfec")) {
+        ulpfecNegotiated = true;
+      }
+    }
+    mozilla::glean::codec_stats::ulpfec_negotiated
+        .Get(ulpfecNegotiated ? "negotiated"_ns : "not_negotiated"_ns)
+        .Add(1);
+    mHaveLoggedUlpfecInfo = true;
+  }
+
+  // Log codec information we are tracking
+  if (!mHaveLoggedOtherFec &&
+      !GetJsepTransceiver().mSendTrack.GetFecCodecName().empty()) {
+    mozilla::glean::codec_stats::other_fec_signaled
+        .Get(nsDependentCString(
+            GetJsepTransceiver().mSendTrack.GetFecCodecName().c_str()))
+        .Add(1);
+    mHaveLoggedOtherFec = true;
+  }
+  if (!mHaveLoggedVideoPreferredCodec &&
+      !GetJsepTransceiver().mSendTrack.GetVideoPreferredCodec().empty()) {
+    mozilla::glean::codec_stats::video_preferred_codec
+        .Get(nsDependentCString(
+            GetJsepTransceiver().mSendTrack.GetVideoPreferredCodec().c_str()))
+        .Add(1);
+    mHaveLoggedVideoPreferredCodec = true;
+  }
+
   newConfig.mVideoRtpRtcpConfig = Some(details.GetRtpRtcpConfig());
 
   if (newConfig == oldConfig) {
@@ -1610,6 +1647,15 @@ Maybe<RTCRtpSender::AudioConfig> RTCRtpSender::GetNewAudioConfig() {
     }
 
     newConfig.mAudioCodec = Some(sendCodec);
+  }
+
+  if (!mHaveLoggedAudioPreferredCodec &&
+      !GetJsepTransceiver().mSendTrack.GetAudioPreferredCodec().empty()) {
+    mozilla::glean::codec_stats::audio_preferred_codec
+        .Get(nsDependentCString(
+            GetJsepTransceiver().mSendTrack.GetAudioPreferredCodec().c_str()))
+        .Add(1);
+    mHaveLoggedAudioPreferredCodec = true;
   }
 
   if (newConfig == oldConfig) {

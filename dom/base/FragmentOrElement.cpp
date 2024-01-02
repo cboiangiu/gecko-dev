@@ -559,8 +559,7 @@ size_t nsIContent::nsExtendedContentSlots::SizeOfExcludingThis(
   return 0;
 }
 
-FragmentOrElement::nsDOMSlots::nsDOMSlots()
-    : nsIContent::nsContentSlots(), mDataset(nullptr) {
+FragmentOrElement::nsDOMSlots::nsDOMSlots() : mDataset(nullptr) {
   MOZ_COUNT_CTOR(nsDOMSlots);
 }
 
@@ -767,7 +766,7 @@ void nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
 
   // Don't propagate mouseover and mouseout events when mouse is moving
   // inside chrome access only content.
-  bool isAnonForEvents = IsRootOfChromeAccessOnlySubtree();
+  const bool isAnonForEvents = IsRootOfChromeAccessOnlySubtree();
   aVisitor.mRootOfClosedTree = isAnonForEvents;
   if ((aVisitor.mEvent->mMessage == eMouseOver ||
        aVisitor.mEvent->mMessage == eMouseOut ||
@@ -779,7 +778,7 @@ void nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
       // a shadow root to a shadow root host.
       ((this == aVisitor.mEvent->mOriginalTarget && !ChromeOnlyAccess()) ||
        isAnonForEvents)) {
-    nsCOMPtr<nsIContent> relatedTarget = nsIContent::FromEventTargetOrNull(
+    nsIContent* relatedTarget = nsIContent::FromEventTargetOrNull(
         aVisitor.mEvent->AsMouseEvent()->mRelatedTarget);
     if (relatedTarget && relatedTarget->OwnerDoc() == OwnerDoc()) {
       // If current target is anonymous for events or we know that related
@@ -807,9 +806,8 @@ void nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
             }
             if (anonOwner == anonOwnerRelated) {
 #ifdef DEBUG_smaug
-              nsCOMPtr<nsIContent> originalTarget =
-                  nsIContent::FromEventTargetOrNull(
-                      aVisitor.mEvent->mOriginalTarget);
+              nsIContent* originalTarget = nsIContent::FromEventTargetOrNull(
+                  aVisitor.mEvent->mOriginalTarget);
               nsAutoString ot, ct, rt;
               if (originalTarget) {
                 originalTarget->NodeInfo()->NameAtom()->ToString(ot);
@@ -854,23 +852,29 @@ void nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
   HTMLSlotElement* slot = GetAssignedSlot();
   nsIContent* parent = slot ? slot : GetParent();
 
-  // Event may need to be retargeted if this is the root of a native
-  // anonymous content subtree or event is dispatched somewhere inside XBL.
+  // Event may need to be retargeted if this is the root of a native anonymous
+  // content subtree.
   if (isAnonForEvents) {
 #ifdef DEBUG
     // If a DOM event is explicitly dispatched using node.dispatchEvent(), then
     // all the events are allowed even in the native anonymous content..
-    nsCOMPtr<nsIContent> t =
+    nsIContent* t =
         nsIContent::FromEventTargetOrNull(aVisitor.mEvent->mOriginalTarget);
     NS_ASSERTION(!t || !t->ChromeOnlyAccess() ||
                      aVisitor.mEvent->mClass != eMutationEventClass ||
                      aVisitor.mDOMEvent,
                  "Mutation event dispatched in native anonymous content!?!");
 #endif
+    if (aVisitor.mEvent->mClass == eTransitionEventClass ||
+        aVisitor.mEvent->mClass == eAnimationEventClass) {
+      // Event should not propagate to non-anon content.
+      aVisitor.SetParentTarget(nullptr, false);
+      return;
+    }
     aVisitor.mEventTargetAtParent = parent;
   } else if (parent && aVisitor.mOriginalTargetIsInAnon) {
-    nsCOMPtr<nsIContent> content(
-        nsIContent::FromEventTargetOrNull(aVisitor.mEvent->mTarget));
+    nsIContent* content =
+        nsIContent::FromEventTargetOrNull(aVisitor.mEvent->mTarget);
     if (content &&
         content->GetClosestNativeAnonymousSubtreeRootParentOrHost() == parent) {
       aVisitor.mEventTargetAtParent = parent;
@@ -1028,18 +1032,22 @@ void nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
   }
 }
 
-bool nsIContent::IsFocusable(int32_t* aTabIndex, bool aWithMouse) {
-  bool focusable = IsFocusableInternal(aTabIndex, aWithMouse);
-  // Ensure that the return value and aTabIndex are consistent in the case
-  // we're in userfocusignored context.
-  if (focusable || (aTabIndex && *aTabIndex != -1)) {
-    return focusable;
+Element* nsIContent::GetAutofocusDelegate(bool aWithMouse) const {
+  for (nsINode* node = GetFirstChild(); node; node = node->GetNextNode(this)) {
+    auto* descendant = Element::FromNode(*node);
+    if (!descendant || !descendant->GetBoolAttr(nsGkAtoms::autofocus)) {
+      continue;
+    }
+
+    nsIFrame* frame = descendant->GetPrimaryFrame();
+    if (frame && frame->IsFocusable(aWithMouse)) {
+      return descendant;
+    }
   }
-  return false;
+  return nullptr;
 }
 
-Element* nsIContent::GetFocusDelegate(bool aWithMouse,
-                                      bool aAutofocusOnly) const {
+Element* nsIContent::GetFocusDelegate(bool aWithMouse) const {
   const nsIContent* whereToLook = this;
   if (ShadowRoot* root = GetShadowRoot()) {
     if (!root->DelegatesFocus()) {
@@ -1050,7 +1058,7 @@ Element* nsIContent::GetFocusDelegate(bool aWithMouse,
     whereToLook = root;
   }
 
-  auto IsFocusable = [&](Element* aElement) -> nsIFrame::Focusable {
+  auto IsFocusable = [&](Element* aElement) -> Focusable {
     nsIFrame* frame = aElement->GetPrimaryFrame();
 
     if (!frame) {
@@ -1070,16 +1078,13 @@ Element* nsIContent::GetFocusDelegate(bool aWithMouse,
 
     const bool autofocus = el->GetBoolAttr(nsGkAtoms::autofocus);
 
-    if (aAutofocusOnly && !autofocus) {
-      continue;
-    }
     if (autofocus) {
       if (IsFocusable(el)) {
         // Found an autofocus candidate.
         return el;
       }
     } else if (!potentialFocus) {
-      if (nsIFrame::Focusable focusable = IsFocusable(el)) {
+      if (Focusable focusable = IsFocusable(el)) {
         if (IsHTMLElement(nsGkAtoms::dialog)) {
           if (focusable.mTabIndex >= 0) {
             // If focusTarget is a dialog element and descendant is sequentially
@@ -1119,11 +1124,9 @@ Element* nsIContent::GetFocusDelegate(bool aWithMouse,
   return potentialFocus;
 }
 
-bool nsIContent::IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) {
-  if (aTabIndex) {
-    *aTabIndex = -1;  // Default, not tabbable
-  }
-  return false;
+Focusable nsIContent::IsFocusableWithoutStyle(bool aWithMouse) {
+  // Default, not tabbable
+  return {};
 }
 
 void nsIContent::SetAssignedSlot(HTMLSlotElement* aSlot) {

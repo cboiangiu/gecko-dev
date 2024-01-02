@@ -150,6 +150,14 @@ add_task(async function test_failing() {
 });
 """
 
+ADD_TASK_REJECTED_UNDEFINED = """
+function run_test() { run_next_test(); }
+
+add_task(async function test_failing() {
+  await Promise.reject();
+});
+"""
+
 ADD_TASK_FAILURE_INSIDE = """
 function run_test() { run_next_test(); }
 
@@ -498,26 +506,26 @@ class XPCShellTestsTests(unittest.TestCase):
         """
         testlines = []
         for t in tests:
-            testlines.append("[%s]" % (t if isinstance(t, six.string_types) else t[0]))
+            testlines.append(
+                '["%s"]' % (t if isinstance(t, six.string_types) else t[0])
+            )
             if isinstance(t, tuple):
                 testlines.extend(t[1:])
         prefslines = []
         for p in prefs:
             # Append prefs lines as indented inside "prefs=" manifest option.
-            prefslines.append("  %s" % p)
+            prefslines.append('  "%s",' % p)
 
-        self.manifest = self.writeFile(
-            "xpcshell.ini",
-            """
+        val = """
 [DEFAULT]
-head =
-tail =
-prefs =
+head = ""
+tail = ""
+prefs = [
 """
-            + "\n".join(prefslines)
-            + "\n"
-            + "\n".join(testlines),
-        )
+        val += "\n".join(prefslines)
+        val += "]\n"
+        val += "\n".join(testlines)
+        self.manifest = self.writeFile("xpcshell.toml", val)
 
     def assertTestResult(self, expected, shuffle=False, verbose=False, headless=False):
         """
@@ -1082,6 +1090,21 @@ add_test({
         self.assertEqual(0, self.x.passCount)
         self.assertEqual(1, self.x.failCount)
 
+    def testAddTaskTestRejectedUndefined(self):
+        """
+        Ensure rejected task with undefined reason reports as failure and does not hang.
+        """
+        self.writeFile(
+            "test_add_task_rejected_undefined.js", ADD_TASK_REJECTED_UNDEFINED
+        )
+        self.writeManifest(["test_add_task_rejected_undefined.js"])
+
+        self.assertTestResult(False)
+        self.assertEqual(1, self.x.testCount)
+        self.assertEqual(0, self.x.passCount)
+        self.assertEqual(1, self.x.failCount)
+        self.assertNotInLog("TEST-UNEXPECTED-TIMEOUT")
+
     def testAddTaskTestFailureInside(self):
         """
         Ensure tests inside task are reported as failures.
@@ -1143,7 +1166,7 @@ add_test({
         Ensure that missing head file results in fatal failure.
         """
         self.writeFile("test_basic.js", SIMPLE_PASSING_TEST)
-        self.writeManifest([("test_basic.js", "head = missing.js")])
+        self.writeManifest([("test_basic.js", 'head = "missing.js"')])
 
         raised = False
 

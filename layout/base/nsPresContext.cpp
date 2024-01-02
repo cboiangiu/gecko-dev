@@ -27,7 +27,7 @@
 #include "nsCSSFrameConstructor.h"
 #include "nsDocShell.h"
 #include "nsIConsoleService.h"
-#include "nsIContentViewer.h"
+#include "nsIDocumentViewer.h"
 #include "nsPIDOMWindow.h"
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/MediaFeatureChange.h"
@@ -89,6 +89,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimelineManager.h"
 #include "mozilla/dom/Performance.h"
+#include "mozilla/dom/PerformanceMainThread.h"
 #include "mozilla/dom/PerformanceTiming.h"
 #include "mozilla/dom/PerformancePaintTiming.h"
 #include "mozilla/layers/APZThreadUtils.h"
@@ -212,6 +213,11 @@ void nsPresContext::ForceReflowForFontInfoUpdate(bool aNeedsReframe) {
   }
 
   FlushFontCache();
+
+  if (!mPresShell) {
+    // RebuildAllStyleData won't do anything without mPresShell.
+    return;
+  }
 
   nsChangeHint changeHint =
       aNeedsReframe ? nsChangeHint_ReconstructFrame : NS_STYLE_HINT_REFLOW;
@@ -528,6 +534,10 @@ void nsPresContext::PreferenceChanged(const char* aPrefName, void* aSelf) {
 }
 
 void nsPresContext::PreferenceChanged(const char* aPrefName) {
+  if (!mPresShell) {
+    return;
+  }
+
   nsDependentCString prefName(aPrefName);
   if (prefName.EqualsLiteral("layout.css.dpi") ||
       prefName.EqualsLiteral("layout.css.devPixelsPerPx")) {
@@ -536,35 +546,30 @@ void nsPresContext::PreferenceChanged(const char* aPrefName) {
     // other documents, and we'd need to save the return value of the first call
     // for all of them.
     Unused << mDeviceContext->CheckDPIChange();
-    if (mPresShell) {
-      OwningNonNull<mozilla::PresShell> presShell(*mPresShell);
-      // Re-fetch the view manager's window dimensions in case there's a
-      // deferred resize which hasn't affected our mVisibleArea yet
-      nscoord oldWidthAppUnits, oldHeightAppUnits;
-      RefPtr<nsViewManager> vm = presShell->GetViewManager();
-      if (!vm) {
-        return;
-      }
-      vm->GetWindowDimensions(&oldWidthAppUnits, &oldHeightAppUnits);
-      float oldWidthDevPixels = oldWidthAppUnits / oldAppUnitsPerDevPixel;
-      float oldHeightDevPixels = oldHeightAppUnits / oldAppUnitsPerDevPixel;
-
-      UIResolutionChangedInternal();
-
-      nscoord width = NSToCoordRound(oldWidthDevPixels * AppUnitsPerDevPixel());
-      nscoord height =
-          NSToCoordRound(oldHeightDevPixels * AppUnitsPerDevPixel());
-      vm->SetWindowDimensions(width, height);
+    OwningNonNull<mozilla::PresShell> presShell(*mPresShell);
+    // Re-fetch the view manager's window dimensions in case there's a
+    // deferred resize which hasn't affected our mVisibleArea yet
+    nscoord oldWidthAppUnits, oldHeightAppUnits;
+    RefPtr<nsViewManager> vm = presShell->GetViewManager();
+    if (!vm) {
+      return;
     }
+    vm->GetWindowDimensions(&oldWidthAppUnits, &oldHeightAppUnits);
+    float oldWidthDevPixels = oldWidthAppUnits / oldAppUnitsPerDevPixel;
+    float oldHeightDevPixels = oldHeightAppUnits / oldAppUnitsPerDevPixel;
+
+    UIResolutionChangedInternal();
+
+    nscoord width = NSToCoordRound(oldWidthDevPixels * AppUnitsPerDevPixel());
+    nscoord height = NSToCoordRound(oldHeightDevPixels * AppUnitsPerDevPixel());
+    vm->SetWindowDimensions(width, height);
     return;
   }
 
   if (StringBeginsWith(prefName, "browser.viewport."_ns) ||
       StringBeginsWith(prefName, "font.size.inflation."_ns) ||
       prefName.EqualsLiteral("dom.meta-viewport.enabled")) {
-    if (mPresShell) {
-      mPresShell->MaybeReflowForInflationScreenSizeChange();
-    }
+    mPresShell->MaybeReflowForInflationScreenSizeChange();
   }
 
   auto changeHint = nsChangeHint{0};
@@ -613,18 +618,6 @@ void nsPresContext::PreferenceChanged(const char* aPrefName) {
   if (prefName.EqualsLiteral(
           "layout.css.text-transform.uppercase-eszett.enabled")) {
     changeHint |= NS_STYLE_HINT_REFLOW;
-  }
-
-  // We will end up calling InvalidatePreferenceSheets one from each pres
-  // context, but all it's doing is clearing its cached sheet pointers, so it
-  // won't be wastefully recreating the sheet multiple times.
-  //
-  // The first pres context that flushes will be the one to cause the
-  // reconstruction of the pref style sheet via the UpdatePreferenceStyles call
-  // in FlushPendingNotifications.
-  if (GlobalStyleSheetCache::AffectedByPref(prefName)) {
-    restyleHint |= RestyleHint::RestyleSubtree();
-    GlobalStyleSheetCache::InvalidatePreferenceSheets();
   }
 
   if (PreferenceSheet::AffectedByPref(prefName)) {
@@ -1244,7 +1237,14 @@ bool nsPresContext::UserInputEventsAllowed() {
   }
 
   // Special document
-  if (Document()->IsInitialDocument()) {
+  if (Document()->IsEverInitialDocument()) {
+    return true;
+  }
+
+  if (mRefreshDriver->IsThrottled()) {
+    MOZ_ASSERT(!mPresShell->IsVisible());
+    // This implies that the BC is not visibile and users can't
+    // interact with it, so we are okay with handling user inputs here.
     return true;
   }
 
@@ -1300,6 +1300,13 @@ void nsPresContext::MaybeIncreaseMeasuredTicksSinceLoading() {
     }
   }
 }
+
+bool nsPresContext::NeedsMoreTicksForUserInput() const {
+  MOZ_ASSERT(IsRoot());
+  return mMeasuredTicksSinceLoading <
+         StaticPrefs::dom_input_events_security_minNumTicks();
+}
+
 // Helper function for setting Anim Mode on image
 static void SetImgAnimModeOnImgReq(imgIRequest* aImgReq, uint16_t aMode) {
   if (aImgReq) {
@@ -1618,7 +1625,7 @@ ColorScheme nsPresContext::DefaultBackgroundColorScheme() const {
   dom::Document* doc = Document();
   // Use a dark background for top-level about:blank that is inaccessible to
   // content JS.
-  if (doc->IsContentInaccessibleAboutBlank()) {
+  if (doc->IsLikelyContentInaccessibleTopLevelAboutBlank()) {
     return doc->PreferredColorScheme(Document::IgnoreRFP::Yes);
   }
   // Prefer the root color-scheme (since generally the default canvas
@@ -1851,7 +1858,7 @@ void nsPresContext::UIResolutionChanged() {
     nsCOMPtr<nsIRunnable> ev =
         NewRunnableMethod("nsPresContext::UIResolutionChangedInternal", this,
                           &nsPresContext::UIResolutionChangedInternal);
-    nsresult rv = Document()->Dispatch(TaskCategory::Other, ev.forget());
+    nsresult rv = Document()->Dispatch(ev.forget());
     if (NS_SUCCEEDED(rv)) {
       mPendingUIResolutionChanged = true;
     }
@@ -2123,14 +2130,14 @@ bool nsPresContext::EnsureVisible() {
   if (!docShell) {
     return false;
   }
-  nsCOMPtr<nsIContentViewer> cv;
-  docShell->GetContentViewer(getter_AddRefs(cv));
+  nsCOMPtr<nsIDocumentViewer> viewer;
+  docShell->GetDocViewer(getter_AddRefs(viewer));
   // Make sure this is the content viewer we belong with
-  if (!cv || cv->GetPresContext() != this) {
+  if (!viewer || viewer->GetPresContext() != this) {
     return false;
   }
   // OK, this is us.  We want to call Show() on the content viewer.
-  nsresult result = cv->Show();
+  nsresult result = viewer->Show();
   return NS_SUCCEEDED(result);
 }
 
@@ -2547,7 +2554,7 @@ already_AddRefed<nsITimer> nsPresContext::CreateTimer(
   nsCOMPtr<nsITimer> timer;
   NS_NewTimerWithFuncCallback(getter_AddRefs(timer), aCallback, this, aDelay,
                               nsITimer::TYPE_ONE_SHOT, aName,
-                              Document()->EventTargetFor(TaskCategory::Other));
+                              GetMainThreadSerialEventTarget());
   return timer.forget();
 }
 
@@ -2779,8 +2786,16 @@ void nsPresContext::NotifyNonBlankPaint() {
   }
 }
 
+bool nsPresContext::HasStoppedGeneratingLCP() const {
+  if (auto* perf = GetPerformanceMainThread()) {
+    return perf->HasDispatchedInputEvent() || perf->HasDispatchedScrollEvent();
+  }
+
+  return true;
+}
+
 void nsPresContext::NotifyContentfulPaint() {
-  if (mHadFirstContentfulPaint) {
+  if (mHadFirstContentfulPaint && HasStoppedGeneratingLCP()) {
     return;
   }
   nsRootPresContext* rootPresContext = GetRootPresContext();
@@ -2802,19 +2817,24 @@ void nsPresContext::NotifyContentfulPaint() {
     }
     return;
   }
-  mHadFirstContentfulPaint = true;
-  mFirstContentfulPaintTransactionId =
-      Some(rootPresContext->mRefreshDriver->LastTransactionId().Next());
-  if (nsPIDOMWindowInner* innerWindow = mDocument->GetInnerWindow()) {
-    if (Performance* perf = innerWindow->GetPerformance()) {
+
+  if (!mHadFirstContentfulPaint) {
+    mHadFirstContentfulPaint = true;
+    mFirstContentfulPaintTransactionId =
+        Some(rootPresContext->mRefreshDriver->LastTransactionId().Next());
+  }
+
+  if (auto* perf = GetPerformanceMainThread()) {
+    mMarkPaintTimingStart = TimeStamp::Now();
+    MOZ_ASSERT(rootPresContext->RefreshDriver()->IsInRefresh(),
+               "We should only notify contentful paint during refresh "
+               "driver ticks");
+    if (!perf->HadFCPTimingEntry()) {
       TimeStamp nowTime = rootPresContext->RefreshDriver()->MostRecentRefresh(
           /* aEnsureTimerStarted */ false);
       MOZ_ASSERT(!nowTime.IsNull(),
                  "Most recent refresh timestamp should exist since we are in "
                  "a refresh driver tick");
-      MOZ_ASSERT(rootPresContext->RefreshDriver()->IsInRefresh(),
-                 "We should only notify contentful paint during refresh "
-                 "driver ticks");
       RefPtr<PerformancePaintTiming> paintTiming = new PerformancePaintTiming(
           perf, u"first-contentful-paint"_ns, nowTime);
       perf->SetFCPTimingEntry(paintTiming);
@@ -2831,12 +2851,15 @@ void nsPresContext::NotifyContentfulPaint() {
               nsContentUtils::TruncatedURLForDisplay(docURI).get());
           PROFILER_MARKER_TEXT(
               "FirstContentfulPaint", DOM,
-              MarkerOptions(MarkerTiming::Interval(navigationStart, nowTime),
-                            MarkerInnerWindowId(innerWindow->WindowID())),
+              MarkerOptions(
+                  MarkerTiming::Interval(navigationStart, nowTime),
+                  MarkerInnerWindowId(mDocument->GetInnerWindow()->WindowID())),
               marker);
         }
       }
     }
+
+    perf->ProcessElementTiming();
   }
 }
 
@@ -3048,6 +3071,21 @@ void nsPresContext::SetSafeAreaInsets(const ScreenIntMargin& aSafeAreaInsets) {
                                RestyleHint::RecascadeSubtree());
 }
 
+PerformanceMainThread* nsPresContext::GetPerformanceMainThread() const {
+  if (nsPIDOMWindowInner* innerWindow = mDocument->GetInnerWindow()) {
+    if (auto* perf = static_cast<PerformanceMainThread*>(
+            innerWindow->GetPerformance())) {
+      return perf;
+    }
+  }
+  return nullptr;
+}
+
+void nsPresContext::UpdateHiddenByContentVisibilityForAnimations() {
+  mDocument->UpdateHiddenByContentVisibilityForAnimations();
+  TimelineManager()->UpdateHiddenByContentVisibilityForAnimations();
+}
+
 #ifdef DEBUG
 
 void nsPresContext::ValidatePresShellAndDocumentReleation() const {
@@ -3065,8 +3103,7 @@ nsRootPresContext::nsRootPresContext(dom::Document* aDocument,
 void nsRootPresContext::AddWillPaintObserver(nsIRunnable* aRunnable) {
   if (!mWillPaintFallbackEvent.IsPending()) {
     mWillPaintFallbackEvent = new RunWillPaintObservers(this);
-    Document()->Dispatch(TaskCategory::Other,
-                         do_AddRef(mWillPaintFallbackEvent));
+    Document()->Dispatch(do_AddRef(mWillPaintFallbackEvent));
   }
   mWillPaintObservers.AppendElement(aRunnable);
 }

@@ -15,9 +15,9 @@ panel {
   min-width: 1px;
   --panel-background: Menu;
   --panel-color: MenuText;
-  --panel-padding-block: 0;
+  --panel-padding-block: 4px;
   --panel-padding: var(--panel-padding-block) 0;
-  --panel-border-radius: 0;
+  --panel-border-radius: 4px;
   --panel-border-color: ThreeDShadow;
   --panel-width: initial;
 
@@ -29,16 +29,11 @@ panel {
 
   @media (-moz-platform: linux) {
     --panel-border-radius: 8px;
-    --panel-padding-block: max(0px, var(--panel-border-radius) / 2 - 1px);
+    --panel-padding-block: 3px;
 
     @media (prefers-contrast) {
       --panel-border-color: color-mix(in srgb, currentColor 60%, transparent);
     }
-  }
-
-  @media (-moz-platform: windows) {
-    --panel-border-radius: 4px;
-    --panel-padding-block: 4px;
   }
 
   @media (-moz-platform: linux) or (-moz-platform: windows) {
@@ -57,13 +52,14 @@ panel {
     background-color: Menu;
     --panel-background: none;
     --panel-border-color: transparent;
+    /* This should be kept in sync with GetMenuMaskImage() */
+    --panel-border-radius: 6px;
   }
 
   &::part(content) {
     display: flex;
     box-sizing: border-box;
 
-    -moz-font-smoothing-background-color: var(--panel-background, -moz-mac-menupopup);
     padding: var(--panel-padding);
     color: var(--panel-color);
     background: var(--panel-background);
@@ -80,6 +76,8 @@ panel {
      * causing overflow, see bug 1846050 */
     max-height: round(up, 100% - 2 * var(--panel-shadow-margin), 1px);
     max-width: round(up, 100% - 2 * var(--panel-shadow-margin), 1px);
+
+    overflow: clip; /* Don't let panel content overflow the border */
   }
 
   &[orient=vertical]::part(content) {
@@ -94,47 +92,29 @@ panel {
 
     &.panel-no-padding::part(content) {
       padding: 0;
-      overflow: hidden; /* Don't let panel content overflow the border */
-    }
-
-    @media (-moz-platform: macos) {
-      &::part(content) {
-        /* FIXME: why? */
-        margin: 1px;
-      }
     }
   }
 }
 
-@media (-moz-platform: linux) or (-moz-platform: windows) {
-  menupopup {
-    /* Also apply the padding in the inline axis for menus */
-    --panel-padding: var(--panel-padding-block);
+menupopup {
+  /* Also apply the padding in the inline axis for menus */
+  --panel-padding: var(--panel-padding-block);
+
+  @media (-moz-platform: windows) {
+    > menu,
+    > menuitem {
+      padding-block: 0.5em;
+      padding-inline-start: 1em;
+    }
   }
-  menupopup > menu > menupopup {
-    /* Vertically align nested menupopups: the shadow plus the top padding */
-    margin-top: calc(-1 * (var(--panel-shadow-margin) + var(--panel-padding-block)));
+
+  > menu > menupopup {
+    /* Vertically align nested menupopups: the shadow plus the top padding plus top border */
+    margin-top: calc(-1 * (var(--panel-shadow-margin) + var(--panel-padding-block) + 1px));
   }
 }
 
-@media (-moz-platform: macos) {
-  menupopup {
-    --panel-padding-block: 4px;
-  }
-  menupopup > menu > menupopup {
-    margin-top: -4px;
-  }
-}
-
-@media (-moz-platform: windows) {
-  menupopup > menuitem,
-  menupopup > menu {
-    padding-block: 0.5em;
-    padding-inline-start: 1em;
-  }
-}
-
-/* rules for popups associated with menulists */
+/* Rules for popups associated with menulists */
 menulist > menupopup {
   min-width: 0;
 

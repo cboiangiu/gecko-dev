@@ -323,6 +323,14 @@
 - name: WasmRefIsSubtypeOfAbstractAndBranch
   gen_boilerplate: false
 
+- name: WasmNewStructObject
+  mir_op: true
+  operands:
+    instance: WordSized
+    typeDefData: WordSized
+  result_type: WordSized
+  num_temps: 2
+
 - name: WasmReinterpret
   gen_boilerplate: false
 
@@ -681,6 +689,16 @@
     input: WordSized
   arguments:
     constant: JSLinearString*
+  mir_op: Compare
+
+- name: CompareSSingle
+  result_type: WordSized
+  operands:
+    input: WordSized
+  arguments:
+    jsop: JSOp
+    constant: JSLinearString*
+  num_temps: 1
   mir_op: Compare
 
 - name: CompareBigInt
@@ -1866,6 +1884,20 @@
   call_instruction: true
   mir_op: true
 
+- name: ObjectKeys
+  result_type: WordSized
+  operands:
+    object: WordSized
+  num_temps: 0
+  call_instruction: true
+
+- name: ObjectKeysLength
+  result_type: WordSized
+  operands:
+    object: WordSized
+  num_temps: 0
+  call_instruction: true
+
 - name: LoadUnboxedScalar
   result_type: WordSized
   operands:
@@ -2614,6 +2646,10 @@
   num_temps: 1
 
 - name: GuardGlobalGeneration
+  mir_op: true
+  num_temps: 1
+
+- name: GuardFuse
   mir_op: true
   num_temps: 1
 

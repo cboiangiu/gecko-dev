@@ -34,7 +34,7 @@
 #include "frontend/SourceNotes.h"          // SrcNoteType
 #include "frontend/ValueUsage.h"           // ValueUsage
 #include "js/AllocPolicy.h"                // ReportOutOfMemory
-#include "js/ColumnNumber.h"               // JS::LimitedColumnNumberZeroOrigin
+#include "js/ColumnNumber.h"               // JS::LimitedColumnNumberOneOrigin
 #include "js/TypeDecls.h"                  // jsbytecode
 #include "vm/BuiltinObjectKind.h"          // BuiltinObjectKind
 #include "vm/CheckIsObjectKind.h"          // CheckIsObjectKind
@@ -333,8 +333,6 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
                   SharedContext* sc, const ErrorReporter& errorReporter,
                   CompilationState& compilationState, EmitterMode emitterMode);
 
-  BytecodeEmitter(BytecodeEmitter* parent, SharedContext* sc);
-
   void initFromBodyPosition(TokenPos bodyPosition);
 
  public:
@@ -348,6 +346,8 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
                   EmitterMode emitterMode = Normal)
       : BytecodeEmitter(fc, EitherParser(parser), sc, compilationState,
                         emitterMode) {}
+
+  BytecodeEmitter(BytecodeEmitter* parent, SharedContext* sc);
 
   [[nodiscard]] bool init();
   [[nodiscard]] bool init(TokenPos bodyPosition);
@@ -495,9 +495,9 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   [[nodiscard]] bool newSrcNote2(SrcNoteType type, ptrdiff_t operand,
                                  unsigned* indexp = nullptr);
   [[nodiscard]] bool convertLastNewLineToNewLineColumn(
-      JS::LimitedColumnNumberZeroOrigin column);
+      JS::LimitedColumnNumberOneOrigin column);
   [[nodiscard]] bool convertLastSetLineToSetLineColumn(
-      JS::LimitedColumnNumberZeroOrigin column);
+      JS::LimitedColumnNumberOneOrigin column);
 
   [[nodiscard]] bool newSrcNoteOperand(ptrdiff_t operand);
 
@@ -1035,7 +1035,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   [[nodiscard]] bool emitSuperGetElem(PropertyByValue* elem,
                                       bool isCall = false);
 
-  [[nodiscard]] bool emitCalleeAndThis(ParseNode* callee, CallNode* call,
+  [[nodiscard]] bool emitCalleeAndThis(ParseNode* callee, CallNode* maybeCall,
                                        CallOrNewEmitter& cone);
 
   [[nodiscard]] bool emitOptionalCalleeAndThis(ParseNode* callee,
@@ -1068,6 +1068,10 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
                                          ListNode* classMembers);
 
   [[nodiscard]] js::UniquePtr<ImmutableScriptData> createImmutableScriptData();
+
+#ifdef ENABLE_DECORATORS
+  [[nodiscard]] bool emitCheckIsCallable();
+#endif
 
  private:
   [[nodiscard]] SelfHostedIter getSelfHostedIterFor(ParseNode* parseNode);

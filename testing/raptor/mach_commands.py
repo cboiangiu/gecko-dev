@@ -20,7 +20,7 @@ from mozbuild.base import MachCommandConditions as Conditions
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 
-ANDROID_BROWSERS = ["geckoview", "refbrow", "fenix", "chrome-m"]
+ANDROID_BROWSERS = ["geckoview", "refbrow", "fenix", "chrome-m", "cstm-car-m"]
 
 
 class RaptorRunner(MozbuildObject):
@@ -34,12 +34,18 @@ class RaptorRunner(MozbuildObject):
         3. Run mozharness
         """
         # Validate that the user is using a supported python version before doing anything else
-        max_py_major, max_py_minor = 3, 10
+        max_py_major, max_py_minor = 3, 11
         sys_maj, sys_min = sys.version_info.major, sys.version_info.minor
         if sys_min > max_py_minor:
             raise PythonVersionException(
-                f"Please downgrade your Python version as Raptor does not yet support Python versions greater than {max_py_major}.{max_py_minor}. "
-                f"You seem to currently be using Python {sys_maj}.{sys_min}"
+                print(
+                    f"\tPlease downgrade your Python version as Raptor does not yet support Python "
+                    f"versions greater than {max_py_major}.{max_py_minor}."
+                    f"\n\tYou seem to currently be using Python {sys_maj}.{sys_min}."
+                    f"\n\tSee here for a possible solution in debugging your python environment: "
+                    f"https://firefox-source-docs.mozilla.org/testing/perfdocs/"
+                    f"debugging.html#debugging-local-python-environment"
+                )
             )
         self.init_variables(raptor_args, kwargs)
         self.make_config()
@@ -263,10 +269,10 @@ class RaptorRunner(MozbuildObject):
 def setup_node(command_context):
     """Fetch the latest node-16 binary and install it into the .mozbuild directory."""
     import platform
-    from distutils.version import StrictVersion
 
     from mozbuild.artifact_commands import artifact_toolchain
     from mozbuild.nodeutil import find_node_executable
+    from packaging.version import Version
 
     print("Setting up node for browsertime...")
     state_dir = get_state_dir()
@@ -274,7 +280,7 @@ def setup_node(command_context):
 
     def __check_for_node():
         # Check standard locations first
-        node_exe = find_node_executable(min_version=StrictVersion("16.0.0"))
+        node_exe = find_node_executable(min_version=Version("16.0.0"))
         if node_exe and (node_exe[0] is not None):
             return node_exe[0]
         if not os.path.exists(cache_path):
@@ -395,6 +401,15 @@ def run_raptor(command_context, **kwargs):
             verbose=verbose,
             xre=True,
         ):  # Equivalent to 'run_local' = True.
+            print(
+                "****************************************************************************"
+            )
+            print(
+                "Unable to verify device, please check your attached/connected android device"
+            )
+            print(
+                "****************************************************************************"
+            )
             return 1
         # Disable fission until geckoview supports fission by default.
         # Need fission on Android? Use '--setpref fission.autostart=true'

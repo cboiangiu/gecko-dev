@@ -43,28 +43,6 @@ body {
   min-height: 0;
 }
 
-/* These live here because image loads don't go through otherwise,
- * see bug 1855151 */
-#navigator-toolbox:-moz-lwtheme {
-  background-image: var(--lwt-additional-images);
-  background-repeat: var(--lwt-background-tiling);
-  background-position: var(--lwt-background-alignment);
-  background-color: var(--lwt-accent-color);
-  color: inherit;
-
-  &:-moz-window-inactive {
-    background-color: var(--lwt-accent-color-inactive, var(--lwt-accent-color));
-  }
-
-  /* When a theme defines both theme_frame and additional_backgrounds, show
-     the latter atop the former. */
-  :root[lwtheme-image] & {
-    background-image: var(--lwt-header-image), var(--lwt-additional-images);
-    background-repeat: no-repeat, var(--lwt-background-tiling);
-    background-position: right top, var(--lwt-background-alignment);
-  }
-}
-
 /* We set large flex on both containers to allow the devtools toolbox to
  * set a flex value itself. We don't want the toolbox to actually take up free
  * space, but we do want it to collapse when the window shrinks, and with
@@ -155,7 +133,8 @@ panelview:not([visible]) {
   transition: height var(--panelui-subview-transition-duration);
 }
 
-@supports not -moz-bool-pref("browser.tabs.tabmanager.enabled") {
+/* stylelint-disable-next-line media-query-no-invalid */
+@media not (-moz-bool-pref: "browser.tabs.tabmanager.enabled") {
   #tabbrowser-tabs:not([overflow], [hashiddentabs]) ~ #alltabs-button {
     display: none;
   }
@@ -407,11 +386,13 @@ toolbarpaletteitem {
   }
   toolbaritem:is([overflowedItem="true"], [cui-areatype="panel"]) > & {
     list-style-image: var(--webextension-menupanel-image, inherit);
-
-    :root[lwt-popup-brighttext] & {
+    /* TODO: This feels a bit odd, why do we have three images? It feels we
+     * should probably have only two (light/dark), and choose based on
+     * prefers-color-scheme + lwt-popup */
+    :root[lwt-popup="dark"] & {
       list-style-image: var(--webextension-menupanel-image-light, inherit);
     }
-    :root:not([lwt-popup-brighttext]) &:-moz-lwtheme {
+    :root[lwt-popup="light"] & {
       list-style-image: var(--webextension-menupanel-image-dark, inherit);
     }
   }
@@ -938,53 +919,6 @@ browser[tabmodalPromptShowing], browser[tabDialogShowing] {
   -moz-user-focus: none !important;
 }
 
-/* Status panel */
-
-#statuspanel:not([hidden]) {
-  max-width: calc(100% - 5px);
-  pointer-events: none;
-
-  /* Take a bit more space vertically for the mouse tracker to hit us more
-   * easily */
-  padding-top: 2em;
-
-  position: absolute;
-  bottom: 0;
-  left: 0;
-}
-
-#statuspanel:not([mirror]):-moz-locale-dir(rtl),
-#statuspanel[mirror]:-moz-locale-dir(ltr) {
-  left: auto;
-  right: 0;
-}
-
-#statuspanel[sizelimit] {
-  max-width: 50%;
-}
-
-#statuspanel[type=status] {
-  min-width: min(23em, 33%);
-}
-
-#statuspanel[type=overLink] {
-  transition: opacity 120ms ease-out, visibility 120ms;
-}
-
-#statuspanel:is([type=overLink], [inactive][previoustype=overLink]) {
-  direction: ltr;
-}
-
-#statuspanel[inactive] {
-  transition: none;
-  opacity: 0;
-  visibility: hidden;
-}
-
-#statuspanel[inactive][previoustype=overLink] {
-  transition: opacity 200ms ease-out, visibility 200ms;
-}
-
 /*** Visibility of downloads indicator controls ***/
 
 /* Hide the default icon, show the anchor instead. */
@@ -1167,15 +1101,6 @@ toolbarpaletteitem[dragover] {
   flex-wrap: wrap;
 }
 
-#customization-toolbar-visibility-button > .box-inherit > .button-menu-dropmarker {
-  display: flex;
-}
-
-#customization-lwtheme-button > .box-inherit > .button-menu-dropmarker,
-#customization-uidensity-button > .box-inherit > .button-menu-dropmarker {
-  display: flex;
-}
-
 toolbarpaletteitem[place="palette"] {
   flex-direction: column;
   width: 7em;
@@ -1278,12 +1203,6 @@ toolbarpaletteitem:not([place="palette"]) > #stop-reload-button {
 #UITourHighlight[active="color"] {
   animation-name: uitour-color;
   animation-duration: 2s;
-}
-
-/* Combined context-menu items */
-#context-navigation > .menuitem-iconic > .menu-iconic-text,
-#context-navigation > .menuitem-iconic > .menu-accel-container {
-  display: none;
 }
 
 .popup-notification-invalid-input {
@@ -1391,6 +1310,13 @@ printpreview-pagination:focus-within,
     transition: opacity 100ms;
   }
 }
+
+/* Screenshots */
+#screenshotsPagePanel {
+  position: relative;
+  max-height: 0;
+}
+
 
 #sidebar-box {
   min-width: 14em;
@@ -1554,6 +1480,12 @@ toolbar[keyNav=true]:not([collapsed=true], [customizing=true]) toolbartabstop {
   /* This makes the dialog top-aligned by default (the dialog box will move via
    * margin-top above) */
   bottom: auto;
+  /* When showModal() is called on a <dialog>, the <dialog> itself will be
+   * focused when there's no content, hence the focus ring. However, this
+   * focus ring is not needed because we always setup the content of the dialog
+   * after its opened and manually focus an element within it.
+   */
+  outline: none;
 }
 
 #window-modal-dialog.spotlight {

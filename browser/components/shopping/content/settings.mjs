@@ -12,8 +12,6 @@ import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 // eslint-disable-next-line import/no-unassigned-import
 import "chrome://global/content/elements/moz-toggle.mjs";
 
-import { FAKESPOT_BASE_URL } from "chrome://global/content/shopping/ProductConfig.mjs";
-
 class ShoppingSettings extends MozLitElement {
   static properties = {
     adsEnabled: { type: Boolean },
@@ -25,11 +23,15 @@ class ShoppingSettings extends MozLitElement {
       recommendationsToggleEl: "#shopping-settings-recommendations-toggle",
       optOutButtonEl: "#shopping-settings-opt-out-button",
       shoppingCardEl: "shopping-card",
+      adsLearnMoreLinkEl: "#shopping-ads-learn-more-link",
+      fakespotLearnMoreLinkEl: "#powered-by-fakespot-link",
     };
   }
 
   onToggleRecommendations() {
     this.adsEnabledByUser = this.recommendationsToggleEl.pressed;
+    let action = this.adsEnabledByUser ? "enabled" : "disabled";
+    Glean.shopping.surfaceAdsSettingToggled.record({ action });
     RPMSetPref(
       "browser.shopping.experience2023.ads.userEnabled",
       this.adsEnabledByUser
@@ -42,6 +44,7 @@ class ShoppingSettings extends MozLitElement {
     // is never flipped, leaving the toolbar button in the active state.
     RPMSetPref("browser.shopping.experience2023.active", false);
     RPMSetPref("browser.shopping.experience2023.optedIn", 2);
+    Glean.shopping.surfaceOptOutButtonClicked.record();
   }
 
   fakespotLinkClicked(e) {
@@ -64,10 +67,13 @@ class ShoppingSettings extends MozLitElement {
           data-l10n-attrs="label"
           @toggle=${this.onToggleRecommendations}>
         </moz-toggle/>
-        <span id="shopping-ads-learn-more" data-l10n-id="shopping-settings-recommendations-learn-more">
+        <span id="shopping-ads-learn-more" data-l10n-id="shopping-settings-recommendations-learn-more2">
           <a
-            is="moz-support-link"
-            support-page="todo"
+            id="shopping-ads-learn-more-link"
+            target="_blank"
+            href="${window.RPMGetFormatURLPref(
+              "app.support.baseURL"
+            )}review-checker-review-quality?utm_campaign=learn-more&utm_medium=inproduct&utm_term=core-sidebar#w_ads_for_relevant_products"
             data-l10n-name="review-quality-url"
           ></a>
         </span>`
@@ -78,6 +84,10 @@ class ShoppingSettings extends MozLitElement {
         rel="stylesheet"
         href="chrome://browser/content/shopping/settings.css"
       />
+      <link
+        rel="stylesheet"
+        href="chrome://browser/content/shopping/shopping-page.css"
+      />
       <shopping-card
         data-l10n-id="shopping-settings-label"
         data-l10n-attrs="label"
@@ -86,6 +96,7 @@ class ShoppingSettings extends MozLitElement {
         <div id="shopping-settings-wrapper" slot="content">
           ${toggleMarkup}
           <button
+            class="shopping-button"
             id="shopping-settings-opt-out-button"
             data-l10n-id="shopping-settings-opt-out-button"
             @click=${this.onDisableShopping}
@@ -99,9 +110,10 @@ class ShoppingSettings extends MozLitElement {
         @click=${this.fakespotLinkClicked}
       >
         <a
+          id="powered-by-fakespot-link"
           data-l10n-name="fakespot-link"
           target="_blank"
-          href="${FAKESPOT_BASE_URL}"
+          href="https://www.fakespot.com/our-mission?utm_source=review-checker&utm_campaign=fakespot-by-mozilla&utm_medium=inproduct&utm_term=core-sidebar"
         ></a>
       </p>
     `;

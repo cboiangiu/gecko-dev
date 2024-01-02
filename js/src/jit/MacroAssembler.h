@@ -46,6 +46,7 @@
 #include "util/Memory.h"
 #include "vm/FunctionFlags.h"
 #include "vm/Opcodes.h"
+#include "vm/RealmFuses.h"
 #include "wasm/WasmCodegenTypes.h"
 #include "wasm/WasmFrame.h"
 
@@ -220,6 +221,8 @@
 #define PER_ARCH DEFINED_ON(ALL_ARCH)
 #define PER_SHARED_ARCH DEFINED_ON(ALL_SHARED_ARCH)
 #define OOL_IN_HEADER
+
+class JSLinearString;
 
 namespace JS {
 struct ExpandoAndGeneration;
@@ -517,7 +520,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // layout.
 
   // The size of the area used by PushRegsInMask.
-  size_t PushRegsInMaskSizeInBytes(LiveRegisterSet set)
+  static size_t PushRegsInMaskSizeInBytes(LiveRegisterSet set)
       DEFINED_ON(arm, arm64, mips32, mips64, loong64, riscv64, wasm32,
                  x86_shared);
 
@@ -576,8 +579,6 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void PopFlags() DEFINED_ON(x86_shared);
   void PopStackPtr()
       DEFINED_ON(arm, mips_shared, x86_shared, loong64, riscv64, wasm32);
-  void popRooted(VMFunctionData::RootType rootType, Register cellReg,
-                 const ValueOperand& valueReg);
 
   // Move the stack pointer based on the requested amount.
   void adjustStack(int amount);
@@ -586,7 +587,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // Move the stack pointer to the specified position. It assumes the SP
   // register is not valid -- it uses FP to set the position.
   void freeStackTo(uint32_t framePushed)
-      DEFINED_ON(x86_shared, arm, arm64, loong64, mips64);
+      DEFINED_ON(x86_shared, arm, arm64, loong64, mips64, riscv64);
 
   // Warning: This method does not update the framePushed() counter.
   void freeStack(Register amount);
@@ -646,6 +647,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // Useful for dealing with two-valued returns.
   void moveRegPair(Register src0, Register src1, Register dst0, Register dst1,
                    MoveOp::Type type = MoveOp::GENERAL);
+
+  void reserveVMFunctionOutParamSpace(const VMFunctionData& f);
+  void loadVMFunctionOutParam(const VMFunctionData& f, const Address& addr);
 
  public:
   // ===============================================================
@@ -779,6 +783,11 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // Setup an ABI call for when the alignment is not known. This may need a
   // scratch register.
   void setupUnalignedABICall(Register scratch) PER_ARCH;
+
+  // Like setupUnalignedABICall, but more efficient because it doesn't push/pop
+  // the unaligned stack pointer. The caller is responsible for restoring SP
+  // after the callWithABI, for example using the frame pointer register.
+  void setupUnalignedABICallDontSaveRestoreSP();
 
   // Arguments must be assigned to a C/C++ call in order. They are moved
   // in parallel immediately before performing the call. This process may
@@ -939,9 +948,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
   //
   // See JitFrames.h, and TraceJitExitFrame in JitFrames.cpp.
 
-  // Push stub code and the VMFunctionData pointer.
-  inline void enterExitFrame(Register cxreg, Register scratch,
-                             const VMFunctionData* f);
+  // Links the exit frame and pushes the ExitFooterFrame.
+  inline void enterExitFrame(Register cxreg, Register scratch, VMFunctionId f);
 
   // Push an exit frame token to identify which fake exit frame this footer
   // corresponds to.
@@ -3843,9 +3851,10 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void wasmCheckSlowCallsite(Register ra, Label* notSlow, Register temp1,
                              Register temp2)
-      DEFINED_ON(x86, x64, arm, arm64, loong64, mips64);
+      DEFINED_ON(x86, x64, arm, arm64, loong64, mips64, riscv64);
 
-  void wasmMarkSlowCall() DEFINED_ON(x86, x64, arm, arm64, loong64, mips64);
+  void wasmMarkSlowCall()
+      DEFINED_ON(x86, x64, arm, arm64, loong64, mips64, riscv64);
 #endif
 
   // WasmTableCallIndexReg must contain the index of the indirect call.  This is
@@ -4027,6 +4036,18 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // Branch if the object `src` is or is not a WasmGcObject.
   void branchObjectIsWasmGcObject(bool isGcObject, Register src,
                                   Register scratch, Label* label);
+
+  // `typeDefData` will be preserved. `instance` and `result` may be the same
+  // register, in which case `instance` will be clobbered.
+  void wasmNewStructObject(Register instance, Register result,
+                           Register typeDefData, Register temp1, Register temp2,
+                           Label* fail, gc::AllocKind allocKind,
+                           bool zeroFields);
+  // `typeDefData` will be preserved. `instance` and `result` may be the same
+  // register, in which case `instance` will be clobbered.
+  void wasmBumpPointerAllocate(Register instance, Register result,
+                               Register typeDefData, Register temp1,
+                               Register temp2, Label* fail, uint32_t size);
 
   // Compute ptr += (indexTemp32 << shift) where shift can be any value < 32.
   // May destroy indexTemp32.  The value of indexTemp32 must be positive, and it
@@ -4829,6 +4850,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void loadGlobalObjectData(Register dest);
 
+  void loadRealmFuse(RealmFuses::FuseIndex index, Register dest);
+
   void switchToRealm(Register realm);
   void switchToRealm(const void* realm, Register scratch);
   void switchToObjectRealm(Register obj, Register scratch);
@@ -5294,6 +5317,24 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void newGCBigInt(Register result, Register temp, gc::Heap initialHeap,
                    Label* fail);
+
+ private:
+  void branchIfNotStringCharsEquals(Register stringChars,
+                                    const JSLinearString* linear, Label* label);
+
+ public:
+  // Returns true if |linear| is a (non-empty) string which can be compared
+  // using |compareStringChars|.
+  static bool canCompareStringCharsInline(const JSLinearString* linear);
+
+  // Load the string characters in preparation for |compareStringChars|.
+  void loadStringCharsForCompare(Register input, const JSLinearString* linear,
+                                 Register stringChars, Label* fail);
+
+  // Compare string characters based on the equality operator. The string
+  // characters must be at least as long as the length of |linear|.
+  void compareStringChars(JSOp op, Register stringChars,
+                          const JSLinearString* linear, Register result);
 
   // Compares two strings for equality based on the JSOP.
   // This checks for identical pointers, atoms and length and fails for

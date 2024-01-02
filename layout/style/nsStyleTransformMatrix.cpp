@@ -49,15 +49,29 @@ static nsRect GetSVGBox(const nsIFrame* aFrame) {
     return nsRect(-aFrame->GetPosition(), CSSPixel::ToAppUnits(size));
   };
 
+  auto transformBox = aFrame->StyleDisplay()->mTransformBox;
+  if ((transformBox == StyleTransformBox::StrokeBox ||
+       transformBox == StyleTransformBox::BorderBox) &&
+      aFrame->StyleSVGReset()->HasNonScalingStroke()) {
+    // To calculate stroke bounds for an element with `non-scaling-stroke` we
+    // need to resolve its transform to its outer-svg, but to resolve that
+    // transform when it has `transform-box:stroke-box` (or `border-box`)
+    // may require its stroke bounds. There's no ideal way to break this
+    // cyclical dependency, but we break it by converting to
+    // `transform-box:fill-box` here.
+    // https://github.com/w3c/csswg-drafts/issues/9640
+    transformBox = StyleTransformBox::FillBox;
+  }
+
   // For SVG elements without associated CSS layout box, the used value for
   // content-box is fill-box and for border-box is stroke-box.
   // https://drafts.csswg.org/css-transforms-1/#transform-box
-  switch (aFrame->StyleDisplay()->mTransformBox) {
+  switch (transformBox) {
     case StyleTransformBox::ContentBox:
     case StyleTransformBox::FillBox: {
       // Percentages in transforms resolve against the SVG bbox, and the
       // transform is relative to the top-left of the SVG bbox.
-      nsRect bboxInAppUnits = nsLayoutUtils::ComputeGeometryBox(
+      nsRect bboxInAppUnits = nsLayoutUtils::ComputeSVGReferenceRect(
           const_cast<nsIFrame*>(aFrame), StyleGeometryBox::FillBox);
       // The mRect of an SVG nsIFrame is its user space bounds *including*
       // stroke and markers, whereas bboxInAppUnits is its user space bounds
@@ -86,7 +100,7 @@ static nsRect GetSVGBox(const nsIFrame* aFrame) {
       // have simple bounds.
       // FIXME: Bug 1849054. We may have to update
       // SVGGeometryFrame::GetBBoxContribution() to get tighter stroke bounds.
-      nsRect strokeBox = nsLayoutUtils::ComputeGeometryBox(
+      nsRect strokeBox = nsLayoutUtils::ComputeSVGReferenceRect(
           const_cast<nsIFrame*>(aFrame), StyleGeometryBox::StrokeBox);
       // The |nsIFrame::mRect| includes markers, so we have to compute the
       // offsets without markers.

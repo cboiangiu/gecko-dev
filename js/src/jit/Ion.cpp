@@ -68,6 +68,7 @@
 #include "jit/MacroAssembler-inl.h"
 #include "jit/SafepointIndex-inl.h"
 #include "vm/GeckoProfiler-inl.h"
+#include "vm/JSContext-inl.h"
 #include "vm/JSScript-inl.h"
 #include "vm/Realm-inl.h"
 
@@ -85,6 +86,8 @@ JitRuntime::~JitRuntime() {
   MOZ_ASSERT(numFinishedOffThreadTasks_ == 0);
   MOZ_ASSERT(ionLazyLinkListSize_ == 0);
   MOZ_ASSERT(ionLazyLinkList_.ref().isEmpty());
+
+  MOZ_ASSERT(ionFreeTaskBatch_.ref().empty());
 
   // By this point, the jitcode global table should be empty.
   MOZ_ASSERT_IF(jitcodeGlobalTable_, jitcodeGlobalTable_->empty());
@@ -375,10 +378,8 @@ void jit::LinkIonScript(JSContext* cx, HandleScript calleeScript) {
     }
   }
 
-  {
-    AutoLockHelperThreadState lock;
-    FinishOffThreadTask(cx->runtime(), task, lock);
-  }
+  AutoStartIonFreeTask freeTask(cx->runtime()->jitRuntime());
+  FinishOffThreadTask(cx->runtime(), freeTask, task);
 }
 
 uint8_t* jit::LazyLinkTopActivation(JSContext* cx,
@@ -539,7 +540,7 @@ void JitZone::traceWeak(JSTracer* trc, Zone* zone) {
 
 void JitZone::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                      JS::CodeSizes* code, size_t* jitZone,
-                                     size_t* baselineStubsOptimized) const {
+                                     size_t* cacheIRStubs) const {
   *jitZone += mallocSizeOf(this);
   *jitZone +=
       baselineCacheIRStubCodes_.shallowSizeOfExcludingThis(mallocSizeOf);
@@ -547,8 +548,7 @@ void JitZone::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
 
   execAlloc().addSizeOfCode(code);
 
-  *baselineStubsOptimized +=
-      optimizedStubSpace_.sizeOfExcludingThis(mallocSizeOf);
+  *cacheIRStubs += stubSpace_.sizeOfExcludingThis(mallocSizeOf);
 }
 
 void JitCodeHeader::init(JitCode* jitCode) {
@@ -934,7 +934,7 @@ void IonScript::Destroy(JS::GCContext* gcx, IonScript* script) {
       continue;
     }
     if (lock.isNothing()) {
-      lock.emplace(&gcx->runtime()->gc.storeBuffer());
+      lock.emplace(gcx->runtimeFromAnyThread());
     }
     script->nurseryObjects()[i] = HeapPtr<JSObject*>();
   }
@@ -1676,7 +1676,7 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
             "Can't log script %s:%u:%u"
             ". (Compiled on background thread.)",
             script->filename(), script->lineno(),
-            script->column().zeroOriginValue());
+            script->column().oneOriginValue());
 
     IonCompileTask* task = alloc->new_<IonCompileTask>(cx, *mirGen, snapshot);
     if (!task) {
@@ -1792,7 +1792,7 @@ static bool ScriptIsTooLarge(JSContext* cx, JSScript* script) {
     JitSpew(JitSpew_IonAbort,
             "Script too large (%zu bytes) (%zu locals/args) @ %s:%u:%u",
             script->length(), numLocalsAndArgs, script->filename(),
-            script->lineno(), script->column().zeroOriginValue());
+            script->lineno(), script->column().oneOriginValue());
     return true;
   }
 
@@ -1838,7 +1838,7 @@ static MethodStatus Compile(JSContext* cx, HandleScript script,
   if (!CanIonCompileScript(cx, script)) {
     JitSpew(JitSpew_IonAbort, "Aborted compilation of %s:%u:%u",
             script->filename(), script->lineno(),
-            script->column().zeroOriginValue());
+            script->column().oneOriginValue());
     return Method_CantCompile;
   }
 
@@ -2104,7 +2104,7 @@ static bool IonCompileScriptForBaseline(JSContext* cx, BaselineFrame* frame,
           "WarmUpCounter for %s:%u:%u reached %d at pc %p, trying to switch to "
           "Ion!",
           script->filename(), script->lineno(),
-          script->column().zeroOriginValue(), (int)script->getWarmUpCount(),
+          script->column().oneOriginValue(), (int)script->getWarmUpCount(),
           (void*)pc);
 
   MethodStatus stat;
@@ -2299,7 +2299,7 @@ static void InvalidateActivation(JS::GCContext* gcx,
         JitSpew(JitSpew_IonInvalidate,
                 "#%zu %s JS frame @ %p, %s:%u:%u (fun: %p, script: %p, pc %p)",
                 frameno, type, frame.fp(), script->maybeForwardedFilename(),
-                script->lineno(), script->column().zeroOriginValue(),
+                script->lineno(), script->column().oneOriginValue(),
                 frame.maybeCallee(), script, frame.resumePCinCurrentFrame());
         break;
       }
@@ -2474,7 +2474,7 @@ void jit::Invalidate(JSContext* cx, const RecompileInfoVector& invalid,
 
     JitSpew(JitSpew_IonInvalidate, " Invalidate %s:%u:%u, IonScript %p",
             info.script()->filename(), info.script()->lineno(),
-            info.script()->column().zeroOriginValue(), ionScript);
+            info.script()->column().oneOriginValue(), ionScript);
 
     // Keep the ion script alive during the invalidation and flag this
     // ionScript as being invalidated.  This increment is removed by the
@@ -2561,7 +2561,7 @@ void jit::Invalidate(JSContext* cx, JSScript* script, bool resetUses,
 
     // Construct the descriptive string.
     UniqueChars buf = JS_smprintf("%s:%u:%u", filename, script->lineno(),
-                                  script->column().zeroOriginValue());
+                                  script->column().oneOriginValue());
 
     // Ignore the event on allocation failure.
     if (buf) {
@@ -2596,7 +2596,7 @@ void jit::FinishInvalidation(JS::GCContext* gcx, JSScript* script) {
 void jit::ForbidCompilation(JSContext* cx, JSScript* script) {
   JitSpew(JitSpew_IonAbort, "Disabling Ion compilation of script %s:%u:%u",
           script->filename(), script->lineno(),
-          script->column().zeroOriginValue());
+          script->column().oneOriginValue());
 
   CancelOffThreadIonCompile(script);
 

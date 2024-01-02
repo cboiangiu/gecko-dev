@@ -83,6 +83,10 @@ exclude = [
 include = [
   "AnimationTimeline",
   "AnimationIterationCount",
+  "AnimationDirection",
+  "AnimationFillMode",
+  "AnimationPlayState",
+  "AnimationComposition",
   "Appearance",
   "Au",
   "BreakBetween",
@@ -104,6 +108,7 @@ include = [
   "DisplayInside",
   "DisplayMode",
   "Platform",
+  "GtkThemeFamily",
   "PrefersColorScheme",
   "PrefersContrast",
   "DynamicRange",
@@ -190,6 +195,7 @@ include = [
   "TextTransform",
   "TextJustify",
   "TextOverflow",
+  "TextIndent",
   "MozControlCharacterVisibility",
   "RubyPosition",
   "Owned",
@@ -283,6 +289,7 @@ include = [
   "BeforeFlag",
   "XTextScale",
   "Zoom",
+  "TransitionProperty",
 ]
 item_types = ["enums", "structs", "unions", "typedefs", "functions", "constants"]
 renaming_overrides_prefixing = true
@@ -307,6 +314,7 @@ renaming_overrides_prefixing = true
 "RefPtr" = "RefPtr"
 "nsCSSPropertyID" = "nsCSSPropertyID"
 "nsCSSPropertyIDSet" = "nsCSSPropertyIDSet"
+"AnimatedPropertyID" = "AnimatedPropertyID"
 "nsCSSValueSharedList" = "nsCSSValueSharedList"
 "AnimationPropertySegment" = "AnimationPropertySegment"
 "RawServoAnimationValueTable" = "RawServoAnimationValueTable"
@@ -717,7 +725,8 @@ renaming_overrides_prefixing = true
   inline void Release();
 
  public:
-  inline explicit StyleAtom(already_AddRefed<nsAtom> aAtom);
+  inline explicit StyleAtom(already_AddRefed<nsAtom>);
+  inline explicit StyleAtom(nsStaticAtom*);
   inline StyleAtom(const StyleAtom& aOther);
   inline StyleAtom& operator=(const StyleAtom&);
   inline ~StyleAtom();
@@ -759,6 +768,13 @@ renaming_overrides_prefixing = true
     : first(StyleTextOverflowSide::Clip()),
       second(StyleTextOverflowSide::Clip()),
       sides_are_logical(true) {}
+"""
+
+"GenericTextIndent" = """
+  StyleGenericTextIndent()
+    : length(StyleLengthPercentage::Zero()),
+      hanging(false),
+      each_line(false) {}
 """
 
 "UrlExtraData" = """
@@ -815,6 +831,9 @@ renaming_overrides_prefixing = true
 "GenericGradient" = """
   inline bool Repeating() const;
   bool IsOpaque() const;
+
+  // Return the color interpolation method of the gradient.
+  inline const StyleColorInterpolationMethod& ColorInterpolationMethod() const;
 """
 
 "GenericGridLine" = """
@@ -865,11 +884,7 @@ renaming_overrides_prefixing = true
   //
   // The resolution is in dppx, and should be used to impact the intrinsic
   // size of the image.
-  ImageResolution GetResolution() const;
-
-  // Returns the intrinsic size of the image, if there's one, accounting for
-  // resolution as needed.
-  Maybe<CSSIntSize> GetIntrinsicSize() const;
+  ImageResolution GetResolution(const ComputedStyle&) const;
 
   // If this is an image-set(), the final image we've selected, otherwise it
   // returns *this.
@@ -961,11 +976,13 @@ renaming_overrides_prefixing = true
 
 "Zoom" = """
  SERVO_FIXED_POINT_HELPERS(StyleZoom, uint16_t, StyleZOOM_FRACTION_BITS);
+ inline float Zoom(float) const;
+ inline float Unzoom(float) const;
 """
 
 "AnimationName" = """
  public:
-  StyleAnimationName(): _0(RefPtr<nsAtom>(nsGkAtoms::_empty).forget()) {}
+  StyleAnimationName() : _0(nsGkAtoms::_empty) {}
 """
 
 "GenericViewTimelineInset" = """
@@ -1041,4 +1058,11 @@ renaming_overrides_prefixing = true
   inline bool IsInternalRuby() const;
   inline bool IsInternalTable() const;
   inline bool IsInternalTableExceptCell() const;
+"""
+
+"TransitionProperty" = """
+  bool IsAll() const {
+    return IsNonCustom() &&
+           nsCSSPropertyID(AsNonCustom()._0) == eCSSProperty_all;
+  }
 """

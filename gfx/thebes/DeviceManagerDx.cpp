@@ -740,6 +740,13 @@ void DeviceManagerDx::CreateCompositorDevice(FeatureState& d3d11) {
     D3D11Checks::WarnOnAdapterMismatch(device);
   }
 
+  RefPtr<ID3D10Multithread> multi;
+  HRESULT hr = device->QueryInterface(__uuidof(ID3D10Multithread),
+                                      getter_AddRefs(multi));
+  if (SUCCEEDED(hr) && multi) {
+    multi->SetMultithreadProtected(TRUE);
+  }
+
   uint32_t featureLevel = device->GetFeatureLevel();
   auto formatOptions = D3D11Checks::FormatOptions(device);
   mCompositorDevice = device;
@@ -831,6 +838,13 @@ void DeviceManagerDx::CreateWARPCompositorDevice() {
   }
 
   bool textureSharingWorks = D3D11Checks::DoesTextureSharingWork(device);
+
+  RefPtr<ID3D10Multithread> multi;
+  hr = device->QueryInterface(__uuidof(ID3D10Multithread),
+                              getter_AddRefs(multi));
+  if (SUCCEEDED(hr) && multi) {
+    multi->SetMultithreadProtected(TRUE);
+  }
 
   DXGI_ADAPTER_DESC desc;
   D3D11Checks::GetDxgiDesc(device, &desc);
@@ -934,7 +948,7 @@ RefPtr<ID3D11Device> DeviceManagerDx::CreateDecoderDevice(
       mDecoderDevice->QueryInterface(__uuidof(ID3D10Multithread),
                                      getter_AddRefs(multi));
       if (multi) {
-        multi->SetMultithreadProtected(TRUE);
+        MOZ_ASSERT(multi->GetMultithreadProtected());
       }
     }
 
@@ -1184,6 +1198,10 @@ void DeviceManagerDx::DisableD3D11AfterCrash() {
 }
 
 RefPtr<ID3D11Device> DeviceManagerDx::GetCompositorDevice() {
+  /// ID3D11Device is thread-safe. We need the lock to read the
+  /// mDeviceLockPointer, but manipulating the pointee outside of the lock is
+  /// safe. See
+  /// https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-render-multi-thread-intro
   MutexAutoLock lock(mDeviceLock);
   return mCompositorDevice;
 }
@@ -1217,8 +1235,9 @@ RefPtr<ID3D11Device> DeviceManagerDx::GetImageDevice() {
   if (FAILED(hr) || !multi) {
     gfxWarning() << "Multithread safety interface not supported. " << hr;
     return nullptr;
+  } else {
+    MOZ_ASSERT(multi->GetMultithreadProtected());
   }
-  multi->SetMultithreadProtected(TRUE);
 
   mImageDevice = device;
 

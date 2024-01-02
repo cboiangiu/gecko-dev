@@ -18,7 +18,7 @@
 #include "frontend/Stencil.h"
 #include "gc/GCContext.h"
 #include "gc/Tracer.h"
-#include "js/ColumnNumber.h"  // JS::ColumnNumberZeroOrigin, JS::LimitedColumnNumberZeroOrigin
+#include "js/ColumnNumber.h"  // JS::ColumnNumberOneOrigin, JS::LimitedColumnNumberOneOrigin
 #include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/Modules.h"  // JS::GetModulePrivate, JS::ModuleDynamicImportHook
 #include "vm/EqualityOperations.h"  // js::SameValue
@@ -86,7 +86,7 @@ static Value StringOrNullValue(JSString* maybeString) {
 ImportEntry::ImportEntry(Handle<ModuleRequestObject*> moduleRequest,
                          Handle<JSAtom*> maybeImportName,
                          Handle<JSAtom*> localName, uint32_t lineNumber,
-                         JS::ColumnNumberZeroOrigin columnNumber)
+                         JS::ColumnNumberOneOrigin columnNumber)
     : moduleRequest_(moduleRequest),
       importName_(maybeImportName),
       localName_(localName),
@@ -106,7 +106,7 @@ ExportEntry::ExportEntry(Handle<JSAtom*> maybeExportName,
                          Handle<ModuleRequestObject*> moduleRequest,
                          Handle<JSAtom*> maybeImportName,
                          Handle<JSAtom*> maybeLocalName, uint32_t lineNumber,
-                         JS::ColumnNumberZeroOrigin columnNumber)
+                         JS::ColumnNumberOneOrigin columnNumber)
     : exportName_(maybeExportName),
       moduleRequest_(moduleRequest),
       importName_(maybeImportName),
@@ -130,7 +130,7 @@ void ExportEntry::trace(JSTracer* trc) {
 /* static */
 RequestedModule::RequestedModule(Handle<ModuleRequestObject*> moduleRequest,
                                  uint32_t lineNumber,
-                                 JS::ColumnNumberZeroOrigin columnNumber)
+                                 JS::ColumnNumberOneOrigin columnNumber)
     : moduleRequest_(moduleRequest),
       lineNumber_(lineNumber),
       columnNumber_(columnNumber) {}
@@ -1239,7 +1239,7 @@ bool ModuleObject::instantiateFunctionDeclarations(JSContext* cx,
       return false;
     }
 
-    name = fun->explicitName()->asPropertyName();
+    name = fun->fullExplicitName()->asPropertyName();
     value = ObjectValue(*obj);
     if (!SetProperty(cx, env, name, value)) {
       return false;
@@ -1724,7 +1724,7 @@ bool ModuleBuilder::processImport(frontend::BinaryNode* importNode) {
 
   for (ParseNode* item : specList->contents()) {
     uint32_t line;
-    JS::LimitedColumnNumberZeroOrigin column;
+    JS::LimitedColumnNumberOneOrigin column;
     eitherParser_.computeLineAndColumn(item->pn_pos.begin, &line, &column);
 
     StencilModuleEntry entry;
@@ -1742,7 +1742,7 @@ bool ModuleBuilder::processImport(frontend::BinaryNode* importNode) {
       markUsedByStencil(importName);
       entry = StencilModuleEntry::importEntry(
           moduleRequestIndex, localName, importName, line,
-          JS::ColumnNumberZeroOrigin(column));
+          JS::ColumnNumberOneOrigin(column));
     } else {
       MOZ_ASSERT(item->isKind(ParseNodeKind::ImportNamespaceSpec));
       auto* spec = &item->as<UnaryNode>();
@@ -1754,7 +1754,7 @@ bool ModuleBuilder::processImport(frontend::BinaryNode* importNode) {
       markUsedByStencil(localName);
       entry = StencilModuleEntry::importNamespaceEntry(
           moduleRequestIndex, localName, line,
-          JS::ColumnNumberZeroOrigin(column));
+          JS::ColumnNumberOneOrigin(column));
     }
 
     if (!importEntries_.put(localName, entry)) {
@@ -1969,7 +1969,7 @@ bool ModuleBuilder::processExportFrom(frontend::BinaryNode* exportNode) {
 
   for (ParseNode* spec : specList->contents()) {
     uint32_t line;
-    JS::LimitedColumnNumberZeroOrigin column;
+    JS::LimitedColumnNumberOneOrigin column;
     eitherParser_.computeLineAndColumn(spec->pn_pos.begin, &line, &column);
 
     StencilModuleEntry entry;
@@ -1985,7 +1985,7 @@ bool ModuleBuilder::processExportFrom(frontend::BinaryNode* exportNode) {
       markUsedByStencil(exportName);
       entry = StencilModuleEntry::exportFromEntry(
           moduleRequestIndex, importName, exportName, line,
-          JS::ColumnNumberZeroOrigin(column));
+          JS::ColumnNumberOneOrigin(column));
     } else if (spec->isKind(ParseNodeKind::ExportNamespaceSpec)) {
       auto* exportNameNode = &spec->as<UnaryNode>().kid()->as<NameNode>();
 
@@ -1994,12 +1994,12 @@ bool ModuleBuilder::processExportFrom(frontend::BinaryNode* exportNode) {
       markUsedByStencil(exportName);
       entry = StencilModuleEntry::exportNamespaceFromEntry(
           moduleRequestIndex, exportName, line,
-          JS::ColumnNumberZeroOrigin(column));
+          JS::ColumnNumberOneOrigin(column));
     } else {
       MOZ_ASSERT(spec->isKind(ParseNodeKind::ExportBatchSpecStmt));
 
       entry = StencilModuleEntry::exportBatchFromEntry(
-          moduleRequestIndex, line, JS::ColumnNumberZeroOrigin(column));
+          moduleRequestIndex, line, JS::ColumnNumberOneOrigin(column));
     }
 
     if (!exportEntries_.append(entry)) {
@@ -2034,7 +2034,7 @@ bool ModuleBuilder::appendExportEntry(
     frontend::TaggedParserAtomIndex exportName,
     frontend::TaggedParserAtomIndex localName, frontend::ParseNode* node) {
   uint32_t line = 0;
-  JS::LimitedColumnNumberZeroOrigin column;
+  JS::LimitedColumnNumberOneOrigin column;
   if (node) {
     eitherParser_.computeLineAndColumn(node->pn_pos.begin, &line, &column);
   }
@@ -2042,7 +2042,7 @@ bool ModuleBuilder::appendExportEntry(
   markUsedByStencil(localName);
   markUsedByStencil(exportName);
   auto entry = frontend::StencilModuleEntry::exportAsEntry(
-      localName, exportName, line, JS::ColumnNumberZeroOrigin(column));
+      localName, exportName, line, JS::ColumnNumberOneOrigin(column));
   if (!exportEntries_.append(entry)) {
     return false;
   }
@@ -2081,11 +2081,11 @@ bool ModuleBuilder::maybeAppendRequestedModule(
   }
 
   uint32_t line;
-  JS::LimitedColumnNumberZeroOrigin column;
+  JS::LimitedColumnNumberOneOrigin column;
   eitherParser_.computeLineAndColumn(node->pn_pos.begin, &line, &column);
 
   auto entry = frontend::StencilModuleEntry::requestedModule(
-      moduleRequest, line, JS::ColumnNumberZeroOrigin(column));
+      moduleRequest, line, JS::ColumnNumberOneOrigin(column));
 
   if (!requestedModules_.append(entry)) {
     js::ReportOutOfMemory(fc_);
@@ -2293,6 +2293,8 @@ static bool EvaluateDynamicImportOptions(
   return true;
 }
 
+// ShadowRealmImportValue duplicates some of this, so be sure to keep these in
+// sync.
 JSObject* js::StartDynamicModuleImport(JSContext* cx, HandleScript script,
                                        HandleValue specifierArg,
                                        HandleValue optionsArg) {
@@ -2331,9 +2333,6 @@ JSObject* js::StartDynamicModuleImport(JSContext* cx, HandleScript script,
     return promise;
   }
 
-  RootedValue referencingPrivate(cx, script->sourceObject()->getPrivate());
-  cx->runtime()->addRefScriptPrivate(referencingPrivate);
-
   Rooted<JSAtom*> specifierAtom(cx, AtomizeString(cx, specifier));
   if (!specifierAtom) {
     if (!RejectPromiseWithPendingError(cx, promise)) {
@@ -2359,9 +2358,8 @@ JSObject* js::StartDynamicModuleImport(JSContext* cx, HandleScript script,
     return promise;
   }
 
+  RootedValue referencingPrivate(cx, script->sourceObject()->getPrivate());
   if (!importHook(cx, referencingPrivate, moduleRequest, promise)) {
-    cx->runtime()->releaseScriptPrivate(referencingPrivate);
-
     // If there's no exception pending then the script is terminating
     // anyway, so just return nullptr.
     if (!cx->isExceptionPending() ||
@@ -2419,30 +2417,117 @@ bool js::OnModuleEvaluationFailure(JSContext* cx,
   return JS::AddPromiseReactions(cx, evaluationPromise, nullptr, onRejected);
 }
 
+// This is used to marshal some of the arguments to FinishDynamicModuleImport
+// and pass them through to the promise resolve and reject callbacks. It holds a
+// reference to the referencing private to keep it alive until it is needed.
+class DynamicImportContextObject : public NativeObject {
+ public:
+  enum { ReferencingPrivateSlot = 0, SpecifierSlot, SlotCount };
+
+  static const JSClass class_;
+  static const JSClassOps classOps_;
+
+  [[nodiscard]] static DynamicImportContextObject* create(
+      JSContext* cx, Handle<Value> referencingPrivate,
+      Handle<JSString*> specifier);
+
+  Value referencingPrivate() const;
+  JSString* specifier() const;
+
+  static void clearReferencingPrivate(JSRuntime* runtime,
+                                      DynamicImportContextObject* ic);
+
+  static void finalize(JS::GCContext* gcx, JSObject* obj);
+};
+
+/* static */
+const JSClass DynamicImportContextObject::class_ = {
+    "DynamicImportContextObject",
+    JSCLASS_HAS_RESERVED_SLOTS(DynamicImportContextObject::SlotCount) |
+        JSCLASS_SLOT0_IS_NSISUPPORTS | JSCLASS_FOREGROUND_FINALIZE,
+    &DynamicImportContextObject::classOps_};
+static_assert(DynamicImportContextObject::ReferencingPrivateSlot == 0);
+
+/* static */
+const JSClassOps DynamicImportContextObject::classOps_ = {
+    nullptr,                               // addProperty
+    nullptr,                               // delProperty
+    nullptr,                               // enumerate
+    nullptr,                               // newEnumerate
+    nullptr,                               // resolve
+    nullptr,                               // mayResolve
+    DynamicImportContextObject::finalize,  // finalize
+    nullptr,                               // call
+    nullptr,                               // construct
+    nullptr,                               // trace
+};
+
+/* static */
+DynamicImportContextObject* DynamicImportContextObject::create(
+    JSContext* cx, Handle<Value> referencingPrivate,
+    Handle<JSString*> specifier) {
+  Rooted<DynamicImportContextObject*> self(
+      cx, NewObjectWithGivenProto<DynamicImportContextObject>(cx, nullptr));
+  if (!self) {
+    return nullptr;
+  }
+
+  cx->runtime()->addRefScriptPrivate(referencingPrivate);
+
+  self->initReservedSlot(ReferencingPrivateSlot, referencingPrivate);
+  self->initReservedSlot(SpecifierSlot, StringValue(specifier));
+  return self;
+}
+
+Value DynamicImportContextObject::referencingPrivate() const {
+  return getReservedSlot(ReferencingPrivateSlot);
+}
+
+JSString* DynamicImportContextObject::specifier() const {
+  Value value = getReservedSlot(SpecifierSlot);
+  if (value.isUndefined()) {
+    return nullptr;
+  }
+
+  return value.toString();
+}
+
+/* static */
+void DynamicImportContextObject::finalize(JS::GCContext* gcx, JSObject* obj) {
+  auto* context = &obj->as<DynamicImportContextObject>();
+  clearReferencingPrivate(gcx->runtime(), context);
+}
+
+/* static */
+void DynamicImportContextObject::clearReferencingPrivate(
+    JSRuntime* runtime, DynamicImportContextObject* context) {
+  Value value = context->referencingPrivate();
+  if (!value.isUndefined()) {
+    context->setReservedSlot(ReferencingPrivateSlot, UndefinedValue());
+    runtime->releaseScriptPrivate(value);
+  }
+}
+
 // Adjustment for Top-level await;
 // See: https://github.com/tc39/proposal-dynamic-import/pull/71/files
 static bool OnResolvedDynamicModule(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   MOZ_ASSERT(args.get(0).isUndefined());
 
-  // This is a hack to allow us to have the 2 extra variables needed
-  // for FinishDynamicModuleImport in the resolve callback.
-  Rooted<ListObject*> resolvedModuleParams(cx,
-                                           ExtraFromHandler<ListObject>(args));
-  MOZ_ASSERT(resolvedModuleParams->length() == 2);
-  RootedValue referencingPrivate(cx, resolvedModuleParams->get(0));
+  Rooted<DynamicImportContextObject*> context(
+      cx, ExtraFromHandler<DynamicImportContextObject>(args));
+  auto clearRef = mozilla::MakeScopeExit([&] {
+    DynamicImportContextObject::clearReferencingPrivate(cx->runtime(), context);
+  });
 
-  Rooted<JSAtom*> specifier(
-      cx, AtomizeString(cx, resolvedModuleParams->get(1).toString()));
+  RootedValue referencingPrivate(cx, context->referencingPrivate());
+
+  Rooted<JSAtom*> specifier(cx, AtomizeString(cx, context->specifier()));
   if (!specifier) {
     return false;
   }
 
   Rooted<PromiseObject*> promise(cx, TargetFromHandler<PromiseObject>(args));
-
-  auto releasePrivate = mozilla::MakeScopeExit(
-      [&] { cx->runtime()->releaseScriptPrivate(referencingPrivate); });
-
   RootedObject moduleRequest(
       cx, ModuleRequestObject::create(cx, specifier, nullptr));
   if (!moduleRequest) {
@@ -2451,7 +2536,6 @@ static bool OnResolvedDynamicModule(JSContext* cx, unsigned argc, Value* vp) {
 
   RootedObject result(
       cx, CallModuleResolveHook(cx, referencingPrivate, moduleRequest));
-
   if (!result) {
     return RejectPromiseWithPendingError(cx, promise);
   }
@@ -2483,72 +2567,60 @@ static bool OnRejectedDynamicModule(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   HandleValue error = args.get(0);
 
-  RootedValue referencingPrivate(cx, ExtraValueFromHandler(args));
-  Rooted<PromiseObject*> promise(cx, TargetFromHandler<PromiseObject>(args));
+  Rooted<DynamicImportContextObject*> context(
+      cx, ExtraFromHandler<DynamicImportContextObject>(args));
+  auto clearRef = mozilla::MakeScopeExit([&] {
+    DynamicImportContextObject::clearReferencingPrivate(cx->runtime(), context);
+  });
 
-  auto releasePrivate = mozilla::MakeScopeExit(
-      [&] { cx->runtime()->releaseScriptPrivate(referencingPrivate); });
+  RootedValue referencingPrivate(cx, context->referencingPrivate());
+  Rooted<PromiseObject*> promise(cx, TargetFromHandler<PromiseObject>(args));
 
   args.rval().setUndefined();
   return PromiseObject::reject(cx, promise, error);
 };
 
-bool FinishDynamicModuleImport_impl(JSContext* cx,
-                                    HandleObject evaluationPromise,
-                                    HandleValue referencingPrivate,
-                                    HandleObject moduleRequest,
-                                    HandleObject promiseArg) {
-  Rooted<ListObject*> resolutionArgs(cx, ListObject::create(cx));
-  if (!resolutionArgs || !resolutionArgs->append(cx, referencingPrivate)) {
-    return false;
+bool js::FinishDynamicModuleImport(JSContext* cx,
+                                   HandleObject evaluationPromise,
+                                   HandleValue referencingPrivate,
+                                   HandleObject moduleRequest,
+                                   HandleObject promise) {
+  // If we do not have an evaluation promise or a module request for the module,
+  // we can assume that evaluation has failed or been interrupted -- we can
+  // reject the dynamic module.
+
+  if (!evaluationPromise || !moduleRequest) {
+    return RejectPromiseWithPendingError(cx, promise.as<PromiseObject>());
   }
-  Rooted<Value> stringValue(
-      cx, StringValue(moduleRequest->as<ModuleRequestObject>().specifier()));
-  if (!resolutionArgs->append(cx, stringValue)) {
+
+  Rooted<JSString*> specifier(
+      cx, moduleRequest->as<ModuleRequestObject>().specifier());
+  Rooted<DynamicImportContextObject*> context(
+      cx,
+      DynamicImportContextObject::create(cx, referencingPrivate, specifier));
+  if (!context) {
     return false;
   }
 
-  Rooted<Value> resolutionArgsValue(cx, ObjectValue(*resolutionArgs));
-
+  Rooted<Value> contextValue(cx, ObjectValue(*context));
   RootedFunction onResolved(
-      cx, NewHandlerWithExtraValue(cx, OnResolvedDynamicModule, promiseArg,
-                                   resolutionArgsValue));
+      cx, NewHandlerWithExtraValue(cx, OnResolvedDynamicModule, promise,
+                                   contextValue));
   if (!onResolved) {
     return false;
   }
 
   RootedFunction onRejected(
-      cx, NewHandlerWithExtraValue(cx, OnRejectedDynamicModule, promiseArg,
-                                   referencingPrivate));
+      cx, NewHandlerWithExtraValue(cx, OnRejectedDynamicModule, promise,
+                                   contextValue));
   if (!onRejected) {
     return false;
   }
 
-  return JS::AddPromiseReactionsIgnoringUnhandledRejection(
-      cx, evaluationPromise, onResolved, onRejected);
-}
-
-bool js::FinishDynamicModuleImport(JSContext* cx,
-                                   HandleObject evaluationPromise,
-                                   HandleValue referencingPrivate,
-                                   HandleObject moduleRequest,
-                                   HandleObject promiseArg) {
-  // If we do not have an evaluation promise or a module request for the module,
-  // we can assume that evaluation has failed or been interrupted -- we can
-  // reject the dynamic module.
-  auto releasePrivate = mozilla::MakeScopeExit(
-      [&] { cx->runtime()->releaseScriptPrivate(referencingPrivate); });
-
-  if (!evaluationPromise || !moduleRequest) {
-    Handle<PromiseObject*> promise = promiseArg.as<PromiseObject>();
-    return RejectPromiseWithPendingError(cx, promise);
-  }
-
-  if (!FinishDynamicModuleImport_impl(cx, evaluationPromise, referencingPrivate,
-                                      moduleRequest, promiseArg)) {
+  if (!JS::AddPromiseReactionsIgnoringUnhandledRejection(
+          cx, evaluationPromise, onResolved, onRejected)) {
     return false;
   }
 
-  releasePrivate.release();
   return true;
 }

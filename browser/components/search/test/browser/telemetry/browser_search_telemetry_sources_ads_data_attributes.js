@@ -14,7 +14,7 @@ const TEST_PROVIDER_INFO = [
     telemetryId: "example-data-attributes",
     searchPageRegexp:
       /^https:\/\/example.org\/browser\/browser\/components\/search\/test\/browser\/telemetry\/searchTelemetryAd_dataAttributes(?:_none|_href)?.html/,
-    queryParamName: "s",
+    queryParamNames: ["s"],
     codeParamName: "abc",
     taggedCodes: ["ff"],
     adServerAttributes: ["xyz"],
@@ -35,10 +35,7 @@ add_setup(async function () {
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.search.log", true],
-      ["browser.search.serpEventTelemetry.enabled", true],
-    ],
+    set: [["browser.search.serpEventTelemetry.enabled", true]],
   });
 
   registerCleanupFunction(async () => {
@@ -55,6 +52,7 @@ add_task(async function test_track_ad_on_data_attributes() {
     gBrowser,
     getSERPUrl("searchTelemetryAd_dataAttributes.html")
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -68,7 +66,7 @@ add_task(async function test_track_ad_on_data_attributes() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example-data-attributes",
@@ -76,8 +74,17 @@ add_task(async function test_track_ad_on_data_attributes() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "1",
+          ads_visible: "1",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 
@@ -91,6 +98,7 @@ add_task(async function test_track_ad_on_data_attributes_and_hrefs() {
     gBrowser,
     getSERPUrl("searchTelemetryAd_dataAttributes_href.html")
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -104,7 +112,7 @@ add_task(async function test_track_ad_on_data_attributes_and_hrefs() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example-data-attributes",
@@ -112,8 +120,17 @@ add_task(async function test_track_ad_on_data_attributes_and_hrefs() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "1",
+          ads_visible: "1",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 
@@ -127,6 +144,7 @@ add_task(async function test_track_no_ad_on_data_attributes_and_hrefs() {
     gBrowser,
     getSERPUrl("searchTelemetryAd_dataAttributes_none.html")
   );
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {},
@@ -137,7 +155,7 @@ add_task(async function test_track_no_ad_on_data_attributes_and_hrefs() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example-data-attributes",
@@ -145,6 +163,7 @@ add_task(async function test_track_no_ad_on_data_attributes_and_hrefs() {
         partner_code: "ff",
         source: "unknown",
         is_shopping_page: "false",
+        is_private: "false",
         shopping_tab_displayed: "false",
       },
     },

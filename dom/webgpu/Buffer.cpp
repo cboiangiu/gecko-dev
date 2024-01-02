@@ -58,13 +58,17 @@ Buffer::~Buffer() {
 already_AddRefed<Buffer> Buffer::Create(Device* aDevice, RawId aDeviceId,
                                         const dom::GPUBufferDescriptor& aDesc,
                                         ErrorResult& aRv) {
-  if (aDevice->IsLost()) {
-    RefPtr<Buffer> buffer = new Buffer(aDevice, 0, aDesc.mSize, 0,
+  RefPtr<WebGPUChild> actor = aDevice->GetBridge();
+  RawId bufferId =
+      ffi::wgpu_client_make_buffer_id(actor->GetClient(), aDeviceId);
+
+  if (!aDevice->IsBridgeAlive()) {
+    // Create and return an invalid Buffer.
+    RefPtr<Buffer> buffer = new Buffer(aDevice, bufferId, aDesc.mSize, 0,
                                        ipc::WritableSharedMemoryMapping());
+    buffer->mValid = false;
     return buffer.forget();
   }
-
-  RefPtr<WebGPUChild> actor = aDevice->GetBridge();
 
   auto handle = ipc::UnsafeSharedMemoryHandle();
   auto mapping = ipc::WritableSharedMemoryMapping();
@@ -114,10 +118,10 @@ already_AddRefed<Buffer> Buffer::Create(Device* aDevice, RawId aDeviceId,
     return nullptr;
   }
 
-  RawId id = actor->DeviceCreateBuffer(aDeviceId, aDesc, std::move(handle));
+  actor->SendDeviceCreateBuffer(aDeviceId, bufferId, aDesc, std::move(handle));
 
-  RefPtr<Buffer> buffer =
-      new Buffer(aDevice, id, aDesc.mSize, aDesc.mUsage, std::move(mapping));
+  RefPtr<Buffer> buffer = new Buffer(aDevice, bufferId, aDesc.mSize,
+                                     aDesc.mUsage, std::move(mapping));
   buffer->SetLabel(aDesc.mLabel);
 
   if (aDesc.mMappedAtCreation) {
@@ -127,10 +131,18 @@ already_AddRefed<Buffer> Buffer::Create(Device* aDevice, RawId aDeviceId,
     buffer->SetMapped(0, aDesc.mSize, writable);
   }
 
+  aDevice->TrackBuffer(buffer.get());
+
   return buffer.forget();
 }
 
 void Buffer::Drop() {
+  if (!mValid) {
+    return;
+  }
+
+  mValid = false;
+
   AbortMapRequest();
 
   if (mMapped && !mMapped->mArrayBuffers.IsEmpty()) {
@@ -144,10 +156,11 @@ void Buffer::Drop() {
   }
   mMapped.reset();
 
-  if (mValid && !GetDevice().IsLost()) {
+  GetDevice().UntrackBuffer(this);
+
+  if (GetDevice().IsBridgeAlive()) {
     GetDevice().GetBridge()->SendBufferDrop(mId);
   }
-  mValid = false;
 }
 
 void Buffer::SetMapped(BufferAddress aOffset, BufferAddress aSize,

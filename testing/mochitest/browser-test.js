@@ -166,6 +166,8 @@ function Tester(aTests, structuredLogger, aCallback) {
   );
   this.AccessibilityUtils = this.EventUtils.AccessibilityUtils;
 
+  this.AccessibilityUtils.init();
+
   // Make sure our SpecialPowers actor is instantiated, in case it was
   // registered after our DOMWindowCreated event was fired (which it
   // most likely was).
@@ -524,6 +526,8 @@ Tester.prototype = {
     TabDestroyObserver.destroy();
     Services.console.unregisterListener(this);
 
+    this.AccessibilityUtils.uninit();
+
     // It's important to terminate the module to avoid crashes on shutdown.
     this.PromiseTestUtils.uninit();
 
@@ -549,7 +553,6 @@ Tester.prototype = {
 
     // Tests complete, notify the callback and return
     this.callback(this.tests);
-    this.accService = null;
     this.callback = null;
     this.tests = null;
   },
@@ -721,6 +724,10 @@ Tester.prototype = {
       }
 
       Services.obs.notifyObservers(null, "test-complete");
+
+      // Ensure to reset the clipboard in case the test has modified it,
+      // so it won't affect the next tests.
+      window.SpecialPowers.clipboardCopyString("");
 
       if (
         this.currentTest.passCount === 0 &&
@@ -1032,7 +1039,7 @@ Tester.prototype = {
             let sidebar = document.getElementById("sidebar");
             if (sidebar) {
               sidebar.setAttribute("src", "data:text/html;charset=utf-8,");
-              sidebar.docShell.createAboutBlankContentViewer(null, null);
+              sidebar.docShell.createAboutBlankDocumentViewer(null, null);
               sidebar.setAttribute("src", "about:blank");
             }
           }
@@ -1210,7 +1217,7 @@ Tester.prototype = {
 
     this.SimpleTest.reset();
     // Reset accessibility environment.
-    this.AccessibilityUtils.reset(this.a11y_checks);
+    this.AccessibilityUtils.reset(this.a11y_checks, this.currentTest.path);
 
     // Load the tests into a testscope
     let currentScope = (this.currentTest.scope = new testScope(
@@ -1434,7 +1441,11 @@ Tester.prototype = {
             );
             self.currentTest.timedOut = true;
             self.currentTest.scope.__waitTimer = null;
-            self.nextTest();
+            if (gConfig.timeoutAsPass) {
+              self.nextTest();
+            } else {
+              self.finish();
+            }
           },
           gTimeoutSeconds * 1000,
         ]);

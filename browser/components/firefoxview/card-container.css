@@ -18,7 +18,7 @@
 
 .card-container-header {
   display: inline-flex;
-  gap: 16px;
+  gap: 14px;
   width: 100%;
   align-items: center;
   cursor: pointer;
@@ -26,6 +26,8 @@
   outline-offset: 4px;
   padding: 6px;
   padding-inline-end: 0;
+  margin-block-end: 6px;
+  height: 24px;
 }
 
 .card-container-header[withViewAll] {
@@ -34,6 +36,10 @@
 
 .card-container-header[hidden] {
   display: none;
+}
+
+.card-container-header[toggleDisabled] {
+  cursor: auto;
 }
 
 .view-all-link {
@@ -103,13 +109,24 @@
   display: none;
 }
 
-::slotted([slot=header]) {
-  display: flex;
-  align-items: center;
+::slotted([slot=header]),
+::slotted([slot=secondary-header]) {
+  align-self: center;
   margin: 0;
   font-size: 1.13em;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
   user-select: none;
+  white-space: nowrap;
+}
+
+::slotted([slot=header]) {
+  flex: 1;
+}
+
+::slotted([slot=secondary-header]) {
+  padding-inline-end: 1em;
 }
 
 .card-container-footer {

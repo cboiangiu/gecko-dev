@@ -9,118 +9,75 @@ import "chrome://browser/content/firefoxview/card-container.mjs";
 // eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/firefoxview/fxview-empty-state.mjs";
 // eslint-disable-next-line import/no-unassigned-import
+import "chrome://browser/content/firefoxview/fxview-search-textbox.mjs";
+// eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/firefoxview/fxview-tab-list.mjs";
+
+import { placeLinkOnClipboard } from "./helpers.mjs";
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
-  PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
+  DeferredTask: "resource://gre/modules/DeferredTask.sys.mjs",
 });
 
-export class ViewPage extends MozLitElement {
+const WIN_RESIZE_DEBOUNCE_RATE_MS = 500;
+const WIN_RESIZE_DEBOUNCE_TIMEOUT_MS = 1000;
+
+/**
+ * A base class for content container views displayed on firefox-view.
+ *
+ * @property {boolean} recentBrowsing
+ *   Is part of the recentbrowsing page view
+ * @property {boolean} paused
+ *   No content will be updated and rendered while paused
+ */
+export class ViewPageContent extends MozLitElement {
   static get properties() {
     return {
-      selectedTab: { type: Boolean },
       recentBrowsing: { type: Boolean },
+      paused: { type: Boolean },
     };
   }
-
   constructor() {
     super();
-    this.selectedTab = false;
-    this.recentBrowsing = Boolean(this.closest("VIEW-RECENTBROWSING"));
+    // don't update or render until explicitly un-paused
+    this.paused = true;
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    this.ownerDocument.addEventListener("visibilitychange", this);
+  get ownerViewPage() {
+    return this.closest("[type='page']") || this;
   }
 
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    this.ownerDocument.removeEventListener("visibilitychange", this);
-  }
-
-  handleEvent(event) {
-    switch (event.type) {
-      case "visibilitychange":
-        if (this.ownerDocument.visibilityState === "visible") {
-          this.viewTabVisibleCallback();
-        } else {
-          this.viewTabHiddenCallback();
-        }
-        break;
+  get isVisible() {
+    if (!this.isConnected || this.ownerDocument.visibilityState != "visible") {
+      return false;
     }
+    return this.ownerViewPage.selectedTab;
   }
 
   /**
-   * Override this function to run a callback whenever Firefox View is visible.
+   * Override this function to run a callback whenever this content is visible.
    */
-  viewTabVisibleCallback() {}
+  viewVisibleCallback() {}
 
   /**
-   * Override this function to run a callback whenever Firefox View is hidden.
+   * Override this function to run a callback whenever this content is hidden.
    */
-  viewTabHiddenCallback() {}
-
-  enter() {
-    this.selectedTab = true;
-  }
-
-  exit() {
-    this.selectedTab = false;
-  }
+  viewHiddenCallback() {}
 
   getWindow() {
     return window.browsingContext.embedderWindowGlobal.browsingContext.window;
   }
 
-  /**
-   * This function doesn't just copy the link to the clipboard, it creates a
-   * URL object on the clipboard, so when it's pasted into an application that
-   * supports it, it displays the title as a link.
-   */
+  getBrowserTab() {
+    return this.getWindow().gBrowser.getTabForBrowser(
+      window.browsingContext.embedderElement
+    );
+  }
+
   copyLink(e) {
-    // Copied from doCommand/placesCmd_copy in PlacesUIUtils.sys.mjs
-
-    // This is a little hacky, but there is a lot of code in Places that handles
-    // clipboard stuff, so it's easier to reuse.
-    let node = {};
-    node.type = 0;
-    node.title = this.triggerNode.title;
-    node.uri = this.triggerNode.url;
-
-    // This order is _important_! It controls how this and other applications
-    // select data to be inserted based on type.
-    let contents = [
-      { type: lazy.PlacesUtils.TYPE_X_MOZ_URL, entries: [] },
-      { type: lazy.PlacesUtils.TYPE_HTML, entries: [] },
-      { type: lazy.PlacesUtils.TYPE_PLAINTEXT, entries: [] },
-    ];
-
-    contents.forEach(function (content) {
-      content.entries.push(lazy.PlacesUtils.wrapNode(node, content.type));
-    });
-
-    let xferable = Cc["@mozilla.org/widget/transferable;1"].createInstance(
-      Ci.nsITransferable
-    );
-    xferable.init(null);
-
-    function addData(type, data) {
-      xferable.addDataFlavor(type);
-      xferable.setTransferData(type, lazy.PlacesUtils.toISupportsString(data));
-    }
-
-    contents.forEach(function (content) {
-      addData(content.type, content.entries.join(lazy.PlacesUtils.endl));
-    });
-
-    Services.clipboard.setData(
-      xferable,
-      null,
-      Ci.nsIClipboard.kGlobalClipboard
-    );
+    placeLinkOnClipboard(this.triggerNode.title, this.triggerNode.url);
     this.recordContextMenuTelemetry("copy-link", e);
   }
 
@@ -149,5 +106,154 @@ export class ViewPage extends MozLitElement {
         data_type: event.target.panel.dataset.tabType,
       }
     );
+  }
+
+  shouldUpdate(changedProperties) {
+    return !this.paused && super.shouldUpdate(changedProperties);
+  }
+}
+
+/**
+ * A "page" in firefox view, which may be hidden or shown by the named-deck container or
+ * via the owner document's visibility
+ *
+ * @property {boolean} selectedTab
+ *   Is this page the selected view in the named-deck container
+ */
+export class ViewPage extends ViewPageContent {
+  static get properties() {
+    return {
+      selectedTab: { type: Boolean },
+    };
+  }
+
+  constructor() {
+    super();
+    this.selectedTab = false;
+    this.recentBrowsing = Boolean(this.recentBrowsingElement);
+    this.onVisibilityChange = this.onVisibilityChange.bind(this);
+    this.onResize = this.onResize.bind(this);
+  }
+
+  get recentBrowsingElement() {
+    return this.closest("VIEW-RECENTBROWSING");
+  }
+
+  onResize() {
+    this.windowResizeTask = new lazy.DeferredTask(
+      () => this.updateAllVirtualLists(),
+      WIN_RESIZE_DEBOUNCE_RATE_MS,
+      WIN_RESIZE_DEBOUNCE_TIMEOUT_MS
+    );
+    this.windowResizeTask?.arm();
+  }
+
+  onVisibilityChange(event) {
+    if (this.isVisible) {
+      this.paused = false;
+      this.viewVisibleCallback();
+    } else if (
+      this.ownerViewPage.selectedTab &&
+      this.ownerDocument.visibilityState == "hidden"
+    ) {
+      this.paused = true;
+      this.viewHiddenCallback();
+    }
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.ownerDocument.addEventListener(
+      "visibilitychange",
+      this.onVisibilityChange
+    );
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.ownerDocument.removeEventListener(
+      "visibilitychange",
+      this.onVisibilityChange
+    );
+    this.getWindow().removeEventListener("resize", this.onResize);
+  }
+
+  updateAllVirtualLists() {
+    if (!this.paused) {
+      let tabLists = [];
+      if (this.recentBrowsing) {
+        let viewComponents = this.querySelectorAll("[slot]");
+        viewComponents.forEach(viewComponent => {
+          let currentTabLists = [];
+          if (viewComponent.nodeName.includes("OPENTABS")) {
+            viewComponent.viewCards.forEach(viewCard => {
+              currentTabLists.push(viewCard.tabList);
+            });
+          } else {
+            currentTabLists =
+              viewComponent.shadowRoot.querySelectorAll("fxview-tab-list");
+          }
+          tabLists.push(...currentTabLists);
+        });
+      } else {
+        tabLists = this.shadowRoot.querySelectorAll("fxview-tab-list");
+      }
+      tabLists.forEach(tabList => {
+        if (!tabList.updatesPaused && tabList.rootVirtualListEl?.isVisible) {
+          tabList.rootVirtualListEl.recalculateAfterWindowResize();
+        }
+      });
+    }
+  }
+
+  toggleVisibilityInCardContainer(isOpenTabs) {
+    let cards = [];
+    let tabLists = [];
+    if (!isOpenTabs) {
+      cards = this.shadowRoot.querySelectorAll("card-container");
+      tabLists = this.shadowRoot.querySelectorAll("fxview-tab-list");
+    } else {
+      this.viewCards.forEach(viewCard => {
+        if (viewCard.cardEl) {
+          cards.push(viewCard.cardEl);
+          tabLists.push(viewCard.tabList);
+        }
+      });
+    }
+    if (tabLists.length && cards.length) {
+      cards.forEach(cardEl => {
+        if (cardEl.visible !== !this.paused) {
+          cardEl.visible = !this.paused;
+        } else if (
+          cardEl.isExpanded &&
+          tabLists[0].updatesPaused !== this.paused
+        ) {
+          // If card is already visible and expanded but tab-list has updatesPaused,
+          // update the tab-list updatesPaused prop from here instead of card-container
+          tabLists.forEach(tabList => {
+            tabList.updatesPaused = this.paused;
+          });
+        }
+      });
+    }
+  }
+
+  enter() {
+    this.selectedTab = true;
+    if (this.isVisible) {
+      this.paused = false;
+      this.viewVisibleCallback();
+      this.getWindow().addEventListener("resize", this.onResize);
+    }
+  }
+
+  exit() {
+    this.selectedTab = false;
+    this.paused = true;
+    this.viewHiddenCallback();
+    if (!this.windowResizeTask?.isFinalized) {
+      this.windowResizeTask?.finalize();
+    }
+    this.getWindow().removeEventListener("resize", this.onResize);
   }
 }

@@ -129,14 +129,25 @@ DefaultJitOptions::DefaultJitOptions() {
   // Whether the Baseline Interpreter is enabled.
   SET_DEFAULT(baselineInterpreter, true);
 
-  // Emit baseline interpreter and interpreter entry frames to distinguish which
-  // JSScript is being interpreted by external profilers.
-  // Enabled by default under --enable-perf, otherwise disabled.
-#if defined(JS_ION_PERF)
-  SET_DEFAULT(emitInterpreterEntryTrampoline, true);
-#else
-  SET_DEFAULT(emitInterpreterEntryTrampoline, false);
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+  // Whether the Portable Baseline Interpreter is enabled.
+  SET_DEFAULT(portableBaselineInterpreter, false);
 #endif
+
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP_FORCE
+  SET_DEFAULT(portableBaselineInterpreter, true);
+  SET_DEFAULT(portableBaselineInterpreterWarmUpThreshold, 0);
+#endif
+
+  // emitInterpreterEntryTrampoline and enableICFramePointers are used in
+  // combination with perf jitdump profiling.  The first will enable
+  // trampolines for interpreter and baseline interpreter frames to
+  // identify which function is being executed, and the latter enables
+  // frame pointers for IC stubs.  They are both enabled by default
+  // when the |IONPERF| environment variable is set.
+  bool perfEnabled = !!getenv("IONPERF");
+  SET_DEFAULT(emitInterpreterEntryTrampoline, perfEnabled);
+  SET_DEFAULT(enableICFramePointers, perfEnabled);
 
   // Whether the Baseline JIT is enabled.
   SET_DEFAULT(baselineJit, true);
@@ -173,6 +184,12 @@ DefaultJitOptions::DefaultJitOptions() {
   // How many invocations or loop iterations are needed before functions
   // enter the Baseline Interpreter.
   SET_DEFAULT(baselineInterpreterWarmUpThreshold, 10);
+
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+  // How many invocations are needed before functions enter the
+  // Portable Baseline Interpreter.
+  SET_DEFAULT(portableBaselineInterpreterWarmUpThreshold, 10);
+#endif
 
   // How many invocations or loop iterations are needed before functions
   // are compiled with the baseline compiler.
@@ -334,7 +351,6 @@ DefaultJitOptions::DefaultJitOptions() {
   SET_DEFAULT(enableWatchtowerMegamorphic, true);
 
   SET_DEFAULT(onlyInlineSelfHosted, false);
-  SET_DEFAULT(enableICFramePointers, false);
 
   SET_DEFAULT(enableWasmJitExit, true);
   SET_DEFAULT(enableWasmJitEntry, true);
@@ -387,6 +403,12 @@ bool DefaultJitOptions::isSmallFunction(JSScript* script) const {
 }
 
 void DefaultJitOptions::enableGvn(bool enable) { disableGvn = !enable; }
+
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+void DefaultJitOptions::setEagerPortableBaselineInterpreter() {
+  portableBaselineInterpreterWarmUpThreshold = 0;
+}
+#endif
 
 void DefaultJitOptions::setEagerBaselineCompilation() {
   baselineInterpreterWarmUpThreshold = 0;

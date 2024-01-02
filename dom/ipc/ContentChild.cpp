@@ -24,6 +24,7 @@
 #include "imgLoader.h"
 #include "ScrollingMetrics.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/ClipboardReadRequestChild.h"
 #include "mozilla/Components.h"
 #include "mozilla/HangDetails.h"
 #include "mozilla/LoadInfo.h"
@@ -75,7 +76,6 @@
 #include "mozilla/dom/JSProcessActorChild.h"
 #include "mozilla/dom/LSObject.h"
 #include "mozilla/dom/MemoryReportRequest.h"
-#include "mozilla/dom/PLoginReputationChild.h"
 #include "mozilla/dom/PSessionStorageObserverChild.h"
 #include "mozilla/dom/PostMessageEvent.h"
 #include "mozilla/dom/PushNotifier.h"
@@ -180,9 +180,9 @@
 #include "nsDocShellLoadState.h"
 #include "nsHashPropertyBag.h"
 #include "nsIConsoleListener.h"
-#include "nsIContentViewer.h"
 #include "nsICycleCollectorListener.h"
 #include "nsIDocShellTreeOwner.h"
+#include "nsIDocumentViewer.h"
 #include "nsIDragService.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIMemoryInfoDumper.h"
@@ -194,7 +194,6 @@
 #include "nsJSEnvironment.h"
 #include "nsJSUtils.h"
 #include "nsMemoryInfoDumper.h"
-#include "nsPluginHost.h"
 #include "nsServiceManagerUtils.h"
 #include "nsStyleSheetService.h"
 #include "nsThreadManager.h"
@@ -802,7 +801,6 @@ void ContentChild::Init(mozilla::ipc::UntypedEndpoint&& aEndpoint,
   // NOTE: We have to register the annotator on the main thread, as annotators
   // only affect a single thread.
   SchedulerGroup::Dispatch(
-      TaskCategory::Other,
       NS_NewRunnableFunction("RegisterPendingInputEventHangAnnotator", [] {
         BackgroundHangMonitor::RegisterAnnotator(
             PendingInputEventHangAnnotator::sSingleton);
@@ -1808,7 +1806,7 @@ mozilla::ipc::IPCResult ContentChild::RecvConstructBrowser(
   if (!aWindowInit.isInitialDocument() ||
       !NS_IsAboutBlank(aWindowInit.documentURI())) {
     return IPC_FAIL(this,
-                    "Logic in CreateContentViewerForActor currently requires "
+                    "Logic in CreateDocumentViewerForActor currently requires "
                     "actors to be initial about:blank documents");
   }
 
@@ -1987,6 +1985,12 @@ PRemotePrintJobChild* ContentChild::AllocPRemotePrintJobChild() {
 #else
   return nullptr;
 #endif
+}
+
+already_AddRefed<PClipboardReadRequestChild>
+ContentChild::AllocPClipboardReadRequestChild(
+    const nsTArray<nsCString>& aTypes) {
+  return MakeAndAddRef<ClipboardReadRequestChild>(aTypes);
 }
 
 media::PMediaChild* ContentChild::AllocPMediaChild() {
@@ -3402,16 +3406,6 @@ bool ContentChild::DeallocPURLClassifierLocalChild(
   return true;
 }
 
-PLoginReputationChild* ContentChild::AllocPLoginReputationChild(nsIURI* aUri) {
-  return new PLoginReputationChild();
-}
-
-bool ContentChild::DeallocPLoginReputationChild(PLoginReputationChild* aActor) {
-  MOZ_ASSERT(aActor);
-  delete aActor;
-  return true;
-}
-
 PSessionStorageObserverChild*
 ContentChild::AllocPSessionStorageObserverChild() {
   MOZ_CRASH(
@@ -4451,7 +4445,7 @@ mozilla::ipc::IPCResult ContentChild::RecvDispatchBeforeUnloadToSubtree(
     const MaybeDiscarded<BrowsingContext>& aStartingAt,
     DispatchBeforeUnloadToSubtreeResolver&& aResolver) {
   if (aStartingAt.IsNullOrDiscarded()) {
-    aResolver(nsIContentViewer::eAllowNavigation);
+    aResolver(nsIDocumentViewer::eAllowNavigation);
   } else {
     DispatchBeforeUnloadToSubtree(aStartingAt.get(), std::move(aResolver));
   }
@@ -4480,23 +4474,23 @@ mozilla::ipc::IPCResult ContentChild::RecvInitNextGenLocalStorageEnabled(
 
   aStartingAt->PreOrderWalk([&](dom::BrowsingContext* aBC) {
     if (aBC->GetDocShell()) {
-      nsCOMPtr<nsIContentViewer> contentViewer;
-      aBC->GetDocShell()->GetContentViewer(getter_AddRefs(contentViewer));
-      if (contentViewer &&
-          contentViewer->DispatchBeforeUnload() ==
-              nsIContentViewer::eRequestBlockNavigation &&
+      nsCOMPtr<nsIDocumentViewer> viewer;
+      aBC->GetDocShell()->GetDocViewer(getter_AddRefs(viewer));
+      if (viewer &&
+          viewer->DispatchBeforeUnload() ==
+              nsIDocumentViewer::eRequestBlockNavigation &&
           !resolved) {
         // Send our response as soon as we find any blocker, so that we can show
         // the permit unload prompt as soon as possible, without giving
         // subsequent handlers a chance to delay it.
-        aResolver(nsIContentViewer::eRequestBlockNavigation);
+        aResolver(nsIDocumentViewer::eRequestBlockNavigation);
         resolved = true;
       }
     }
   });
 
   if (!resolved) {
-    aResolver(nsIContentViewer::eAllowNavigation);
+    aResolver(nsIDocumentViewer::eAllowNavigation);
   }
 }
 

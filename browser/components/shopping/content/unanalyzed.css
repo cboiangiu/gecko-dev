@@ -12,8 +12,9 @@
 }
 
 #unanalyzed-product-icon {
-  width: 264px;
-  height: 290px;
+  max-width: 264px;
+  max-height: 290px;
+  width: 100%;
   content: url("chrome://browser/content/shopping/assets/unanalyzedLight.avif");
 
   @media (prefers-color-scheme: dark) {
@@ -24,16 +25,17 @@
 #unanalyzed-product-message-content {
   display: flex;
   flex-direction: column;
-}
+  line-height: 1.5;
 
-#unanalyzed-product-message-content > p {
-  margin-block: 0.25rem;
+  > h2 {
+    font-size: inherit;
+  }
+
+  > p {
+    margin-block: 0.25rem;
+  }
 }
 
 #unanalyzed-product-analysis-button {
   width: 100%;
-}
-
-#unanalyzed-product-message-content {
-  line-height: 150%;
 }

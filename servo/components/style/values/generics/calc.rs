@@ -503,8 +503,10 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
                 }
                 dividend_unit | divisor_unit
             },
-            CalcNode::Sign(_) => {
-                // Result of a sign() is always a number.
+            CalcNode::Sign(ref child) => {
+                // sign() always resolves to a number, but we still need to make sure that the
+                // child units make sense.
+                let _ = child.unit()?;
                 CalcUnits::empty()
             },
         })
@@ -566,10 +568,23 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
                 }
             },
             CalcNode::Round {
+                ref mut strategy,
                 ref mut value,
                 ref mut step,
-                ..
             } => {
+                match *strategy {
+                    RoundingStrategy::Nearest => {
+                        // Nearest is tricky because we'd have to swap the
+                        // behavior at the half-way point from using the upper
+                        // to lower bound.
+                        // Simpler to just wrap self in a negate node.
+                        wrap_self_in_negate(self);
+                        return;
+                    },
+                    RoundingStrategy::Up => *strategy = RoundingStrategy::Down,
+                    RoundingStrategy::Down => *strategy = RoundingStrategy::Up,
+                    RoundingStrategy::ToZero => (),
+                }
                 value.negate();
                 step.negate();
             },
@@ -586,7 +601,10 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
                     child.negate();
                 }
             },
-            CalcNode::Abs(ref mut child) | CalcNode::Sign(ref mut child) => {
+            CalcNode::Abs(_) => {
+                wrap_self_in_negate(self);
+            },
+            CalcNode::Sign(ref mut child) => {
                 child.negate();
             },
         }
@@ -650,7 +668,7 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
         false
     }
 
-    /// Tries to apply a generic arithmentic operator
+    /// Tries to apply a generic arithmetic operator
     fn try_op<O>(&self, other: &Self, op: O) -> Result<Self, ()>
     where
         O: Fn(f32, f32) -> f32,
@@ -786,12 +804,12 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
         }
     }
 
-    /// Reolve this node into a value.
+    /// Resolve this node into a value.
     pub fn resolve(&self) -> Result<L, ()> {
         self.resolve_map(|l| Ok(l.clone()))
     }
 
-    /// Reolve this node into a value, given a function that maps the leaf values.
+    /// Resolve this node into a value, given a function that maps the leaf values.
     pub fn resolve_map<F>(&self, mut leaf_to_output_fn: F) -> Result<L, ()>
     where
         F: FnMut(&L) -> Result<L, ()>,
@@ -930,7 +948,7 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
                     return Err(());
                 }
 
-                let step = step.unitless_value();
+                let step = step.unitless_value().abs();
 
                 value.map(|value| {
                     // TODO(emilio): Seems like at least a few of these
@@ -1054,9 +1072,7 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
             Self::Abs(ref c) => {
                 let mut result = c.resolve_internal(leaf_to_output_fn)?;
 
-                if !result.is_zero() {
-                    result.map(|v| v.abs());
-                }
+                result.map(|v| v.abs());
 
                 Ok(result)
             },
@@ -1287,6 +1303,10 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
                 }
 
                 let remainder = value_or_stop!(value.try_op(step, Rem::rem));
+                if remainder.is_zero_leaf() {
+                    replace_self_with!(&mut **value);
+                    return;
+                }
 
                 let (mut lower_bound, mut upper_bound) = if value.is_negative_leaf() {
                     let upper_bound = value_or_stop!(value.try_op(&remainder, Sub::sub));
@@ -1513,7 +1533,7 @@ impl<L: CalcNodeLeaf> CalcNode<L> {
             },
             Self::Abs(ref mut child) => {
                 if let CalcNode::Leaf(leaf) = child.as_mut() {
-                    leaf.map(|v| if v.is_zero() { v } else { v.abs() });
+                    leaf.map(|v| v.abs());
                     replace_self_with!(&mut **child);
                 }
             },

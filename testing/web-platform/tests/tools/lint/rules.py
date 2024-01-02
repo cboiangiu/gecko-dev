@@ -198,7 +198,7 @@ class VariantMissing(Rule):
 class MalformedVariant(Rule):
     name = "MALFORMED-VARIANT"
     description = collapse("""
-        %s `<meta name=variant>` 'content' attribute must be a non empty string
+        %s must be a non empty string
         and start with '?' or '#'
     """)
 
@@ -337,6 +337,23 @@ class TentativeDirectoryName(Rule):
     name = "TENTATIVE-DIRECTORY-NAME"
     description = "Directories for tentative tests must be named exactly 'tentative'"
     to_fix = "rename directory to be called 'tentative'"
+
+
+class InvalidMetaFile(Rule):
+    name = "INVALID-META-FILE"
+    description = "The META.yml is not a YAML file with the expected structure"
+
+
+class InvalidWebFeaturesFile(Rule):
+    name = "INVALID-WEB-FEATURES-FILE"
+    description = "The WEB_FEATURES.yml file contains an invalid structure"
+
+
+class MissingTestInWebFeaturesFile(Rule):
+    name = "MISSING-WEB-FEATURES-FILE"
+    description = collapse("""
+        The WEB_FEATURES.yml file references a test that does not exist: '%s'
+    """)
 
 
 class Regexp(metaclass=abc.ABCMeta):

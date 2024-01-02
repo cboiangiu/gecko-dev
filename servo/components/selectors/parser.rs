@@ -18,7 +18,7 @@ use cssparser::{BasicParseError, BasicParseErrorKind, ParseError, ParseErrorKind
 use cssparser::{CowRcStr, Delimiter, SourceLocation};
 use cssparser::{Parser as CssParser, ToCss, Token};
 use precomputed_hash::PrecomputedHash;
-use servo_arc::{Arc, ThinArc, UniqueArc};
+use servo_arc::{Arc, ArcUnionBorrow, ThinArc, ThinArcUnion, UniqueArc};
 use smallvec::SmallVec;
 use std::borrow::{Borrow, Cow};
 use std::fmt::{self, Debug};
@@ -135,15 +135,6 @@ impl SelectorParsingState {
     #[inline]
     fn allows_part(self) -> bool {
         !self.intersects(Self::AFTER_PSEUDO | Self::DISALLOW_PSEUDOS)
-    }
-
-    // TODO(emilio): Maybe some of these should be allowed, but this gets us on
-    // the safe side for now, matching previous behavior. Gotta be careful with
-    // the ones like :-moz-any, which allow nested selectors but don't carry the
-    // state, and so on.
-    #[inline]
-    fn allows_custom_functional_pseudo_classes(self) -> bool {
-        !self.intersects(Self::AFTER_PSEUDO)
     }
 
     #[inline]
@@ -307,10 +298,11 @@ pub trait Parser<'i> {
     fn parse_non_ts_functional_pseudo_class<'t>(
         &self,
         name: CowRcStr<'i>,
-        arguments: &mut CssParser<'i, 't>,
+        parser: &mut CssParser<'i, 't>,
+        _after_part: bool,
     ) -> Result<<Self::Impl as SelectorImpl>::NonTSPseudoClass, ParseError<'i, Self::Error>> {
         Err(
-            arguments.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+            parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
                 name,
             )),
         )
@@ -352,11 +344,67 @@ pub trait Parser<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, ToShmem)]
+/// A selector list is a tagged pointer with either a single selector, or a ThinArc<()> of multiple
+/// selectors.
+#[derive(Clone, Eq, Debug, PartialEq, ToShmem)]
 #[shmem(no_bounds)]
 pub struct SelectorList<Impl: SelectorImpl>(
-    #[shmem(field_bound)] pub SmallVec<[Selector<Impl>; 1]>,
+    #[shmem(field_bound)] ThinArcUnion<SpecificityAndFlags, Component<Impl>, (), Selector<Impl>>,
 );
+
+impl<Impl: SelectorImpl> SelectorList<Impl> {
+    pub fn from_one(selector: Selector<Impl>) -> Self {
+        #[cfg(debug_assertions)]
+        let selector_repr = unsafe { *(&selector as *const _ as *const usize) };
+        let list = Self(ThinArcUnion::from_first(selector.into_data()));
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            selector_repr,
+            unsafe { *(&list as *const _ as *const usize) },
+            "We rely on the same bit representation for the single selector variant"
+        );
+        list
+    }
+
+    pub fn from_iter(mut iter: impl ExactSizeIterator<Item = Selector<Impl>>) -> Self {
+        if iter.len() == 1 {
+            Self::from_one(iter.next().unwrap())
+        } else {
+            Self(ThinArcUnion::from_second(ThinArc::from_header_and_iter(
+                (),
+                iter,
+            )))
+        }
+    }
+
+    #[inline]
+    pub fn slice(&self) -> &[Selector<Impl>] {
+        match self.0.borrow() {
+            ArcUnionBorrow::First(..) => {
+                // SAFETY: see from_one.
+                let selector: &Selector<Impl> = unsafe { std::mem::transmute(self) };
+                std::slice::from_ref(selector)
+            },
+            ArcUnionBorrow::Second(list) => list.get().slice(),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self.0.borrow() {
+            ArcUnionBorrow::First(..) => 1,
+            ArcUnionBorrow::Second(list) => list.len(),
+        }
+    }
+
+    /// Returns the address on the heap of the ThinArc for memory reporting.
+    pub fn thin_arc_heap_ptr(&self) -> *const ::std::os::raw::c_void {
+        match self.0.borrow() {
+            ArcUnionBorrow::First(s) => s.with_arc(|a| a.heap_ptr()),
+            ArcUnionBorrow::Second(s) => s.with_arc(|a| a.heap_ptr()),
+        }
+    }
+}
 
 /// Uniquely identify a selector based on its components, which is behind ThinArc and
 /// is therefore stable.
@@ -397,18 +445,7 @@ pub enum ParseRelative {
 impl<Impl: SelectorImpl> SelectorList<Impl> {
     /// Returns a selector list with a single `&`
     pub fn ampersand() -> Self {
-        Self(smallvec::smallvec![Selector::ampersand()])
-    }
-
-    /// Copies a selector list into a reference counted list.
-    pub fn to_shared(&self) -> ArcSelectorList<Impl> {
-        ThinArc::from_header_and_iter((), self.0.iter().cloned())
-    }
-
-    /// Turns a selector list into a reference counted list. Drains the list. We don't use
-    /// `mut self` to avoid memmoving around.
-    pub fn into_shared(&mut self) -> ArcSelectorList<Impl> {
-        ThinArc::from_header_and_iter((), self.0.drain(..))
+        Self::from_one(Selector::ampersand())
     }
 
     /// Parse a comma-separated list of Selectors.
@@ -443,7 +480,7 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
     where
         P: Parser<'i, Impl = Impl>,
     {
-        let mut values = SmallVec::new();
+        let mut values = SmallVec::<[_; 4]>::new();
         let forgiving = recovery == ForgivingParsing::Yes && parser.allow_forgiving_selectors();
         loop {
             let selector = input.parse_until_before(Delimiter::Comma, |input| {
@@ -454,10 +491,9 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
                     selector = Ok(Selector::new_invalid(input.slice_from(start)));
                 }
                 selector
-            });
+            })?;
 
-            debug_assert!(!forgiving || selector.is_ok());
-            values.push(selector?);
+            values.push(selector);
 
             match input.next() {
                 Ok(&Token::Comma) => {},
@@ -465,18 +501,22 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
                 Err(_) => break,
             }
         }
-        Ok(SelectorList(values))
+        Ok(Self::from_iter(values.into_iter()))
     }
 
     /// Replaces the parent selector in all the items of the selector list.
-    pub fn replace_parent_selector(&self, parent: &ArcSelectorList<Impl>) -> Self {
-        Self(self.0.iter().map(|selector| selector.replace_parent_selector(parent)).collect())
+    pub fn replace_parent_selector(&self, parent: &SelectorList<Impl>) -> Self {
+        Self::from_iter(
+            self.slice()
+                .iter()
+                .map(|selector| selector.replace_parent_selector(parent)),
+        )
     }
 
     /// Creates a SelectorList from a Vec of selectors. Used in tests.
     #[allow(dead_code)]
     pub(crate) fn from_vec(v: Vec<Selector<Impl>>) -> Self {
-        SelectorList(SmallVec::from_vec(v))
+        SelectorList::from_iter(v.into_iter())
     }
 }
 
@@ -583,9 +623,10 @@ where
                 // :where and :is OR their selectors, so we can't put any hash
                 // in the filter if there's more than one selector, as that'd
                 // exclude elements that may match one of the other selectors.
-                if list.len() == 1 &&
+                let slice = list.slice();
+                if slice.len() == 1 &&
                     !collect_selector_hashes(
-                        create_inner_iterator(&list.slice()[0]),
+                        create_inner_iterator(&slice[0]),
                         quirks_mode,
                         hashes,
                         len,
@@ -614,12 +655,13 @@ fn collect_ancestor_hashes<Impl: SelectorImpl>(
     hashes: &mut [u32; 4],
     len: &mut usize,
 ) {
-    collect_selector_hashes(AncestorIter::new(iter), quirks_mode, hashes, len, |s| AncestorIter(s.iter()));
+    collect_selector_hashes(AncestorIter::new(iter), quirks_mode, hashes, len, |s| {
+        AncestorIter(s.iter())
+    });
 }
 
 impl AncestorHashes {
-    pub fn new<Impl: SelectorImpl>(selector: &Selector<Impl>, quirks_mode: QuirksMode) -> Self
-    {
+    pub fn new<Impl: SelectorImpl>(selector: &Selector<Impl>, quirks_mode: QuirksMode) -> Self {
         // Compute ancestor hashes for the bloom filter.
         let mut hashes = [0u32; 4];
         let mut len = 0;
@@ -654,6 +696,8 @@ pub fn namespace_empty_string<Impl: SelectorImpl>() -> Impl::NamespaceUrl {
     Impl::NamespaceUrl::default()
 }
 
+type SelectorData<Impl> = ThinArc<SpecificityAndFlags, Component<Impl>>;
+
 /// A Selector stores a sequence of simple selectors and combinators. The
 /// iterator classes allow callers to iterate at either the raw sequence level or
 /// at the level of sequences of simple selectors separated by combinators. Most
@@ -670,9 +714,8 @@ pub fn namespace_empty_string<Impl: SelectorImpl>() -> Impl::NamespaceUrl {
 /// handle it in to_css to make it invisible to serialization.
 #[derive(Clone, Eq, PartialEq, ToShmem)]
 #[shmem(no_bounds)]
-pub struct Selector<Impl: SelectorImpl>(
-    #[shmem(field_bound)] ThinArc<SpecificityAndFlags, Component<Impl>>,
-);
+#[repr(transparent)]
+pub struct Selector<Impl: SelectorImpl>(#[shmem(field_bound)] SelectorData<Impl>);
 
 impl<Impl: SelectorImpl> Selector<Impl> {
     /// See Arc::mark_as_intentionally_leaked
@@ -692,32 +735,32 @@ impl<Impl: SelectorImpl> Selector<Impl> {
 
     #[inline]
     pub fn specificity(&self) -> u32 {
-        self.0.header.specificity()
+        self.0.header.specificity
     }
 
     #[inline]
-    fn flags(&self) -> SelectorFlags {
+    pub(crate) fn flags(&self) -> SelectorFlags {
         self.0.header.flags
     }
 
     #[inline]
     pub fn has_pseudo_element(&self) -> bool {
-        self.0.header.has_pseudo_element()
+        self.flags().intersects(SelectorFlags::HAS_PSEUDO)
     }
 
     #[inline]
     pub fn has_parent_selector(&self) -> bool {
-        self.0.header.has_parent_selector()
+        self.flags().intersects(SelectorFlags::HAS_PARENT)
     }
 
     #[inline]
     pub fn is_slotted(&self) -> bool {
-        self.0.header.is_slotted()
+        self.flags().intersects(SelectorFlags::HAS_SLOTTED)
     }
 
     #[inline]
     pub fn is_part(&self) -> bool {
-        self.0.header.is_part()
+        self.flags().intersects(SelectorFlags::HAS_PART)
     }
 
     #[inline]
@@ -812,27 +855,13 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         }
     }
 
-    /// Whether this selector is a featureless :host selector, with no
-    /// combinators to the left, and optionally has a pseudo-element to the
-    /// right.
+    /// Whether this selector is a featureless :host selector, with no combinators to the left, and
+    /// optionally has a pseudo-element to the right.
     #[inline]
     pub fn is_featureless_host_selector_or_pseudo_element(&self) -> bool {
-        let mut iter = self.iter();
-        if !self.has_pseudo_element() {
-            return iter.is_featureless_host_selector();
-        }
-
-        // Skip the pseudo-element.
-        for _ in &mut iter {}
-
-        match iter.next_sequence() {
-            None => return false,
-            Some(combinator) => {
-                debug_assert_eq!(combinator, Combinator::PseudoElement);
-            },
-        }
-
-        iter.is_featureless_host_selector()
+        let flags = self.flags();
+        flags.intersects(SelectorFlags::HAS_HOST) &&
+            !flags.intersects(SelectorFlags::HAS_NON_FEATURELESS_COMPONENT)
     }
 
     /// Returns an iterator over this selector in matching order (right-to-left),
@@ -906,61 +935,59 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         Selector(builder.build_with_specificity_and_flags(spec))
     }
 
-    pub fn replace_parent_selector(&self, parent: &ArcSelectorList<Impl>) -> Self {
-        // FIXME(emilio): Shouldn't allow replacing if parent has a pseudo-element selector
-        // or what not.
-        let flags = self.flags() - SelectorFlags::HAS_PARENT;
-        let mut specificity = Specificity::from(self.specificity());
-        let parent_specificity =
-            Specificity::from(selector_list_specificity_and_flags(parent.slice().iter()).specificity());
+    #[inline]
+    fn into_data(self) -> SelectorData<Impl> {
+        self.0
+    }
 
-        // The specificity at this point will be wrong, we replace it by the correct one after the
-        // fact.
-        let specificity_and_flags = SpecificityAndFlags {
-            specificity: self.specificity(),
-            flags,
-        };
+    pub fn replace_parent_selector(&self, parent: &SelectorList<Impl>) -> Self {
+        let parent_specificity_and_flags =
+            selector_list_specificity_and_flags(parent.slice().iter());
+
+        let mut specificity = Specificity::from(self.specificity());
+        let mut flags = self.flags() - SelectorFlags::HAS_PARENT;
 
         fn replace_parent_on_selector_list<Impl: SelectorImpl>(
             orig: &[Selector<Impl>],
-            parent: &ArcSelectorList<Impl>,
+            parent: &SelectorList<Impl>,
             specificity: &mut Specificity,
-            with_specificity: bool,
-        ) -> Option<ArcSelectorList<Impl>> {
-            let mut any = false;
-
-            let result = ArcSelectorList::from_header_and_iter(
-                (),
-                orig
-                    .iter()
-                    .map(|s| {
-                        if !s.has_parent_selector() {
-                            return s.clone();
-                        }
-                        any = true;
-                        s.replace_parent_selector(parent)
-                    })
-            );
-
-            if !any {
+            flags: &mut SelectorFlags,
+            propagate_specificity: bool,
+            flags_to_propagate: SelectorFlags,
+        ) -> Option<SelectorList<Impl>> {
+            if !orig.iter().any(|s| s.has_parent_selector()) {
                 return None;
             }
 
-            if !with_specificity {
-                return Some(result);
-            }
+            let result = SelectorList::from_iter(orig.iter().map(|s| {
+                if !s.has_parent_selector() {
+                    return s.clone();
+                }
+                s.replace_parent_selector(parent)
+            }));
 
-            *specificity += Specificity::from(
-                selector_list_specificity_and_flags(result.slice().iter()).specificity -
-                    selector_list_specificity_and_flags(orig.iter()).specificity,
+            let result_specificity_and_flags =
+                selector_list_specificity_and_flags(result.slice().iter());
+            if propagate_specificity {
+                *specificity += Specificity::from(
+                    result_specificity_and_flags.specificity -
+                        selector_list_specificity_and_flags(orig.iter()).specificity,
+                );
+            }
+            flags.insert(
+                result_specificity_and_flags
+                    .flags
+                    .intersection(flags_to_propagate),
             );
             Some(result)
         }
 
         fn replace_parent_on_relative_selector_list<Impl: SelectorImpl>(
             orig: &[RelativeSelector<Impl>],
-            parent: &ArcSelectorList<Impl>,
+            parent: &SelectorList<Impl>,
             specificity: &mut Specificity,
+            flags: &mut SelectorFlags,
+            flags_to_propagate: SelectorFlags,
         ) -> Vec<RelativeSelector<Impl>> {
             let mut any = false;
 
@@ -982,8 +1009,15 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                 return result;
             }
 
+            let result_specificity_and_flags =
+                relative_selector_list_specificity_and_flags(&result);
+            flags.insert(
+                result_specificity_and_flags
+                    .flags
+                    .intersection(flags_to_propagate),
+            );
             *specificity += Specificity::from(
-                relative_selector_list_specificity_and_flags(&result).specificity -
+                result_specificity_and_flags.specificity -
                     relative_selector_list_specificity_and_flags(orig).specificity,
             );
             result
@@ -991,14 +1025,17 @@ impl<Impl: SelectorImpl> Selector<Impl> {
 
         fn replace_parent_on_selector<Impl: SelectorImpl>(
             orig: &Selector<Impl>,
-            parent: &ArcSelectorList<Impl>,
+            parent: &SelectorList<Impl>,
             specificity: &mut Specificity,
+            flags: &mut SelectorFlags,
+            flags_to_propagate: SelectorFlags,
         ) -> Selector<Impl> {
             if !orig.has_parent_selector() {
                 return orig.clone();
             }
             let new_selector = orig.replace_parent_selector(parent);
             *specificity += Specificity::from(new_selector.specificity() - orig.specificity());
+            flags.insert(new_selector.flags().intersection(flags_to_propagate));
             new_selector
         }
 
@@ -1006,16 +1043,19 @@ impl<Impl: SelectorImpl> Selector<Impl> {
             // Implicit `&` plus descendant combinator.
             let iter = self.iter_raw_match_order();
             let len = iter.len() + 2;
-            specificity += parent_specificity;
+            specificity += Specificity::from(parent_specificity_and_flags.specificity);
+            flags.insert(
+                parent_specificity_and_flags
+                    .flags
+                    .intersection(SelectorFlags::for_nesting()),
+            );
             let iter = iter
                 .cloned()
                 .chain(std::iter::once(Component::Combinator(
                     Combinator::Descendant,
                 )))
-                .chain(std::iter::once(Component::Is(
-                    parent.clone()
-                )));
-            UniqueArc::from_header_and_iter_with_size(specificity_and_flags, iter, len)
+                .chain(std::iter::once(Component::Is(parent.clone())));
+            UniqueArc::from_header_and_iter_with_size(Default::default(), iter, len)
         } else {
             let iter = self.iter_raw_match_order().map(|component| {
                 use self::Component::*;
@@ -1043,37 +1083,57 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                     Invalid(..) |
                     RelativeSelectorAnchor => component.clone(),
                     ParentSelector => {
-                        specificity += parent_specificity;
+                        specificity += Specificity::from(parent_specificity_and_flags.specificity);
+                        flags.insert(
+                            parent_specificity_and_flags
+                                .flags
+                                .intersection(SelectorFlags::for_nesting()),
+                        );
                         Is(parent.clone())
                     },
                     Negation(ref selectors) => {
-                        Negation(replace_parent_on_selector_list(
-                            selectors.slice(),
-                            parent,
-                            &mut specificity,
-                            /* with_specificity = */ true,
-                        ).unwrap_or_else(|| selectors.clone()))
+                        Negation(
+                            replace_parent_on_selector_list(
+                                selectors.slice(),
+                                parent,
+                                &mut specificity,
+                                &mut flags,
+                                /* propagate_specificity = */ true,
+                                SelectorFlags::for_nesting(),
+                            )
+                            .unwrap_or_else(|| selectors.clone()),
+                        )
                     },
                     Is(ref selectors) => {
                         Is(replace_parent_on_selector_list(
                             selectors.slice(),
                             parent,
                             &mut specificity,
-                            /* with_specificity = */ true,
-                        ).unwrap_or_else(|| selectors.clone()))
+                            &mut flags,
+                            /* propagate_specificity = */ true,
+                            SelectorFlags::for_nesting(),
+                        )
+                        .unwrap_or_else(|| selectors.clone()))
                     },
                     Where(ref selectors) => {
-                        Where(replace_parent_on_selector_list(
-                            selectors.slice(),
-                            parent,
-                            &mut specificity,
-                            /* with_specificity = */ false,
-                        ).unwrap_or_else(|| selectors.clone()))
+                        Where(
+                            replace_parent_on_selector_list(
+                                selectors.slice(),
+                                parent,
+                                &mut specificity,
+                                &mut flags,
+                                /* propagate_specificity = */ false,
+                                SelectorFlags::for_nesting(),
+                            )
+                            .unwrap_or_else(|| selectors.clone()),
+                        )
                     },
                     Has(ref selectors) => Has(replace_parent_on_relative_selector_list(
                         selectors,
                         parent,
                         &mut specificity,
+                        &mut flags,
+                        SelectorFlags::for_nesting(),
                     )
                     .into_boxed_slice()),
 
@@ -1081,19 +1141,22 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                         selector,
                         parent,
                         &mut specificity,
+                        &mut flags,
+                        SelectorFlags::for_nesting() - SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
                     ))),
                     NthOf(ref data) => {
                         let selectors = replace_parent_on_selector_list(
                             data.selectors(),
                             parent,
                             &mut specificity,
-                            /* with_specificity = */ true,
+                            &mut flags,
+                            /* propagate_specificity = */ true,
+                            SelectorFlags::for_nesting(),
                         );
                         NthOf(match selectors {
-                            Some(s) => NthOfSelectorData::new(
-                                data.nth_data(),
-                                s.slice().iter().cloned(),
-                            ),
+                            Some(s) => {
+                                NthOfSelectorData::new(data.nth_data(), s.slice().iter().cloned())
+                            },
                             None => data.clone(),
                         })
                     },
@@ -1101,12 +1164,17 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                         selector,
                         parent,
                         &mut specificity,
+                        &mut flags,
+                        SelectorFlags::for_nesting(),
                     )),
                 }
             });
-            UniqueArc::from_header_and_iter(specificity_and_flags, iter)
+            UniqueArc::from_header_and_iter(Default::default(), iter)
         };
-        items.header_mut().specificity = specificity.into();
+        *items.header_mut() = SpecificityAndFlags {
+            specificity: specificity.into(),
+            flags,
+        };
         Selector(items.shareable())
     }
 
@@ -1190,14 +1258,16 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                     Token::ParenthesisBlock |
                     Token::CurlyBracketBlock |
                     Token::SquareBracketBlock => {
-                        let _ = input.parse_nested_block(|i| -> Result<(), ParseError<'_, BasicParseError>> {
-                            check_for_parent(i, has_parent);
-                            Ok(())
-                        });
+                        let _ = input.parse_nested_block(
+                            |i| -> Result<(), ParseError<'_, BasicParseError>> {
+                                check_for_parent(i, has_parent);
+                                Ok(())
+                            },
+                        );
                     },
                     Token::Delim('&') => {
                         *has_parent = true;
-                    }
+                    },
                     _ => {},
                 }
                 if *has_parent {
@@ -1220,7 +1290,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                     SelectorFlags::empty()
                 },
             },
-            std::iter::once(Component::Invalid(Arc::new(String::from(s.trim()))))
+            std::iter::once(Component::Invalid(Arc::new(String::from(s.trim())))),
         ))
     }
 }
@@ -1244,7 +1314,7 @@ impl<'a, Impl: 'a + SelectorImpl> SelectorIter<'a, Impl> {
     #[inline]
     pub(crate) fn is_featureless_host_selector(&mut self) -> bool {
         self.selector_length() > 0 &&
-            self.all(|component| component.is_host()) &&
+            self.all(|component| component.matches_featureless_host()) &&
             self.next_sequence().is_none()
     }
 
@@ -1756,8 +1826,8 @@ impl CombinatorComposition {
 impl<Impl: SelectorImpl> RelativeSelector<Impl> {
     fn from_selector_list(selector_list: SelectorList<Impl>) -> Box<[Self]> {
         let vec: Vec<Self> = selector_list
-            .0
-            .into_iter()
+            .slice()
+            .iter()
             .map(|selector| {
                 // It's more efficient to keep track of all this during the parse time, but that seems like a lot of special
                 // case handling for what it's worth.
@@ -1784,16 +1854,13 @@ impl<Impl: SelectorImpl> RelativeSelector<Impl> {
                 );
                 RelativeSelector {
                     match_hint,
-                    selector,
+                    selector: selector.clone(),
                 }
             })
             .collect();
         vec.into_boxed_slice()
     }
 }
-
-/// A reference-counted selector list.
-pub type ArcSelectorList<Impl> = ThinArc<(), Selector<Impl>>;
 
 /// A CSS simple selector or combinator. We store both in the same enum for
 /// optimal packing and cache performance, see [1].
@@ -1834,7 +1901,7 @@ pub enum Component<Impl: SelectorImpl> {
     ),
 
     /// Pseudo-classes
-    Negation(ArcSelectorList<Impl>),
+    Negation(SelectorList<Impl>),
     Root,
     Empty,
     Scope,
@@ -1873,13 +1940,13 @@ pub enum Component<Impl: SelectorImpl> {
     ///
     /// The inner argument is conceptually a SelectorList, but we move the
     /// selectors to the heap to keep Component small.
-    Where(ArcSelectorList<Impl>),
+    Where(SelectorList<Impl>),
     /// The `:is` pseudo-class.
     ///
     /// https://drafts.csswg.org/selectors/#matches-pseudo
     ///
     /// Same comment as above re. the argument.
-    Is(ArcSelectorList<Impl>),
+    Is(SelectorList<Impl>),
     /// The `:has` pseudo-class.
     ///
     /// https://drafts.csswg.org/selectors/#has-pseudo
@@ -1911,6 +1978,23 @@ impl<Impl: SelectorImpl> Component<Impl> {
     #[inline]
     pub fn is_host(&self) -> bool {
         matches!(*self, Component::Host(..))
+    }
+
+    /// Returns true if this is a :host() selector.
+    #[inline]
+    pub fn matches_featureless_host(&self) -> bool {
+        match *self {
+            Component::Host(..) => true,
+            Component::Where(ref l) | Component::Is(ref l) => {
+                // TODO(emilio): For now we use .all() rather than .any(), because not doing so
+                // brings up a fair amount of extra complexity (we can't make the decision on
+                // whether to walk out statically).
+                l.slice()
+                    .iter()
+                    .all(|i| i.is_featureless_host_selector_or_pseudo_element())
+            },
+            _ => false,
+        }
     }
 
     /// Returns the value as a combinator if applicable, None otherwise.
@@ -2052,6 +2136,30 @@ impl<Impl: SelectorImpl> Component<Impl> {
 
         true
     }
+
+    // Returns true if this has any selector that requires an index calculation. e.g.
+    // :nth-child, :first-child, etc. For nested selectors, return true only if the
+    // indexed selector is in its subject compound.
+    pub fn has_indexed_selector_in_subject(&self) -> bool {
+        match *self {
+            Component::NthOf(..) | Component::Nth(..) => return true,
+            Component::Is(ref selectors) |
+            Component::Where(ref selectors) |
+            Component::Negation(ref selectors) => {
+                // Check the subject compound.
+                for selector in selectors.slice() {
+                    let mut iter = selector.iter();
+                    while let Some(c) = iter.next() {
+                        if c.has_indexed_selector_in_subject() {
+                            return true;
+                        }
+                    }
+                }
+            },
+            _ => (),
+        };
+        false
+    }
 }
 
 #[derive(Clone, Eq, PartialEq, ToShmem)]
@@ -2113,7 +2221,7 @@ impl<Impl: SelectorImpl> ToCss for SelectorList<Impl> {
     where
         W: fmt::Write,
     {
-        serialize_selector_list(self.0.iter(), dest)
+        serialize_selector_list(self.slice().iter(), dest)
     }
 }
 
@@ -2962,7 +3070,7 @@ where
     P: Parser<'i, Impl = Impl>,
     Impl: SelectorImpl,
 {
-    let mut list = SelectorList::parse_with_state(
+    let list = SelectorList::parse_with_state(
         parser,
         input,
         state |
@@ -2972,7 +3080,7 @@ where
         ParseRelative::No,
     )?;
 
-    Ok(Component::Negation(list.into_shared()))
+    Ok(Component::Negation(list))
 }
 
 /// simple_selector_sequence
@@ -3078,7 +3186,7 @@ fn parse_is_where<'i, 't, P, Impl>(
     parser: &P,
     input: &mut CssParser<'i, 't>,
     state: SelectorParsingState,
-    component: impl FnOnce(ArcSelectorList<Impl>) -> Component<Impl>,
+    component: impl FnOnce(SelectorList<Impl>) -> Component<Impl>,
 ) -> Result<Component<Impl>, ParseError<'i, P::Error>>
 where
     P: Parser<'i, Impl = Impl>,
@@ -3090,7 +3198,7 @@ where
     //     Pseudo-elements cannot be represented by the matches-any
     //     pseudo-class; they are not valid within :is().
     //
-    let mut inner = SelectorList::parse_with_state(
+    let inner = SelectorList::parse_with_state(
         parser,
         input,
         state |
@@ -3099,7 +3207,7 @@ where
         ForgivingParsing::Yes,
         ParseRelative::No,
     )?;
-    Ok(component(inner.into_shared()))
+    Ok(component(inner))
 }
 
 fn parse_has<'i, 't, P, Impl>(
@@ -3166,11 +3274,12 @@ where
         return parse_is_where(parser, input, state, Component::Is);
     }
 
-    if !state.allows_custom_functional_pseudo_classes() {
+    if state.intersects(SelectorParsingState::AFTER_PSEUDO_ELEMENT | SelectorParsingState::AFTER_SLOTTED) {
         return Err(input.new_custom_error(SelectorParseErrorKind::InvalidState));
     }
 
-    P::parse_non_ts_functional_pseudo_class(parser, name, input).map(Component::NonTSPseudoClass)
+    let after_part = state.intersects(SelectorParsingState::AFTER_PART);
+    P::parse_non_ts_functional_pseudo_class(parser, name, input, after_part).map(Component::NonTSPseudoClass)
 }
 
 fn parse_nth_pseudo_class<'i, 't, P, Impl>(
@@ -3203,7 +3312,7 @@ where
     }
     // Whitespace between "of" and the selector list is optional
     // https://github.com/w3c/csswg-drafts/issues/8285
-    let mut selectors = SelectorList::parse_with_state(
+    let selectors = SelectorList::parse_with_state(
         parser,
         input,
         state |
@@ -3214,7 +3323,7 @@ where
     )?;
     Ok(Component::NthOf(NthOfSelectorData::new(
         &nth_data,
-        selectors.0.drain(..),
+        selectors.slice().iter().cloned(),
     )))
 }
 
@@ -3618,9 +3727,10 @@ pub mod tests {
             &self,
             name: CowRcStr<'i>,
             parser: &mut CssParser<'i, 't>,
+            after_part: bool,
         ) -> Result<PseudoClass, SelectorParseError<'i>> {
             match_ignore_ascii_case! { &name,
-                "lang" => {
+                "lang" if !after_part => {
                     let lang = parser.expect_ident_or_string()?.as_ref().to_owned();
                     return Ok(PseudoClass::Lang(lang));
                 },
@@ -3733,7 +3843,11 @@ pub mod tests {
         expected: Option<&'a str>,
     ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
         let mut parser_input = ParserInput::new(input);
-        let result = SelectorList::parse(parser, &mut CssParser::new(&mut parser_input), parse_relative);
+        let result = SelectorList::parse(
+            parser,
+            &mut CssParser::new(&mut parser_input),
+            parse_relative,
+        );
         if let Ok(ref selectors) = result {
             // We can't assume that the serialized parsed selector will equal
             // the input; for example, if there is no default namespace, '*|foo'
@@ -3756,7 +3870,11 @@ pub mod tests {
     #[test]
     fn test_empty() {
         let mut input = ParserInput::new(":empty");
-        let list = SelectorList::parse(&DummyParser::default(), &mut CssParser::new(&mut input), ParseRelative::No);
+        let list = SelectorList::parse(
+            &DummyParser::default(),
+            &mut CssParser::new(&mut input),
+            ParseRelative::No,
+        );
         assert!(list.is_ok());
     }
 
@@ -3776,7 +3894,7 @@ pub mod tests {
                     lower_name: DummyAtom::from("eeÉ"),
                 })],
                 specificity(0, 0, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3790,7 +3908,7 @@ pub mod tests {
                     }),
                 ],
                 specificity(0, 0, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // When the default namespace is not set, *| should be elided.
@@ -3803,7 +3921,7 @@ pub mod tests {
                     lower_name: DummyAtom::from("e"),
                 })],
                 specificity(0, 0, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // When the default namespace is set, *| should _not_ be elided (as foo
@@ -3824,7 +3942,7 @@ pub mod tests {
                     }),
                 ],
                 specificity(0, 0, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3832,7 +3950,7 @@ pub mod tests {
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
                 vec![Component::ExplicitUniversalType],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3843,7 +3961,7 @@ pub mod tests {
                     Component::ExplicitUniversalType,
                 ],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3851,7 +3969,7 @@ pub mod tests {
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
                 vec![Component::ExplicitUniversalType],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3865,7 +3983,7 @@ pub mod tests {
                     Component::ExplicitUniversalType,
                 ],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3876,7 +3994,7 @@ pub mod tests {
                     Component::NonTSPseudoClass(PseudoClass::Lang("en-US".to_owned())),
                 ],
                 specificity(0, 2, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3884,7 +4002,7 @@ pub mod tests {
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
                 vec![Component::ID(DummyAtom::from("bar"))],
                 specificity(1, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3899,7 +4017,7 @@ pub mod tests {
                     Component::ID(DummyAtom::from("bar")),
                 ],
                 specificity(1, 1, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3915,7 +4033,7 @@ pub mod tests {
                     Component::ID(DummyAtom::from("bar")),
                 ],
                 specificity(1, 1, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // Default namespace does not apply to attribute selectors
@@ -3929,7 +4047,7 @@ pub mod tests {
                     local_name_lower: DummyAtom::from("foo"),
                 }],
                 specificity(0, 1, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert!(parse_ns("svg|circle", &parser).is_err());
@@ -3947,7 +4065,7 @@ pub mod tests {
                     }),
                 ],
                 specificity(0, 0, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -3958,7 +4076,7 @@ pub mod tests {
                     Component::ExplicitUniversalType,
                 ],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // Default namespace does not apply to attribute selectors
@@ -3977,7 +4095,7 @@ pub mod tests {
                     },
                 ],
                 specificity(0, 1, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // Default namespace does apply to type selectors
@@ -3992,7 +4110,7 @@ pub mod tests {
                     }),
                 ],
                 specificity(0, 0, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -4003,7 +4121,7 @@ pub mod tests {
                     Component::ExplicitUniversalType,
                 ],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -4014,7 +4132,7 @@ pub mod tests {
                     Component::ExplicitUniversalType,
                 ],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // Default namespace applies to universal and type selectors inside :not and :matches,
@@ -4024,16 +4142,14 @@ pub mod tests {
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
                 vec![
                     Component::DefaultNamespace(MATHML.into()),
-                    Component::Negation(
-                        SelectorList::from_vec(vec![Selector::from_vec(
-                            vec![Component::Class(DummyAtom::from("cl"))],
-                            specificity(0, 1, 0),
-                            Default::default(),
-                        )]).to_shared()
-                    ),
+                    Component::Negation(SelectorList::from_vec(vec![Selector::from_vec(
+                        vec![Component::Class(DummyAtom::from("cl"))],
+                        specificity(0, 1, 0),
+                        SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
+                    )])),
                 ],
                 specificity(0, 1, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -4041,19 +4157,17 @@ pub mod tests {
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
                 vec![
                     Component::DefaultNamespace(MATHML.into()),
-                    Component::Negation(
-                        SelectorList::from_vec(vec![Selector::from_vec(
-                            vec![
-                                Component::DefaultNamespace(MATHML.into()),
-                                Component::ExplicitUniversalType,
-                            ],
-                            specificity(0, 0, 0),
-                            Default::default(),
-                        )]).to_shared(),
-                    ),
+                    Component::Negation(SelectorList::from_vec(vec![Selector::from_vec(
+                        vec![
+                            Component::DefaultNamespace(MATHML.into()),
+                            Component::ExplicitUniversalType,
+                        ],
+                        specificity(0, 0, 0),
+                        SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
+                    )]),),
                 ],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -4061,22 +4175,20 @@ pub mod tests {
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
                 vec![
                     Component::DefaultNamespace(MATHML.into()),
-                    Component::Negation(
-                        SelectorList::from_vec(vec![Selector::from_vec(
-                            vec![
-                                Component::DefaultNamespace(MATHML.into()),
-                                Component::LocalName(LocalName {
-                                    name: DummyAtom::from("e"),
-                                    lower_name: DummyAtom::from("e"),
-                                }),
-                            ],
-                            specificity(0, 0, 1),
-                            Default::default(),
-                        )]).to_shared()
-                    ),
+                    Component::Negation(SelectorList::from_vec(vec![Selector::from_vec(
+                        vec![
+                            Component::DefaultNamespace(MATHML.into()),
+                            Component::LocalName(LocalName {
+                                name: DummyAtom::from("e"),
+                                lower_name: DummyAtom::from("e"),
+                            }),
+                        ],
+                        specificity(0, 0, 1),
+                        SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
+                    )])),
                 ],
                 specificity(0, 0, 1),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
@@ -4089,7 +4201,7 @@ pub mod tests {
                     case_sensitivity: ParsedCaseSensitivity::CaseSensitive,
                 }],
                 specificity(0, 1, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // https://github.com/mozilla/servo/issues/1723
@@ -4113,7 +4225,7 @@ pub mod tests {
                     Component::NonTSPseudoClass(PseudoClass::Hover),
                 ],
                 specificity(0, 1, 1),
-                SelectorFlags::HAS_PSEUDO,
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT | SelectorFlags::HAS_PSEUDO,
             )]))
         );
         assert_eq!(
@@ -4126,7 +4238,7 @@ pub mod tests {
                     Component::NonTSPseudoClass(PseudoClass::Hover),
                 ],
                 specificity(0, 2, 1),
-                SelectorFlags::HAS_PSEUDO,
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT | SelectorFlags::HAS_PSEUDO,
             )]))
         );
         assert!(parse("::before:hover:lang(foo)").is_err());
@@ -4150,7 +4262,7 @@ pub mod tests {
                     Component::PseudoElement(PseudoElement::After),
                 ],
                 specificity(0, 0, 2),
-                SelectorFlags::HAS_PSEUDO,
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT | SelectorFlags::HAS_PSEUDO,
             )]))
         );
         assert_eq!(
@@ -4162,7 +4274,7 @@ pub mod tests {
                     Component::Class(DummyAtom::from("ok")),
                 ],
                 (1 << 20) + (1 << 10) + (0 << 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         parser.default_ns = None;
@@ -4173,32 +4285,32 @@ pub mod tests {
         assert_eq!(
             parse_ns(":not(*)", &parser),
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
-                vec![Component::Negation(
-                    SelectorList::from_vec(vec![Selector::from_vec(
+                vec![Component::Negation(SelectorList::from_vec(vec![
+                    Selector::from_vec(
                         vec![Component::ExplicitUniversalType],
                         specificity(0, 0, 0),
-                        Default::default(),
-                    )]).to_shared()
-                )],
+                        SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
+                    )
+                ]))],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         assert_eq!(
             parse_ns(":not(|*)", &parser),
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
-                vec![Component::Negation(
-                    SelectorList::from_vec(vec![Selector::from_vec(
+                vec![Component::Negation(SelectorList::from_vec(vec![
+                    Selector::from_vec(
                         vec![
                             Component::ExplicitNoNamespace,
                             Component::ExplicitUniversalType,
                         ],
                         specificity(0, 0, 0),
-                        Default::default(),
-                    )]).to_shared()
-                )],
+                        SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
+                    )
+                ]))],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
         // *| should be elided if there is no default namespace.
@@ -4206,15 +4318,15 @@ pub mod tests {
         assert_eq!(
             parse_ns_expected(":not(*|*)", &parser, Some(":not(*)")),
             Ok(SelectorList::from_vec(vec![Selector::from_vec(
-                vec![Component::Negation(
-                    SelectorList::from_vec(vec![Selector::from_vec(
+                vec![Component::Negation(SelectorList::from_vec(vec![
+                    Selector::from_vec(
                         vec![Component::ExplicitUniversalType],
                         specificity(0, 0, 0),
-                        Default::default()
-                    )]).to_shared()
-                )],
+                        SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
+                    )
+                ]))],
                 specificity(0, 0, 0),
-                Default::default(),
+                SelectorFlags::HAS_NON_FEATURELESS_COMPONENT,
             )]))
         );
 
@@ -4257,36 +4369,38 @@ pub mod tests {
                     Component::Class(DummyAtom::from("bar")),
                 ],
                 (1 << 20) + (1 << 10) + (0 << 0),
-                SelectorFlags::HAS_PARENT
+                SelectorFlags::HAS_PARENT | SelectorFlags::HAS_NON_FEATURELESS_COMPONENT
             )]))
         );
 
         let parent = parse(".bar, div .baz").unwrap();
         let child = parse("#foo &.bar").unwrap();
         assert_eq!(
-            child.replace_parent_selector(&parent.to_shared()),
+            child.replace_parent_selector(&parent),
             parse("#foo :is(.bar, div .baz).bar").unwrap()
         );
 
         let has_child = parse("#foo:has(&.bar)").unwrap();
         assert_eq!(
-            has_child.replace_parent_selector(&parent.to_shared()),
+            has_child.replace_parent_selector(&parent),
             parse("#foo:has(:is(.bar, div .baz).bar)").unwrap()
         );
 
         let child = parse("#foo").unwrap();
         assert_eq!(
-            child.replace_parent_selector(&parent.to_shared()),
+            child.replace_parent_selector(&parent),
             parse(":is(.bar, div .baz) #foo").unwrap()
         );
 
-        let child = parse_relative_expected("+ #foo", ParseRelative::ForNesting, Some("& + #foo")).unwrap();
+        let child =
+            parse_relative_expected("+ #foo", ParseRelative::ForNesting, Some("& + #foo")).unwrap();
         assert_eq!(child, parse("& + #foo").unwrap());
     }
 
     #[test]
     fn test_pseudo_iter() {
-        let selector = &parse("q::before").unwrap().0[0];
+        let list = parse("q::before").unwrap();
+        let selector = &list.slice()[0];
         assert!(!selector.is_universal());
         let mut iter = selector.iter();
         assert_eq!(
@@ -4303,18 +4417,19 @@ pub mod tests {
 
     #[test]
     fn test_universal() {
-        let selector = &parse_ns(
+        let list = parse_ns(
             "*|*::before",
             &DummyParser::default_with_namespace(DummyAtom::from("https://mozilla.org")),
         )
-        .unwrap()
-        .0[0];
+        .unwrap();
+        let selector = &list.slice()[0];
         assert!(selector.is_universal());
     }
 
     #[test]
     fn test_empty_pseudo_iter() {
-        let selector = &parse("::before").unwrap().0[0];
+        let list = parse("::before").unwrap();
+        let selector = &list.slice()[0];
         assert!(selector.is_universal());
         let mut iter = selector.iter();
         assert_eq!(
@@ -4345,11 +4460,11 @@ pub mod tests {
     #[test]
     fn visitor() {
         let mut test_visitor = TestVisitor { seen: vec![] };
-        parse(":not(:hover) ~ label").unwrap().0[0].visit(&mut test_visitor);
+        parse(":not(:hover) ~ label").unwrap().slice()[0].visit(&mut test_visitor);
         assert!(test_visitor.seen.contains(&":hover".into()));
 
         let mut test_visitor = TestVisitor { seen: vec![] };
-        parse("::before:hover").unwrap().0[0].visit(&mut test_visitor);
+        parse("::before:hover").unwrap().slice()[0].visit(&mut test_visitor);
         assert!(test_visitor.seen.contains(&":hover".into()));
     }
 }

@@ -62,10 +62,6 @@ export class SuggestBackendJs extends BaseFeature {
    *   config is an object that looks like this:
    *
    *   {
-   *     best_match: {
-   *       min_search_string_length,
-   *       blocked_suggestion_ids,
-   *     },
    *     impression_caps: {
    *       nonsponsored: {
    *         lifetime,
@@ -260,6 +256,15 @@ export class SuggestBackendJs extends BaseFeature {
     this.logger.debug("Setting config: " + JSON.stringify(config));
     this.#config = config;
     this.#emitter.emit("config-set");
+  }
+
+  async _test_syncAll() {
+    if (this.#rs) {
+      // `RemoteSettingsClient` won't start another import if it's already
+      // importing. Wait for it to finish before starting the new one.
+      await this.#rs._importingPromise;
+      await this.#syncAll();
+    }
   }
 
   // The `RemoteSettings` client.

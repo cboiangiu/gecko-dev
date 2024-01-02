@@ -57,7 +57,19 @@ job-defaults:
         by-app:
             chrome-m:
                 - .*shippable-qr.*
+            cstm-car-m:
+                - .*shippable-qr.*
             default: []
+    fetches:
+        toolchain:
+            by-app:
+                cstm-car-m:
+                    - android-custom-car
+                    - linux64-minidump-stackwalk
+                    - linux64-fix-stacks
+                default:
+                    - linux64-minidump-stackwalk
+                    - linux64-fix-stacks
 
 browsertime-tp6m:
     <<: &tp6m-defaults
@@ -164,6 +176,36 @@ browsertime-tp6m-essential:
             geckoview: 1
             refbrow: 2
             default: 3
+
+browsertime-tp6m-webextensions:
+    <<: *tp6m-defaults
+    description: Raptor (browsertime) tp6 page-load tests with webextensions installed on android
+    treeherder-symbol: Btime-webext(tp6m)
+    run-without-variant: false
+    mozharness:
+        extra-options:
+            - --chimera
+            - --browsertime-no-ffwindowrecorder
+            - --conditioned-profile=settled-webext
+            - --browser-cycles=5
+    raptor:
+        apps: [fenix]
+        run-visual-metrics: true
+        test: tp6m
+        subtests:
+            - [amazon-search, amazon-s]
+    fetches:
+        fetch:
+            - firefox-addons
+    run-on-projects:
+        by-app:
+            fenix:
+                by-test-platform:
+                    android-hw-(g5|a51).*shippable.*: [mozilla-central]
+                    default: []
+            default: []
+    # TODO(Bug 1867781): promote to tier 2 after confirming no issue have been caught while runing as tier 3.
+    tier: 3
 
 browsertime-youtube-playback-mobile:
     description: Browsertime YouTube Playback on Android
@@ -296,7 +338,7 @@ browsertime-benchmark-speedometer-mobile:
     description: Browsertime Speedometer on Android
     run-without-variant: false
     raptor:
-        apps: [geckoview, fenix, chrome-m]
+        apps: [geckoview, fenix, chrome-m, cstm-car-m]
     tier:
         by-app:
             fenix: 1
@@ -308,6 +350,7 @@ browsertime-benchmark-speedometer-mobile:
                 by-test-platform:
                     android-hw-(g5|a51).*shippable-qr.*: [trunk]
                     default: []
+            cstm-car-m: [mozilla-central]
             default: []
     treeherder-symbol: Btime(sp)
     mozharness:
@@ -318,7 +361,7 @@ browsertime-benchmark-speedometer3-mobile:
     description: Browsertime Speedometer 3 on Android
     run-without-variant: false
     raptor:
-        apps: [geckoview, fenix, chrome-m]
+        apps: [geckoview, fenix, chrome-m, cstm-car-m]
     tier:
         by-app:
             fenix: 2
@@ -331,24 +374,50 @@ browsertime-benchmark-speedometer3-mobile:
                 by-test-platform:
                     android-hw-a51.*shippable-qr.*: [trunk-only]
                     default: []
+            cstm-car-m: [mozilla-central]
             default: []
     treeherder-symbol: Btime(sp3)
     mozharness:
         extra-options:
             - --test=speedometer3
 
+browsertime-benchmark-motionmark:
+    description: Raptor (browsertime) Motionmark benchmark tests
+    run-without-variant: false
+    raptor:
+        apps: [fenix, chrome-m, geckoview]
+        subtests:
+            - [motionmark-animometer, mm-a]
+            - [motionmark-animometer-ramp, mm-ar]
+            - [motionmark-htmlsuite, mm-h]
+            - [motionmark-htmlsuite-ramp, mm-hr]
+    run-on-projects:
+        by-app:
+            chrome-m: []
+            default:
+                by-test-platform:
+                    android-hw-a51-.*aarch64-shippable-qr.*: [mozilla-central]
+                    default: []
+    treeherder-symbol: Btime()
+    tier: 2
+
 browsertime-benchmark-unity-webgl-mobile:
     description: Browsertime Unity WebGL on Android
     run-without-variant: false
     raptor:
         apps: [geckoview, refbrow, fenix, chrome-m]
+    tier:
+        by-app:
+            geckoview: 2
+            default: 3
     treeherder-symbol: Btime(ugl)
     run-on-projects:
         by-app:
             refbrow: []
             geckoview:
                 by-test-platform:
-                    android-hw-a51-.*aarch64-shippable-qr.*: [trunk-only]
+                    # Disabled on autoland due to bug 1720063, and bug 1795826
+                    android-hw-a51-.*aarch64-shippable-qr.*: [mozilla-central]
                     default: []
             default:
                 by-test-platform:

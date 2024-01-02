@@ -89,11 +89,9 @@ function templateHTML(options) {
     />
   </head>
   <body class="activity-stream">
-    <div id="root"></div>
-    <div id="footer-asrouter-container" role="presentation"></div>${
-      options.noscripts ? "" : scriptRender
-    }
+    <div id="root"></div>${options.noscripts ? "" : scriptRender}
     <script
+      async
       type="module"
       src="chrome://global/content/elements/moz-toggle.mjs"
     ></script>

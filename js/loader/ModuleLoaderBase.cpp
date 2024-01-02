@@ -13,7 +13,7 @@
 
 #include "js/Array.h"  // JS::GetArrayLength
 #include "js/CompilationAndEvaluation.h"
-#include "js/ColumnNumber.h"  // JS::ColumnNumberZeroOrigin, JS::ColumnNumberOneOrigin
+#include "js/ColumnNumber.h"          // JS::ColumnNumberOneOrigin
 #include "js/ContextOptions.h"        // JS::ContextOptionsRef
 #include "js/ErrorReport.h"           // JSErrorBase
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
@@ -223,7 +223,7 @@ JSString* ModuleLoaderBase::ImportMetaResolveImpl(
       JS::Rooted<JS::Value> error(aCx);
       nsresult rv = loader->HandleResolveFailure(
           aCx, script, specifier, result.unwrapErr(), 0,
-          JS::ColumnNumberZeroOrigin::zero(), &error);
+          JS::ColumnNumberOneOrigin(), &error);
       if (NS_FAILED(rv)) {
         JS_ReportOutOfMemory(aCx);
         return nullptr;
@@ -317,9 +317,9 @@ bool ModuleLoaderBase::HostImportModuleDynamically(
   auto result = loader->ResolveModuleSpecifier(script, specifier);
   if (result.isErr()) {
     JS::Rooted<JS::Value> error(aCx);
-    nsresult rv = loader->HandleResolveFailure(
-        aCx, script, specifier, result.unwrapErr(), 0,
-        JS::ColumnNumberZeroOrigin::zero(), &error);
+    nsresult rv =
+        loader->HandleResolveFailure(aCx, script, specifier, result.unwrapErr(),
+                                     0, JS::ColumnNumberOneOrigin(), &error);
     if (NS_FAILED(rv)) {
       JS_ReportOutOfMemory(aCx);
       return false;
@@ -331,8 +331,8 @@ bool ModuleLoaderBase::HostImportModuleDynamically(
 
   // Create a new top-level load request.
   nsCOMPtr<nsIURI> uri = result.unwrap();
-  RefPtr<ModuleLoadRequest> request = loader->CreateDynamicImport(
-      aCx, uri, script, aReferencingPrivate, specifierString, aPromise);
+  RefPtr<ModuleLoadRequest> request =
+      loader->CreateDynamicImport(aCx, uri, script, specifierString, aPromise);
 
   if (!request) {
     // Throws TypeError if CreateDynamicImport returns nullptr.
@@ -381,9 +381,6 @@ LoadedScript* ModuleLoaderBase::GetLoadedScriptOrNull(
   }
 
   auto* script = static_cast<LoadedScript*>(aReferencingPrivate.toPrivate());
-  if (script->IsEventScript()) {
-    return nullptr;
-  }
 
   MOZ_ASSERT_IF(
       script->IsModuleScript(),
@@ -391,6 +388,14 @@ LoadedScript* ModuleLoaderBase::GetLoadedScriptOrNull(
           aReferencingPrivate);
 
   return script;
+}
+
+JS::Value PrivateFromLoadedScript(LoadedScript* aScript) {
+  if (!aScript) {
+    return JS::UndefinedValue();
+  }
+
+  return JS::PrivateValue(aScript);
 }
 
 nsresult ModuleLoaderBase::StartModuleLoad(ModuleLoadRequest* aRequest) {
@@ -465,18 +470,6 @@ nsresult ModuleLoaderBase::GetFetchedModuleURLs(nsTArray<nsCString>& aURLs) {
   }
 
   return NS_OK;
-}
-
-bool ModuleLoaderBase::RemoveFetchedModule(nsIURI* aURL) {
-#if defined(MOZ_DIAGNOSTIC_ASSERT_ENABLED)
-  RefPtr<ModuleScript> ms;
-  MOZ_ALWAYS_TRUE(mFetchedModules.Get(aURL, getter_AddRefs(ms)));
-  if (ms && ms->ModuleRecord()) {
-    JS::AssertModuleUnlinked(ms->ModuleRecord());
-  }
-#endif
-
-  return mFetchedModules.Remove(aURL);
 }
 
 void ModuleLoaderBase::SetModuleFetchStarted(ModuleLoadRequest* aRequest) {
@@ -703,7 +696,7 @@ nsresult ModuleLoaderBase::GetResolveFailureMessage(ResolveError aError,
 nsresult ModuleLoaderBase::HandleResolveFailure(
     JSContext* aCx, LoadedScript* aScript, const nsAString& aSpecifier,
     ResolveError aError, uint32_t aLineNumber,
-    JS::ColumnNumberZeroOrigin aColumnNumber,
+    JS::ColumnNumberOneOrigin aColumnNumber,
     JS::MutableHandle<JS::Value> aErrorOut) {
   JS::Rooted<JSString*> filename(aCx);
   if (aScript) {
@@ -728,8 +721,8 @@ nsresult ModuleLoaderBase::HandleResolveFailure(
   }
 
   if (!JS::CreateError(aCx, JSEXN_TYPEERR, nullptr, filename, aLineNumber,
-                       JS::ColumnNumberOneOrigin(aColumnNumber), nullptr,
-                       string, JS::NothingHandleValue, aErrorOut)) {
+                       aColumnNumber, nullptr, string, JS::NothingHandleValue,
+                       aErrorOut)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -781,7 +774,7 @@ ResolveResult ModuleLoaderBase::ResolveModuleSpecifier(
 
   // Get the document's base URL if we don't have a referencing script here.
   nsCOMPtr<nsIURI> baseURL;
-  if (aScript) {
+  if (aScript && !aScript->IsEventScript()) {
     baseURL = aScript->BaseURL();
   } else {
     baseURL = GetBaseURI();
@@ -824,7 +817,7 @@ nsresult ModuleLoaderBase::ResolveRequestedModules(
     auto result = loader->ResolveModuleSpecifier(ms, specifier);
     if (result.isErr()) {
       uint32_t lineNumber = 0;
-      JS::ColumnNumberZeroOrigin columnNumber;
+      JS::ColumnNumberOneOrigin columnNumber;
       JS::GetRequestedModuleSourcePos(cx, moduleRecord, i, &lineNumber,
                                       &columnNumber);
 
@@ -1012,8 +1005,8 @@ void ModuleLoaderBase::FinishDynamicImport(
                               JSMSG_DYNAMIC_IMPORT_FAILED, url.get());
   }
 
-  JS::Rooted<JS::Value> referencingScript(aCx,
-                                          aRequest->mDynamicReferencingPrivate);
+  JS::Rooted<JS::Value> referencingScript(
+      aCx, PrivateFromLoadedScript(aRequest->mDynamicReferencingScript));
   JS::Rooted<JSString*> specifier(aCx, aRequest->mDynamicSpecifier);
   JS::Rooted<JSObject*> promise(aCx, aRequest->mDynamicPromise);
 

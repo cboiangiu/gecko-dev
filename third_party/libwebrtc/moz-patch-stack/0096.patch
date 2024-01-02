@@ -1,31 +1,41 @@
-From: Michael Froman <mfroman@mozilla.com>
-Date: Sat, 12 Aug 2023 18:57:00 +0000
-Subject: Bug 1848045 - to upstream - fix misuse of rtc::strcpyn in
- ApmDataDumper::SetOutputDirectory. r=ng,webrtc-reviewers
+From: Andreas Pehrson <apehrson@mozilla.com>
+Date: Wed, 18 Oct 2023 17:21:00 +0000
+Subject: Bug 1859786 - Fix lock annotation warning in Mozilla-specific edit on
+ top of video_capture_impl.cc. r=webrtc-reviewers,mjf
 
-rtc::strcpyn second param should be the size of the destination buffer,
-not the size of the source string.  This has been masked because FormFileName
-helpfully adds a trailing path separator if one is missing.
+The annotations were added in M116:
+https://hg.mozilla.org/mozilla-central/rev/9cd372df013948ad822ae936752d725d77474fb5
 
-Differential Revision: https://phabricator.services.mozilla.com/D185862
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/5d935bb2573445a198af03cd3d5186243880ecdf
+Note that this was never unsafe, since _dataCallbacks is only written on the
+same thread that we are patching here. This patch however, adds helpful static
+analysis.
+
+Differential Revision: https://phabricator.services.mozilla.com/D191301
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/56ff441b644400f09d2d0453dbd8991ea25db7b1
 ---
- modules/audio_processing/logging/apm_data_dumper.h | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ modules/video_capture/video_capture_impl.cc | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
 
-diff --git a/modules/audio_processing/logging/apm_data_dumper.h b/modules/audio_processing/logging/apm_data_dumper.h
-index 4ab6baad83..76f8b34c0b 100644
---- a/modules/audio_processing/logging/apm_data_dumper.h
-+++ b/modules/audio_processing/logging/apm_data_dumper.h
-@@ -91,7 +91,7 @@ class ApmDataDumper {
-   static void SetOutputDirectory(absl::string_view output_dir) {
- #if WEBRTC_APM_DEBUG_DUMP == 1
-     RTC_CHECK_LT(output_dir.size(), kOutputDirMaxLength);
--    rtc::strcpyn(output_dir_, output_dir.size(), output_dir);
-+    rtc::strcpyn(output_dir_, kOutputDirMaxLength, output_dir);
- #endif
-   }
+diff --git a/modules/video_capture/video_capture_impl.cc b/modules/video_capture/video_capture_impl.cc
+index 02404697ad..1bddaf824d 100644
+--- a/modules/video_capture/video_capture_impl.cc
++++ b/modules/video_capture/video_capture_impl.cc
+@@ -119,11 +119,14 @@ void VideoCaptureImpl::DeRegisterCaptureDataCallback(
+ }
  
--- 
-2.37.3
-
+ int32_t VideoCaptureImpl::StopCaptureIfAllClientsClose() {
+-  if (_dataCallBacks.empty()) {
+-    return StopCapture();
+-  } else {
+-    return 0;
++  RTC_DCHECK_RUN_ON(&api_checker_);
++  {
++    MutexLock lock(&api_lock_);
++    if (!_dataCallBacks.empty()) {
++      return 0;
++    }
+   }
++  return StopCapture();
+ }
+ 
+ int32_t VideoCaptureImpl::DeliverCapturedFrame(VideoFrame& captureFrame) {

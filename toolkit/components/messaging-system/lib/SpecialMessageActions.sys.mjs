@@ -97,8 +97,8 @@ export const SpecialMessageActions = {
    *
    *  @param {Window} window Reference to a window object
    */
-  setDefaultBrowser(window) {
-    window.getShellService().setAsDefault();
+  async setDefaultBrowser(window) {
+    await window.getShellService().setAsDefault();
   },
 
   /**
@@ -157,11 +157,6 @@ export const SpecialMessageActions = {
           ],
         ],
         [
-          // controls the snippets section
-          "browser.newtabpage.activity-stream.feeds.snippets",
-          layout.snippets,
-        ],
-        [
           // controls the topstories section
           "browser.newtabpage.activity-stream.feeds.system.topstories",
           layout.topstories,
@@ -193,7 +188,6 @@ export const SpecialMessageActions = {
     const allowedPrefs = [
       "browser.dataFeatureRecommendations.enabled",
       "browser.migrate.content-modal.about-welcome-behavior",
-      "browser.migrate.content-modal.enabled",
       "browser.migrate.content-modal.import-all.enabled",
       "browser.migrate.preferences-entrypoint.enabled",
       "browser.shopping.experience2023.active",
@@ -210,6 +204,7 @@ export const SpecialMessageActions = {
       "cookiebanners.service.mode",
       "cookiebanners.service.mode.privateBrowsing",
       "cookiebanners.service.detectOnly",
+      "messaging-system.askForFeedback",
     ];
 
     if (
@@ -442,10 +437,10 @@ export const SpecialMessageActions = {
         break;
       case "PIN_AND_DEFAULT":
         await this.pinFirefoxToTaskbar(window, action.data?.privatePin);
-        this.setDefaultBrowser(window);
+        await this.setDefaultBrowser(window);
         break;
       case "SET_DEFAULT_BROWSER":
-        this.setDefaultBrowser(window);
+        await this.setDefaultBrowser(window);
         break;
       case "SET_DEFAULT_PDF_HANDLER":
         this.setDefaultPDFHandler(
@@ -478,7 +473,7 @@ export const SpecialMessageActions = {
         }
         const data = action.data;
         const url = await lazy.FxAccounts.config.promiseConnectAccountURI(
-          (data && data.entrypoint) || "snippets",
+          data && data.entrypoint,
           (data && data.extraParams) || {}
         );
         // Use location provided; if not specified, replace the current tab.

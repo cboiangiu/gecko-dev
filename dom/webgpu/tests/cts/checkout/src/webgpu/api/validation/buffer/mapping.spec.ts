@@ -45,6 +45,7 @@ class F extends ValidationTest {
         assert(expectation.rejectName === null, 'mapAsync unexpectedly passed');
       } catch (ex) {
         assert(ex instanceof Error, 'mapAsync rejected with non-error');
+        assert(typeof ex.stack === 'string', 'mapAsync rejected without a stack');
         assert(expectation.rejectName === ex.name, `mapAsync rejected unexpectedly with: ${ex}`);
         assert(
           expectation.earlyRejection === rejectedEarly,
@@ -493,7 +494,7 @@ g.test('getMappedRange,state,invalid_mappedAtCreation')
 Like VRAM allocation (see map_oom), validation can be performed asynchronously (in the GPU process)
 so the Content process doesn't necessarily know the buffer is invalid.`
   )
-  .fn(async t => {
+  .fn(t => {
     const buffer = t.expectGPUError('validation', () =>
       t.device.createBuffer({
         mappedAtCreation: true,
@@ -701,7 +702,7 @@ g.test('getMappedRange,offsetAndSizeAlignment,mappedAtCreation')
       .combine('offset', [0, kOffsetAlignment, kOffsetAlignment / 2])
       .combine('size', [0, kSizeAlignment, kSizeAlignment / 2])
   )
-  .fn(async t => {
+  .fn(t => {
     const { offset, size } = t.params;
     const buffer = t.device.createBuffer({
       size: 16,

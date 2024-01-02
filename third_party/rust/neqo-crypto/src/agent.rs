@@ -540,8 +540,8 @@ impl SecretAgent {
     /// Install an extension handler.
     ///
     /// This can be called multiple times with different values for `ext`.  The handler is provided as
-    /// Rc<RefCell<>> so that the caller is able to hold a reference to the handler and later access any
-    /// state that it accumulates.
+    /// `Rc<RefCell<dyn T>>` so that the caller is able to hold a reference to the handler and later
+    /// access any state that it accumulates.
     ///
     /// # Errors
     /// When the extension handler can't be successfully installed.
@@ -716,6 +716,8 @@ impl SecretAgent {
         Ok(*Pin::into_inner(records))
     }
 
+    /// # Panics
+    /// If setup fails.
     #[allow(unknown_lints, clippy::branches_sharing_code)]
     pub fn close(&mut self) {
         // It should be safe to close multiple times.
@@ -1035,12 +1037,12 @@ impl Server {
             let Ok(cert) = p11::Certificate::from_ptr(cert_ptr) else {
                 return Err(Error::CertificateLoading);
             };
-            let key_ptr = unsafe { p11::PK11_FindKeyByAnyCert(*cert.deref(), null_mut()) };
+            let key_ptr = unsafe { p11::PK11_FindKeyByAnyCert(*cert, null_mut()) };
             let Ok(key) = p11::PrivateKey::from_ptr(key_ptr) else {
                 return Err(Error::CertificateLoading);
             };
             secstatus_to_res(unsafe {
-                ssl::SSL_ConfigServerCert(agent.fd, *cert.deref(), *key.deref(), null(), 0)
+                ssl::SSL_ConfigServerCert(agent.fd, *cert, *key, null(), 0)
             })?;
         }
 

@@ -187,7 +187,7 @@ class nsDisplayCanvas final : public nsPaintedDisplayItem {
         auto mixBlendMode = wr::MixBlendMode::Normal;
         aManager->WrBridge()->AddWebRenderParentCommand(
             OpUpdateAsyncImagePipeline(data->GetPipelineId().value(), scBounds,
-                                       VideoInfo::Rotation::kDegree_0, filter,
+                                       wr::WrRotation::Degree0, filter,
                                        mixBlendMode));
         break;
       }
@@ -284,14 +284,14 @@ class nsDisplayCanvas final : public nsPaintedDisplayItem {
       if (!surface || !surface->IsValid()) {
         return;
       }
-      gfx::IntSize size = surface->GetSize();
 
       transform = gfxUtils::SnapTransform(
-          transform, gfxRect(0, 0, size.width, size.height), nullptr);
+          transform, gfxRect(0, 0, canvasSizeInPx.width, canvasSizeInPx.height),
+          nullptr);
       aCtx->Multiply(transform);
 
       aCtx->GetDrawTarget()->FillRect(
-          Rect(0, 0, size.width, size.height),
+          Rect(0, 0, canvasSizeInPx.width, canvasSizeInPx.height),
           SurfacePattern(surface, ExtendMode::CLAMP, Matrix(),
                          nsLayoutUtils::GetSamplingFilterForFrame(f)));
       return;

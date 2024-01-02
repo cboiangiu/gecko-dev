@@ -189,6 +189,7 @@ static const char sIntPrefs[][45] = {
     "ui.videoDynamicRange",
     "ui.panelAnimations",
     "ui.hideCursorWhileTyping",
+    "ui.gtkThemeFamily",
 };
 
 static_assert(ArrayLength(sIntPrefs) == size_t(LookAndFeel::IntID::End),
@@ -273,16 +274,10 @@ static const char sColorPrefs[][41] = {
     "ui.-moz-headerbarinactivetext",
     "ui.-moz-mac-defaultbuttontext",
     "ui.-moz-mac-focusring",
-    "ui.-moz-mac-menutextdisable",
-    "ui.-moz-mac-menutextselect",
     "ui.-moz_mac_disabledtoolbartext",
-    "ui.-moz-mac-menupopup",
-    "ui.-moz-mac-menuitem",
-    "ui.-moz-mac-active-menuitem",
-    "ui.-moz-mac-source-list",
-    "ui.-moz-mac-source-list-selection",
-    "ui.-moz-mac-active-source-list-selection",
-    "ui.-moz-mac-tooltip",
+    "ui.-moz-sidebar",
+    "ui.-moz-sidebartext",
+    "ui.-moz-sidebarborder",
     "ui.accentcolor",
     "ui.accentcolortext",
     "ui.-moz-autofill-background",
@@ -291,8 +286,12 @@ static const char sColorPrefs[][41] = {
     "ui.-moz-hyperlinktext",
     "ui.-moz-activehyperlinktext",
     "ui.-moz-visitedhyperlinktext",
+    "ui.-moz-colheader",
     "ui.-moz-colheadertext",
+    "ui.-moz-colheaderhover",
     "ui.-moz-colheaderhovertext",
+    "ui.-moz-colheaderactive",
+    "ui.-moz-colheaderactivetext",
     "ui.textSelectDisabledBackground",
     "ui.textSelectAttentionBackground",
     "ui.textSelectAttentionForeground",
@@ -492,8 +491,6 @@ static constexpr struct {
      widget::ThemeChangeKind::Style},
     {"widget.windows.uwp-system-colors.highlight-accent"_ns,
      widget::ThemeChangeKind::Style},
-    {"widget.windows.titlebar-accent.enabled"_ns,
-     widget::ThemeChangeKind::Style},
     // Affects env().
     {"layout.css.prefers-color-scheme.content-override"_ns,
      widget::ThemeChangeKind::Style},
@@ -503,12 +500,12 @@ static constexpr struct {
     // Affects zoom settings which includes text and full zoom.
     {"browser.display.os-zoom-behavior"_ns,
      widget::ThemeChangeKind::StyleAndLayout},
+    // This affects system colors on Linux.
+    {"widget.gtk.libadwaita-colors.enabled"_ns, widget::ThemeChangeKind::Style},
     // This affects not only the media query, but also the native theme, so we
     // need to re-layout.
     {"browser.theme.toolbar-theme"_ns, widget::ThemeChangeKind::AllBits},
     {"browser.theme.content-theme"_ns},
-    {"dom.element.popover.enabled"_ns},
-    {"mathml.legacy_mathvariant_attribute.disabled"_ns},
 };
 
 // Read values from the user's preferences.
@@ -522,8 +519,6 @@ void nsXPLookAndFeel::Init() {
   // protects against some other process writing to our static variables.
   sInitialized = true;
 
-  RecomputeColorSchemes();
-
   if (XRE_IsParentProcess()) {
     nsLayoutUtils::RecomputeSmoothScrollDefault();
   }
@@ -536,7 +531,7 @@ void nsXPLookAndFeel::Init() {
   // that start with that string.
   Preferences::RegisterCallback(OnPrefChanged, "accessibility.tabfocus");
 
-  for (auto& pref : kMediaQueryPrefs) {
+  for (const auto& pref : kMediaQueryPrefs) {
     Preferences::RegisterCallback(
         [](const char*, void* aChangeKind) {
           auto changeKind =
@@ -692,16 +687,7 @@ nscolor nsXPLookAndFeel::GetStandinForNativeColor(ColorID aID,
       COLOR(MozEventreerow, 0xFF, 0xFF, 0xFF)
       COLOR(MozOddtreerow, 0xFF, 0xFF, 0xFF)
       COLOR(MozMacFocusring, 0x60, 0x9D, 0xD7)
-      COLOR(MozMacMenutextdisable, 0x88, 0x88, 0x88)
-      COLOR(MozMacMenutextselect, 0xFF, 0xFF, 0xFF)
       COLOR(MozMacDisabledtoolbartext, 0x3F, 0x3F, 0x3F)
-      COLOR(MozMacMenupopup, 0xe6, 0xe6, 0xe6)
-      COLOR(MozMacMenuitem, 0xe6, 0xe6, 0xe6)
-      COLOR(MozMacActiveMenuitem, 0x0a, 0x64, 0xdc)
-      COLOR(MozMacSourceList, 0xf7, 0xf7, 0xf7)
-      COLOR(MozMacSourceListSelection, 0xc8, 0xc8, 0xc8)
-      COLOR(MozMacActiveSourceListSelection, 0x0a, 0x64, 0xdc)
-      COLOR(MozMacTooltip, 0xf7, 0xf7, 0xf7)
       // Seems to be the default color (hardcoded because of bug 1065998)
       COLOR(MozNativehyperlinktext, 0x00, 0x66, 0xCC)
       COLOR(MozNativevisitedhyperlinktext, 0x55, 0x1A, 0x8B)
@@ -749,6 +735,7 @@ Maybe<nscolor> nsXPLookAndFeel::GenericDarkColor(ColorID aID) {
       break;
     case ColorID::Windowtext:  // --in-content-page-color
     case ColorID::MozDialogtext:
+    case ColorID::MozSidebartext:
     case ColorID::Fieldtext:
     case ColorID::Buttontext:  // --in-content-button-text-color (via
                                // --in-content-page-color)
@@ -760,10 +747,14 @@ Maybe<nscolor> nsXPLookAndFeel::GenericDarkColor(ColorID aID) {
     case ColorID::Captiontext:
     case ColorID::Inactivecaptiontext:  // TODO(emilio): Maybe make
                                         // Inactivecaptiontext Graytext?
+    case ColorID::MozColheadertext:
+    case ColorID::MozColheaderhovertext:
+    case ColorID::MozColheaderactivetext:
       color = kWindowText;
       break;
     case ColorID::Buttonshadow:
     case ColorID::Threedshadow:
+    case ColorID::MozSidebarborder:
     case ColorID::Threedlightshadow:
     case ColorID::Buttonborder:  // --in-content-box-border-color computed
                                  // with kWindowText above
@@ -778,8 +769,10 @@ Maybe<nscolor> nsXPLookAndFeel::GenericDarkColor(ColorID aID) {
                                  // --in-content-item-selected
       color = NS_RGB(0, 221, 255);
       break;
+    case ColorID::MozSidebar:
     case ColorID::Field:
     case ColorID::Buttonface:  // --in-content-button-background
+    case ColorID::MozColheader:
     case ColorID::Threedface:
     case ColorID::MozCombobox:
     case ColorID::MozCellhighlighttext:
@@ -795,9 +788,11 @@ Maybe<nscolor> nsXPLookAndFeel::GenericDarkColor(ColorID aID) {
       color = NS_ComposeColors(kWindowBackground, NS_RGBA(43, 42, 51, 102));
       break;
     case ColorID::MozButtonhoverface:  // --in-content-button-background-hover
+    case ColorID::MozColheaderhover:
       color = NS_RGB(82, 82, 94);
       break;
     case ColorID::MozButtonactiveface:  // --in-content-button-background-active
+    case ColorID::MozColheaderactive:
       color = NS_RGB(91, 91, 102);
       break;
     case ColorID::Highlight:
@@ -1154,7 +1149,6 @@ void nsXPLookAndFeel::RefreshImpl() {
   sFontCache.Clear();
   sFloatCache.Clear();
   sIntCache.Clear();
-  RecomputeColorSchemes();
 
   if (XRE_IsParentProcess()) {
     nsLayoutUtils::RecomputeSmoothScrollDefault();
@@ -1186,6 +1180,7 @@ void nsXPLookAndFeel::RecordTelemetry() {
 
 namespace mozilla {
 
+bool LookAndFeel::sGlobalThemeChanged;
 static widget::ThemeChangeKind sGlobalThemeChangeKind{0};
 
 void LookAndFeel::NotifyChangedAllWindows(widget::ThemeChangeKind aKind) {
@@ -1222,7 +1217,7 @@ void LookAndFeel::DoHandleGlobalThemeChange() {
   LookAndFeel::Refresh();
 
   // Reset default background and foreground colors for the document since they
-  // may be using system colors.
+  // may be using system colors, color scheme, etc.
   PreferenceSheet::Refresh();
 
   // Vector images (SVG) may be using theme colors so we discard all cached
@@ -1288,11 +1283,6 @@ static bool ShouldUseStandinsForNativeColorForNonNativeTheme(
          !aPrefs.NonNativeThemeShouldBeHighContrast();
 }
 
-ColorScheme LookAndFeel::sChromeColorScheme;
-ColorScheme LookAndFeel::sContentColorScheme;
-bool LookAndFeel::sColorSchemeInitialized;
-bool LookAndFeel::sGlobalThemeChanged;
-
 bool LookAndFeel::IsDarkColor(nscolor aColor) {
   // Given https://www.w3.org/TR/WCAG20/#contrast-ratiodef, this is the
   // threshold that tells us whether contrast is better against white or black.
@@ -1315,72 +1305,10 @@ bool LookAndFeel::IsDarkColor(nscolor aColor) {
          RelativeLuminanceUtils::Compute(aColor) < kThreshold;
 }
 
-auto LookAndFeel::ColorSchemeSettingForChrome() -> ChromeColorSchemeSetting {
-  switch (StaticPrefs::browser_theme_toolbar_theme()) {
-    case 0:  // Dark
-      return ChromeColorSchemeSetting::Dark;
-    case 1:  // Light
-      return ChromeColorSchemeSetting::Light;
-    default:
-      return ChromeColorSchemeSetting::System;
-  }
-}
-
-ColorScheme LookAndFeel::ThemeDerivedColorSchemeForContent() {
-  switch (StaticPrefs::browser_theme_content_theme()) {
-    case 0:  // Dark
-      return ColorScheme::Dark;
-    case 1:  // Light
-      return ColorScheme::Light;
-    default:
-      return SystemColorScheme();
-  }
-}
-
-void LookAndFeel::RecomputeColorSchemes() {
-  sColorSchemeInitialized = true;
-
-  sChromeColorScheme = [] {
-    switch (ColorSchemeSettingForChrome()) {
-      case ChromeColorSchemeSetting::Light:
-        return ColorScheme::Light;
-      case ChromeColorSchemeSetting::Dark:
-        return ColorScheme::Dark;
-      case ChromeColorSchemeSetting::System:
-        break;
-    }
-    return SystemColorScheme();
-  }();
-
-  sContentColorScheme = [] {
-    switch (StaticPrefs::layout_css_prefers_color_scheme_content_override()) {
-      case 0:
-        return ColorScheme::Dark;
-      case 1:
-        return ColorScheme::Light;
-      default:
-        return ThemeDerivedColorSchemeForContent();
-    }
-  }();
-}
-
 ColorScheme LookAndFeel::ColorSchemeForStyle(
     const dom::Document& aDoc, const StyleColorSchemeFlags& aFlags,
     ColorSchemeMode aMode) {
-  using Choice = PreferenceSheet::Prefs::ColorSchemeChoice;
-
   const auto& prefs = PreferenceSheet::PrefsFor(aDoc);
-  switch (prefs.mColorSchemeChoice) {
-    case Choice::Standard:
-      break;
-    case Choice::UserPreferred:
-      return aDoc.PreferredColorScheme();
-    case Choice::Light:
-      return ColorScheme::Light;
-    case Choice::Dark:
-      return ColorScheme::Dark;
-  }
-
   StyleColorSchemeFlags style(aFlags);
   if (!style) {
     style._0 = aDoc.GetColorSchemeBits();
@@ -1396,12 +1324,13 @@ ColorScheme LookAndFeel::ColorSchemeForStyle(
     // the content supports.
     return supportsDark ? ColorScheme::Dark : ColorScheme::Light;
   }
-  // No value specified. Chrome docs always supports both, so use the preferred
-  // color-scheme.
-  if (aMode == ColorSchemeMode::Preferred || aDoc.ChromeRulesEnabled()) {
+  // No value specified. Chrome docs, and forced-colors mode always supports
+  // both, so use the preferred color-scheme.
+  if (aMode == ColorSchemeMode::Preferred || aDoc.ChromeRulesEnabled() ||
+      !prefs.mUseDocumentColors) {
     return aDoc.PreferredColorScheme();
   }
-  // Default content to light.
+  // Otherwise default content to light.
   return ColorScheme::Light;
 }
 

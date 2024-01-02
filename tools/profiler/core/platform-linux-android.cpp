@@ -114,7 +114,7 @@ static void PopulateRegsFromContext(Registers& aRegs, ucontext_t* aContext) {
   aRegs.mSP = reinterpret_cast<Address>(mcontext.mc_gpregs.gp_sp);
   aRegs.mFP = reinterpret_cast<Address>(mcontext.mc_gpregs.gp_x[29]);
   aRegs.mLR = reinterpret_cast<Address>(mcontext.mc_gpregs.gp_lr);
-  aRegs.mR11 = reinterpret_cast<Address>(mcontext.mc_gpregs.gp_x[11];
+  aRegs.mR11 = reinterpret_cast<Address>(mcontext.mc_gpregs.gp_x[11]);
 #elif defined(GP_PLAT_mips64_linux) || defined(GP_PLAT_mips64_android)
   aRegs.mPC = reinterpret_cast<Address>(mcontext.pc);
   aRegs.mSP = reinterpret_cast<Address>(mcontext.gregs[29]);
@@ -262,12 +262,7 @@ static void SigprofHandler(int aSignal, siginfo_t* aInfo, void* aContext) {
   errno = savedErrno;
 }
 
-Sampler::Sampler(PSLockRef aLock)
-    : mMyPid(profiler_current_process_id()),
-      // We don't know what the sampler thread's ID will be until it runs, so
-      // set mSamplerTid to a dummy value and fill it in for real in
-      // SuspendAndSampleAndResumeThread().
-      mSamplerTid{} {
+Sampler::Sampler(PSLockRef aLock) : mMyPid(profiler_current_process_id()) {
 #if defined(USE_EHABI_STACKWALK)
   mozilla::EHABIStackWalkInit();
 #endif

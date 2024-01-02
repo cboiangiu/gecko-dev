@@ -83,8 +83,6 @@ class MediaContentDescription {
     return nullptr;
   }
 
-  virtual bool has_codecs() const = 0;
-
   // Copy operator that returns an unique_ptr.
   // Not a virtual function.
   // If a type-specific variant of Clone() is desired, override it, or
@@ -234,13 +232,43 @@ class MediaContentDescription {
     receive_rids_ = rids;
   }
 
+  // Codecs should be in preference order (most preferred codec first).
+  const std::vector<Codec>& codecs() const { return codecs_; }
+  void set_codecs(const std::vector<Codec>& codecs) { codecs_ = codecs; }
+  virtual bool has_codecs() const { return !codecs_.empty(); }
+  bool HasCodec(int id) {
+    return absl::c_find_if(codecs_, [id](const cricket::Codec codec) {
+             return codec.id == id;
+           }) != codecs_.end();
+  }
+  void AddCodec(const Codec& codec) { codecs_.push_back(codec); }
+  void AddOrReplaceCodec(const Codec& codec) {
+    for (auto it = codecs_.begin(); it != codecs_.end(); ++it) {
+      if (it->id == codec.id) {
+        *it = codec;
+        return;
+      }
+    }
+    AddCodec(codec);
+  }
+  void AddCodecs(const std::vector<Codec>& codecs) {
+    for (const auto& codec : codecs) {
+      AddCodec(codec);
+    }
+  }
+
  protected:
+  // TODO(bugs.webrtc.org/15214): move all RTP related things to a subclass that
+  // the SCTP content description does not inherit from.
+  std::string protocol_;
+
+ private:
   bool rtcp_mux_ = false;
   bool rtcp_reduced_size_ = false;
   bool remote_estimate_ = false;
   int bandwidth_ = kAutoBandwidth;
   std::string bandwidth_type_ = kApplicationSpecificBandwidth;
-  std::string protocol_;
+
   std::vector<CryptoParams> cryptos_;
   std::vector<webrtc::RtpExtension> rtp_header_extensions_;
   bool rtp_header_extensions_set_ = false;
@@ -254,11 +282,12 @@ class MediaContentDescription {
   SimulcastDescription simulcast_;
   std::vector<RidDescription> receive_rids_;
 
- private:
   // Copy function that returns a raw pointer. Caller will assert ownership.
   // Should only be called by the Clone() function. Must be implemented
   // by each final subclass.
   virtual MediaContentDescription* CloneInternal() const = 0;
+
+  std::vector<Codec> codecs_;
 };
 
 template <class C>
@@ -268,47 +297,9 @@ class MediaContentDescriptionImpl : public MediaContentDescription {
     RTC_DCHECK(IsRtpProtocol(protocol));
     protocol_ = std::string(protocol);
   }
-
-  typedef C CodecType;
-
-  // Codecs should be in preference order (most preferred codec first).
-  const std::vector<C>& codecs() const { return codecs_; }
-  void set_codecs(const std::vector<C>& codecs) { codecs_ = codecs; }
-  bool has_codecs() const override { return !codecs_.empty(); }
-  bool HasCodec(int id) {
-    bool found = false;
-    for (typename std::vector<C>::iterator iter = codecs_.begin();
-         iter != codecs_.end(); ++iter) {
-      if (iter->id == id) {
-        found = true;
-        break;
-      }
-    }
-    return found;
-  }
-  void AddCodec(const C& codec) { codecs_.push_back(codec); }
-  void AddOrReplaceCodec(const C& codec) {
-    for (typename std::vector<C>::iterator iter = codecs_.begin();
-         iter != codecs_.end(); ++iter) {
-      if (iter->id == codec.id) {
-        *iter = codec;
-        return;
-      }
-    }
-    AddCodec(codec);
-  }
-  void AddCodecs(const std::vector<C>& codecs) {
-    typename std::vector<C>::const_iterator codec;
-    for (codec = codecs.begin(); codec != codecs.end(); ++codec) {
-      AddCodec(*codec);
-    }
-  }
-
- private:
-  std::vector<C> codecs_;
 };
 
-class AudioContentDescription : public MediaContentDescriptionImpl<AudioCodec> {
+class AudioContentDescription : public MediaContentDescriptionImpl<Codec> {
  public:
   AudioContentDescription() {}
 
@@ -322,7 +313,7 @@ class AudioContentDescription : public MediaContentDescriptionImpl<AudioCodec> {
   }
 };
 
-class VideoContentDescription : public MediaContentDescriptionImpl<VideoCodec> {
+class VideoContentDescription : public MediaContentDescriptionImpl<Codec> {
  public:
   virtual MediaType type() const { return MEDIA_TYPE_VIDEO; }
   virtual VideoContentDescription* as_video() { return this; }

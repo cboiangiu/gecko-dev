@@ -28,7 +28,7 @@ license:
         # might not work with license
         - gradle/wrapper/gradle-wrapper.properties
         # ICU4X data
-        - intl/icu_testdata
+        - intl/icu_segmenter_data
         # Imported code that is dual Apache2 / MIT licensed
         - intl/l10n/rust/l10nregistry-rs
         - intl/l10n/rust/l10nregistry-tests
@@ -54,7 +54,9 @@ license:
         - security/mac/hardenedruntime/v2/developer/media-plugin-helper.xml
         - security/mac/hardenedruntime/v2/developer/plugin-container.xml
         - security/mac/hardenedruntime/v2/developer/utility.xml
-        - security/mac/hardenedruntime/v2/production/browser.xml
+        - security/mac/hardenedruntime/v2/production/nightly.browser.xml
+        - security/mac/hardenedruntime/v2/production/firefox.browser.xml
+        - security/mac/hardenedruntime/v2/production/firefoxdeveloperedition.browser.xml
         - security/mac/hardenedruntime/v2/production/media-plugin-helper.xml
         - security/mac/hardenedruntime/v2/production/plugin-container.xml
         - testing/marionette/harness/marionette_harness/www/
@@ -77,6 +79,7 @@ license:
         - .ftl
         - .h
         - .html
+        - .idl
         - .java
         - .js
         - .jsm
@@ -88,6 +91,7 @@ license:
         - .py
         - .rs
         - .svg
+        - .webidl
         - .xhtml
         - .xml
         - .xul

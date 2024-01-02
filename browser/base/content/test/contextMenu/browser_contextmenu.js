@@ -34,6 +34,9 @@ let NAVIGATION_ITEMS =
         null,
       ];
 let hasPocket = Services.prefs.getBoolPref("extensions.pocket.enabled");
+let hasStripOnShare = Services.prefs.getBoolPref(
+  "privacy.query_stripping.strip_on_share.enabled"
+);
 let hasContainers =
   Services.prefs.getBoolPref("privacy.userContext.enabled") &&
   ContextualIdentityService.getPublicIdentities().length;
@@ -41,6 +44,7 @@ let hasContainers =
 const example_base =
   // eslint-disable-next-line @microsoft/sdl/no-insecure-url
   "http://example.com/browser/browser/base/content/test/contextMenu/";
+const about_preferences_base = "about:preferences";
 const chrome_base =
   "chrome://mochitests/content/browser/browser/base/content/test/contextMenu/";
 const head_base =
@@ -101,6 +105,7 @@ add_task(async function test_xul_text_link_label() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -192,6 +197,7 @@ const kLinkItems = [
   ...(hasPocket ? ["context-savelinktopocket", true] : []),
   "context-copylink",
   true,
+  ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
   "---",
   null,
   "context-searchselect",
@@ -1195,6 +1201,8 @@ add_task(async function test_copylinkcommand() {
 });
 
 add_task(async function test_dom_full_screen() {
+  let exited = BrowserTestUtils.waitForEvent(window, "MozDOMFullscreen:Exited");
+
   let fullscreenItems = NAVIGATION_ITEMS.concat([
     "context-leave-dom-fullscreen",
     true,
@@ -1266,6 +1274,23 @@ add_task(async function test_dom_full_screen() {
       );
     },
   });
+  await exited;
+
+  await BrowserTestUtils.waitForCondition(() => {
+    return !TelemetryStopwatch.running("FULLSCREEN_CHANGE_MS");
+  });
+
+  if (AppConstants.platform == "macosx") {
+    // On macOS, the fullscreen transition takes some extra time
+    // to complete, and we don't receive events for it. We need to
+    // wait for it to complete or else input events in the next test
+    // might get eaten up. This is the best we can currently do.
+
+    // eslint-disable-next-line mozilla/no-arbitrary-setTimeout
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  await SimpleTest.promiseFocus(window);
 });
 
 add_task(async function test_pagemenu2() {
@@ -1444,6 +1469,7 @@ add_task(async function test_imagelink() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-viewimage",
@@ -1649,6 +1675,7 @@ add_task(async function test_svg_link() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -1677,6 +1704,7 @@ add_task(async function test_svg_link() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -1705,6 +1733,7 @@ add_task(async function test_svg_link() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -1735,6 +1764,7 @@ add_task(async function test_svg_relative_link() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -1763,6 +1793,7 @@ add_task(async function test_svg_relative_link() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -1791,6 +1822,7 @@ add_task(async function test_svg_relative_link() {
     ...(hasPocket ? ["context-savelinktopocket", true] : []),
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -1859,6 +1891,7 @@ add_task(async function test_background_image() {
     true,
     "context-copylink",
     true,
+    ...(hasStripOnShare ? ["context-stripOnShareLink", true] : []),
     "---",
     null,
     "context-searchselect",
@@ -1902,6 +1935,64 @@ add_task(async function test_background_image() {
 });
 
 add_task(async function test_cleanup_html() {
+  lastElementSelector = null;
+  gBrowser.removeCurrentTab();
+});
+
+/*
+ *   Testing that Copy without Site Tracking option does not
+ *   appear on internal about: pages.
+ */
+add_task(async function test_strip_on_share_on_secure_about_page() {
+  let url = about_preferences_base;
+
+  let tab = await BrowserTestUtils.openNewForegroundTab({
+    gBrowser,
+    url,
+  });
+
+  let browser2 = tab.linkedBrowser;
+
+  await SpecialPowers.spawn(browser2, [], () => {
+    let link = content.document.createElement("a");
+    link.href = "https://mozilla.com";
+    link.textContent = "link with query param";
+    link.id = "link-test-strip";
+    content.document.body.appendChild(link);
+  });
+
+  // the Copy without Site Tracking option should not
+  // show up within internal about: pages
+  await test_contextmenu("#link-test-strip", [
+    "context-openlinkintab",
+    true,
+    ...(hasContainers ? ["context-openlinkinusercontext-menu", true] : []),
+    // We need a blank entry here because the containers submenu is
+    // dynamically generated with no ids.
+    ...(hasContainers ? ["", null] : []),
+    "context-openlink",
+    true,
+    "context-openlinkprivate",
+    true,
+    "---",
+    null,
+    "context-bookmarklink",
+    true,
+    "context-savelink",
+    true,
+    ...(hasPocket ? ["context-savelinktopocket", true] : []),
+    "context-copylink",
+    true,
+    "---",
+    null,
+    "context-searchselect",
+    true,
+    "context-searchselect-private",
+    true,
+  ]);
+
+  // Clean up
+  lastElementSelector = null;
   gBrowser.removeCurrentTab();
 });
 

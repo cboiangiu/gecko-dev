@@ -124,6 +124,14 @@ void CredentialsContainer::EnsureWebAuthnManager() {
   }
 }
 
+already_AddRefed<WebAuthnManager> CredentialsContainer::GetWebAuthnManager() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  EnsureWebAuthnManager();
+  RefPtr<WebAuthnManager> ref = mManager;
+  return ref.forget();
+}
+
 JSObject* CredentialsContainer::WrapObject(JSContext* aCx,
                                            JS::Handle<JSObject*> aGivenProto) {
   return CredentialsContainer_Binding::Wrap(aCx, this, aGivenProto);
@@ -155,9 +163,8 @@ already_AddRefed<Promise> CredentialsContainer::Get(
       return CreateAndRejectWithNotAllowed(mParent, aRv);
     }
 
-    if (conditionallyMediated) {
-      // Conditional mediation for WebAuthn Get() will be implemented in
-      // Bug 1838932.
+    if (conditionallyMediated &&
+        !StaticPrefs::security_webauthn_enable_conditional_mediation()) {
       RefPtr<Promise> promise = CreatePromise(mParent, aRv);
       if (!promise) {
         return nullptr;
@@ -168,8 +175,8 @@ already_AddRefed<Promise> CredentialsContainer::Get(
     }
 
     EnsureWebAuthnManager();
-    return mManager->GetAssertion(aOptions.mPublicKey.Value(), aOptions.mSignal,
-                                  aRv);
+    return mManager->GetAssertion(aOptions.mPublicKey.Value(),
+                                  conditionallyMediated, aOptions.mSignal, aRv);
   }
 
   if (aOptions.mIdentity.WasPassed() &&

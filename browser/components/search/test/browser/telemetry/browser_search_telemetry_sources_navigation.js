@@ -12,7 +12,7 @@ const TEST_PROVIDER_INFO = [
     telemetryId: "example",
     searchPageRegexp:
       /^https:\/\/example.org\/browser\/browser\/components\/search\/test\/browser\/telemetry\/searchTelemetry(?:Ad)?.html/,
-    queryParamName: "s",
+    queryParamNames: ["s"],
     codeParamName: "abc",
     taggedCodes: ["ff"],
     followOnParamNames: ["a"],
@@ -64,7 +64,6 @@ add_setup(async function () {
   // Enable local telemetry recording for the duration of the tests.
   let oldCanRecord = Services.telemetry.canRecordExtended;
   Services.telemetry.canRecordExtended = true;
-  Services.prefs.setBoolPref("browser.search.log", true);
 
   await SearchTestUtils.installSearchExtension(
     {
@@ -81,10 +80,9 @@ add_setup(async function () {
 
   registerCleanupFunction(async () => {
     BrowserTestUtils.removeTab(tab);
-    Services.prefs.clearUserPref("browser.search.log");
     SearchSERPTelemetry.overrideSearchTelemetryForTests();
     Services.telemetry.canRecordExtended = oldCanRecord;
-    Services.telemetry.clearScalars();
+    resetTelemetry();
   });
 });
 
@@ -110,6 +108,7 @@ add_task(async function test_search() {
   Services.fog.testResetFOG();
   // Load a page via the address bar.
   await loadSearchPage();
+  await waitForPageWithAdImpressions();
 
   await assertSearchSourcesTelemetry(
     {
@@ -121,7 +120,7 @@ add_task(async function test_search() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -130,16 +129,26 @@ add_task(async function test_search() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 });
 
 add_task(async function test_reload() {
+  let adImpressionPromise = waitForPageWithAdImpressions();
   let promise = BrowserTestUtils.browserLoaded(tab.linkedBrowser);
   tab.linkedBrowser.reload();
   await promise;
-  await promiseWaitForAdLinkCheck();
+  await adImpressionPromise;
 
   await assertSearchSourcesTelemetry(
     {
@@ -153,7 +162,7 @@ add_task(async function test_reload() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -162,6 +171,18 @@ add_task(async function test_reload() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
+      },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.NAVIGATION,
       },
     },
     {
@@ -172,10 +193,18 @@ add_task(async function test_reload() {
         source: "reload",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
-  await promiseAdImpressionReceived();
 
   let pageLoadPromise = BrowserTestUtils.waitForLocationChange(gBrowser);
   await BrowserTestUtils.synthesizeMouseAtCenter("#ad1", {}, tab.linkedBrowser);
@@ -194,7 +223,7 @@ add_task(async function test_reload() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -203,6 +232,18 @@ add_task(async function test_reload() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
+      },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.NAVIGATION,
       },
     },
     {
@@ -213,11 +254,20 @@ add_task(async function test_reload() {
         source: "reload",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
         },
       ],
     },
@@ -230,7 +280,9 @@ add_task(async function test_fresh_search() {
   resetTelemetry();
 
   // Load a page via the address bar.
+  let adImpressionPromise = waitForPageWithAdImpressions();
   await loadSearchPage();
+  await adImpressionPromise;
 
   searchUrl = tab.linkedBrowser.url;
 
@@ -244,7 +296,7 @@ add_task(async function test_fresh_search() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -253,10 +305,18 @@ add_task(async function test_fresh_search() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
-  await promiseAdImpressionReceived(1);
 });
 
 add_task(async function test_click_ad() {
@@ -275,7 +335,7 @@ add_task(async function test_click_ad() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -284,6 +344,7 @@ add_task(async function test_click_ad() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
       engagements: [
         {
@@ -291,15 +352,24 @@ add_task(async function test_click_ad() {
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
         },
       ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
 });
 
 add_task(async function test_go_back() {
+  let adImpressionPromise = waitForPageWithAdImpressions();
   let promise = BrowserTestUtils.waitForLocationChange(gBrowser, searchUrl);
   tab.linkedBrowser.goBack();
   await promise;
-  await promiseWaitForAdLinkCheck();
+  await adImpressionPromise;
 
   await assertSearchSourcesTelemetry(
     {
@@ -314,7 +384,7 @@ add_task(async function test_go_back() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -323,11 +393,20 @@ add_task(async function test_go_back() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
         },
       ],
     },
@@ -339,10 +418,18 @@ add_task(async function test_go_back() {
         source: "tabhistory",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
-  await promiseAdImpressionReceived(2);
 
   let pageLoadPromise = BrowserTestUtils.waitForLocationChange(gBrowser);
   await BrowserTestUtils.synthesizeMouseAtCenter("#ad1", {}, tab.linkedBrowser);
@@ -362,7 +449,7 @@ add_task(async function test_go_back() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -371,11 +458,20 @@ add_task(async function test_go_back() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
         },
       ],
     },
@@ -387,11 +483,20 @@ add_task(async function test_go_back() {
         source: "tabhistory",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
         },
       ],
     },
@@ -410,7 +515,9 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
   });
 
   // Load a SERP once in order to show the search term in the Urlbar.
+  let adImpressionPromise = waitForPageWithAdImpressions();
   await loadSearchPage();
+  await adImpressionPromise;
   await assertSearchSourcesTelemetry(
     {
       "other-Example.urlbar": 1,
@@ -421,7 +528,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -430,13 +537,23 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
-  await promiseAdImpressionReceived(1);
 
   // Do another search from the context of the default SERP.
+  adImpressionPromise = waitForPageWithAdImpressions();
   await loadSearchPage();
+  await adImpressionPromise;
   await assertSearchSourcesTelemetry(
     {
       "other-Example.urlbar": 1,
@@ -450,7 +567,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -459,6 +576,18 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
+      },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.NAVIGATION,
       },
     },
     {
@@ -469,10 +598,18 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         source: "urlbar_persisted",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
     },
   ]);
-  await promiseAdImpressionReceived(2);
 
   // Click on an ad.
   let pageLoadPromise = BrowserTestUtils.waitForLocationChange(gBrowser);
@@ -493,7 +630,7 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
     }
   );
 
-  assertImpressionEvents([
+  assertSERPTelemetry([
     {
       impression: {
         provider: "example",
@@ -502,6 +639,18 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         source: "urlbar",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
+      },
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
+        },
+      ],
+      abandonment: {
+        reason: SearchSERPTelemetryUtils.ABANDONMENTS.NAVIGATION,
       },
     },
     {
@@ -512,11 +661,20 @@ add_task(async function test_fresh_search_with_urlbar_persisted() {
         source: "urlbar_persisted",
         shopping_tab_displayed: "false",
         is_shopping_page: "false",
+        is_private: "false",
       },
       engagements: [
         {
           action: SearchSERPTelemetryUtils.ACTIONS.CLICKED,
           target: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+        },
+      ],
+      adImpressions: [
+        {
+          component: SearchSERPTelemetryUtils.COMPONENTS.AD_LINK,
+          ads_loaded: "2",
+          ads_visible: "2",
+          ads_hidden: "0",
         },
       ],
     },

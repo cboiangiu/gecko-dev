@@ -19,6 +19,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
+#include "api/audio_codecs/audio_format.h"
 #include "api/field_trials_view.h"
 #include "api/rtp_parameters.h"
 #include "api/video_codecs/sdp_video_format.h"
@@ -113,7 +114,7 @@ struct RTC_EXPORT Codec {
   // H264 levels are not compared.
   bool Matches(const Codec& codec,
                const webrtc::FieldTrialsView* field_trials = nullptr) const;
-  bool MatchesCapability(const webrtc::RtpCodecCapability& capability) const;
+  bool MatchesRtpCodec(const webrtc::RtpCodec& capability) const;
 
   // Find the parameter for `name` and write the value to `out`.
   bool GetParam(const std::string& name, std::string* out) const;
@@ -166,12 +167,14 @@ struct RTC_EXPORT Codec {
         int clockrate,
         size_t channels);
 
+  explicit Codec(const webrtc::SdpAudioFormat& c);
   explicit Codec(const webrtc::SdpVideoFormat& c);
 
   friend Codec CreateAudioCodec(int id,
                                 const std::string& name,
                                 int clockrate,
                                 size_t channels);
+  friend Codec CreateAudioCodec(const webrtc::SdpAudioFormat& c);
   friend Codec CreateAudioRtxCodec(int rtx_payload_type,
                                    int associated_payload_type);
   friend Codec CreateVideoCodec(int id, const std::string& name);
@@ -188,6 +191,7 @@ Codec CreateAudioCodec(int id,
                        const std::string& name,
                        int clockrate,
                        size_t channels);
+Codec CreateAudioCodec(const webrtc::SdpAudioFormat& c);
 Codec CreateAudioRtxCodec(int rtx_payload_type, int associated_payload_type);
 Codec CreateVideoCodec(const std::string& name);
 Codec CreateVideoCodec(int id, const std::string& name);
@@ -210,11 +214,16 @@ bool HasNack(const Codec& codec);
 bool HasRemb(const Codec& codec);
 bool HasRrtr(const Codec& codec);
 bool HasTransportCc(const Codec& codec);
+
 // Returns the first codec in `supported_codecs` that matches `codec`, or
 // nullptr if no codec matches.
-const VideoCodec* FindMatchingCodec(
-    const std::vector<VideoCodec>& supported_codecs,
-    const VideoCodec& codec);
+const Codec* FindMatchingVideoCodec(const std::vector<Codec>& supported_codecs,
+                                    const Codec& codec);
+
+// Returns all codecs in `supported_codecs` that matches `codec`.
+std::vector<const Codec*> FindAllMatchingCodecs(
+    const std::vector<Codec>& supported_codecs,
+    const Codec& codec);
 
 RTC_EXPORT void AddH264ConstrainedBaselineProfileToSupportedFormats(
     std::vector<webrtc::SdpVideoFormat>* supported_formats);

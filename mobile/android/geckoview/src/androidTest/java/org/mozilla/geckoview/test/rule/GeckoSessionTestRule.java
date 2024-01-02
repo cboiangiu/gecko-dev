@@ -1153,7 +1153,7 @@ public class GeckoSessionTestRule implements TestRule {
 
   private static RuntimeException unwrapRuntimeException(final Throwable e) {
     final Throwable cause = e.getCause();
-    if (cause != null && cause instanceof RuntimeException) {
+    if (cause instanceof RuntimeException) {
       return (RuntimeException) cause;
     } else if (e instanceof RuntimeException) {
       return (RuntimeException) e;
@@ -2497,6 +2497,20 @@ public class GeckoSessionTestRule implements TestRule {
 
   public void triggerCookieBannerHandled(final @NonNull GeckoSession session) {
     webExtensionApiCall(session, "TriggerCookieBannerHandled", null);
+  }
+
+  public void triggerTranslationsOffer(final @NonNull GeckoSession session) {
+    webExtensionApiCall(session, "TriggerTranslationsOffer", null);
+  }
+
+  public void triggerLanguageStateChange(
+      final @NonNull GeckoSession session, final @NonNull JSONObject languageState) {
+    webExtensionApiCall(
+        session,
+        "TriggerLanguageStateChange",
+        args -> {
+          args.put("languageState", languageState);
+        });
   }
 
   private Object waitForMessage(final WebExtension.Port port, final String id) {

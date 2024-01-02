@@ -22,6 +22,8 @@ Preferences.addAll([
   { id: "browser.search.separatePrivateDefault.ui.enabled", type: "bool" },
   { id: "browser.urlbar.suggest.trending", type: "bool" },
   { id: "browser.urlbar.trending.featureGate", type: "bool" },
+  { id: "browser.urlbar.recentsearches.featureGate", type: "bool" },
+  { id: "browser.urlbar.suggest.recentsearches", type: "bool" },
 ]);
 
 const ENGINE_FLAVOR = "text/x-moz-search-engine";
@@ -65,16 +67,33 @@ var gSearchPane = {
 
     let suggestsPref = Preferences.get("browser.search.suggest.enabled");
     let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
+    let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
     let privateSuggestsPref = Preferences.get(
       "browser.search.suggest.enabled.private"
     );
+
     let updateSuggestionCheckboxes =
       this._updateSuggestionCheckboxes.bind(this);
     suggestsPref.on("change", updateSuggestionCheckboxes);
     urlbarSuggestsPref.on("change", updateSuggestionCheckboxes);
+    searchBarPref.on("change", updateSuggestionCheckboxes);
     let urlbarSuggests = document.getElementById("urlBarSuggestion");
     urlbarSuggests.addEventListener("command", () => {
       urlbarSuggestsPref.value = urlbarSuggests.checked;
+    });
+    let suggestionsInSearchFieldsCheckbox = document.getElementById(
+      "suggestionsInSearchFieldsCheckbox"
+    );
+    // We only want to call _updateSuggestionCheckboxes once after updating
+    // all prefs.
+    suggestionsInSearchFieldsCheckbox.addEventListener("command", () => {
+      this._skipUpdateSuggestionCheckboxesFromPrefChanges = true;
+      if (!searchBarPref.value) {
+        urlbarSuggestsPref.value = suggestionsInSearchFieldsCheckbox.checked;
+      }
+      suggestsPref.value = suggestionsInSearchFieldsCheckbox.checked;
+      this._skipUpdateSuggestionCheckboxesFromPrefChanges = false;
+      this._updateSuggestionCheckboxes();
     });
     let privateWindowCheckbox = document.getElementById(
       "showSearchSuggestionsPrivateWindows"
@@ -102,6 +121,7 @@ var gSearchPane = {
     this._initShowSearchTermsCheckbox();
     this._updateSuggestionCheckboxes();
     this._showAddEngineButton();
+    this._initRecentSeachesCheckbox();
   },
 
   /**
@@ -141,16 +161,17 @@ var gSearchPane = {
     NimbusFeatures.urlbar.onUpdate(onNimbus);
 
     // Add observer of Search Bar preference as showSearchTerms
-    // can't be enabled/disabled while Search Bar is enabled.
+    // can't be shown/hidden while Search Bar is enabled.
     let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
-    let updateCheckboxEnabled = () => {
-      checkbox.disabled = searchBarPref.value;
+    let updateCheckboxHidden = () => {
+      checkbox.hidden =
+        !UrlbarPrefs.get("showSearchTermsFeatureGate") || searchBarPref.value;
     };
-    searchBarPref.on("change", updateCheckboxEnabled);
+    searchBarPref.on("change", updateCheckboxHidden);
 
     // Fire once to initialize.
     onNimbus();
-    updateCheckboxEnabled();
+    updateCheckboxHidden();
 
     window.addEventListener("unload", () => {
       NimbusFeatures.urlbar.offUpdate(onNimbus);
@@ -173,19 +194,33 @@ var gSearchPane = {
   },
 
   _updateSuggestionCheckboxes() {
+    if (this._skipUpdateSuggestionCheckboxesFromPrefChanges) {
+      return;
+    }
     let suggestsPref = Preferences.get("browser.search.suggest.enabled");
     let permanentPB = Services.prefs.getBoolPref(
       "browser.privatebrowsing.autostart"
     );
     let urlbarSuggests = document.getElementById("urlBarSuggestion");
+    let suggestionsInSearchFieldsCheckbox = document.getElementById(
+      "suggestionsInSearchFieldsCheckbox"
+    );
     let positionCheckbox = document.getElementById(
       "showSearchSuggestionsFirstCheckbox"
     );
     let privateWindowCheckbox = document.getElementById(
       "showSearchSuggestionsPrivateWindows"
     );
+    let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
+    let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
+
+    suggestionsInSearchFieldsCheckbox.checked =
+      suggestsPref.value &&
+      (searchBarPref.value ? true : urlbarSuggestsPref.value);
 
     urlbarSuggests.disabled = !suggestsPref.value || permanentPB;
+    urlbarSuggests.hidden = !searchBarPref.value;
+
     privateWindowCheckbox.disabled = !suggestsPref.value;
     privateWindowCheckbox.checked = Preferences.get(
       "browser.search.suggest.enabled.private"
@@ -194,12 +229,10 @@ var gSearchPane = {
       privateWindowCheckbox.checked = false;
     }
 
-    let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
     urlbarSuggests.checked = urlbarSuggestsPref.value;
     if (urlbarSuggests.disabled) {
       urlbarSuggests.checked = false;
     }
-
     if (urlbarSuggests.checked) {
       positionCheckbox.disabled = false;
       // Update the checked state of the show-suggestions-first checkbox.  Note
@@ -210,6 +243,13 @@ var gSearchPane = {
     } else {
       positionCheckbox.disabled = true;
       positionCheckbox.checked = false;
+    }
+    if (
+      suggestionsInSearchFieldsCheckbox.checked &&
+      !searchBarPref.value &&
+      !urlbarSuggests.checked
+    ) {
+      urlbarSuggestsPref.value = true;
     }
 
     let permanentPBLabel = document.getElementById(
@@ -229,6 +269,21 @@ var gSearchPane = {
       let addButton = document.getElementById("addEngineButton");
       addButton.hidden = false;
     }
+  },
+
+  _initRecentSeachesCheckbox() {
+    this._recentSearchesEnabledPref = Preferences.get(
+      "browser.urlbar.recentsearches.featureGate"
+    );
+    let recentSearchesCheckBox = document.getElementById(
+      "enableRecentSearches"
+    );
+    const listener = () => {
+      recentSearchesCheckBox.hidden = !this._recentSearchesEnabledPref.value;
+    };
+
+    this._recentSearchesEnabledPref.on("change", listener);
+    listener();
   },
 
   async _updateTrendingCheckbox(suggestDisabled) {
@@ -294,8 +349,8 @@ var gSearchPane = {
         "class",
         "menuitem-iconic searchengine-menuitem menuitem-with-favicon"
       );
-      if (e.iconURI) {
-        item.setAttribute("image", e.iconURI.spec);
+      if (e.iconURL) {
+        item.setAttribute("image", e.iconURL);
       }
       item.engine = e;
       if (e.name == currentEngine) {
@@ -676,8 +731,10 @@ EngineStore.prototype = {
   },
 
   _cloneEngine(aEngine) {
-    var clonedObj = {};
-    for (let i of ["id", "name", "alias", "iconURI", "hidden"]) {
+    var clonedObj = {
+      iconURL: aEngine.getIconURL(),
+    };
+    for (let i of ["id", "name", "alias", "hidden"]) {
       clonedObj[i] = aEngine[i];
     }
     clonedObj.originalEngine = aEngine;
@@ -796,12 +853,6 @@ EngineStore.prototype = {
 
     this._engines[index][aProp] = aNewValue;
     aEngine.originalEngine[aProp] = aNewValue;
-  },
-
-  reloadIcons() {
-    this._engines.forEach(function (e) {
-      e.iconURI = e.originalEngine.iconURI;
-    });
   },
 };
 
@@ -941,8 +992,8 @@ EngineView.prototype = {
         return shortcut.icon;
       }
 
-      if (this._engineStore.engines[index].iconURI) {
-        return this._engineStore.engines[index].iconURI.spec;
+      if (this._engineStore.engines[index].iconURL) {
+        return this._engineStore.engines[index].iconURL;
       }
 
       if (window.devicePixelRatio > 1) {

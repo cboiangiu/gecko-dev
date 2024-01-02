@@ -544,7 +544,11 @@ CoderResult CodeStructType(Coder<mode>& coder,
   WASM_VERIFY_SERIALIZATION_FOR_SIZE(wasm::StructType, 136);
   MOZ_TRY((CodeVector<mode, StructField, &CodeStructField<mode>>(
       coder, &item->fields_)));
-  MOZ_TRY(CodePod(coder, &item->size_));
+  if constexpr (mode == MODE_DECODE) {
+    if (!item->init()) {
+      return Err(OutOfMemory());
+    }
+  }
   return Ok();
 }
 
@@ -952,7 +956,7 @@ CoderResult CodeSymbolicLinkArray(
 template <CoderMode mode>
 CoderResult CodeLinkData(Coder<mode>& coder,
                          CoderArg<mode, wasm::LinkData> item) {
-  WASM_VERIFY_SERIALIZATION_FOR_SIZE(wasm::LinkData, 7968);
+  WASM_VERIFY_SERIALIZATION_FOR_SIZE(wasm::LinkData, 8760);
   if constexpr (mode == MODE_ENCODE) {
     MOZ_ASSERT(item->tier == Tier::Serialized);
   }
@@ -1037,6 +1041,7 @@ CoderResult CodeMetadataTier(Coder<mode>& coder,
   MOZ_TRY(CodePodVector(coder, &item->funcExports));
   MOZ_TRY(CodeStackMaps(coder, &item->stackMaps, codeStart));
   MOZ_TRY(CodePodVector(coder, &item->tryNotes));
+  MOZ_TRY(CodePodVector(coder, &item->codeRangeUnwindInfos));
   return Ok();
 }
 

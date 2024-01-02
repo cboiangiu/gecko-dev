@@ -85,6 +85,7 @@ struct RangePaintInfo;
 class ReflowCountMgr;
 #endif
 class WeakFrame;
+class nsTextFrame;
 class ZoomConstraintsClient;
 
 struct nsCallbackEventRequest;
@@ -113,6 +114,7 @@ class Element;
 class Event;
 class HTMLSlotElement;
 class Selection;
+class PerformanceMainThread;
 }  // namespace dom
 
 namespace gfx {
@@ -1546,12 +1548,6 @@ class PresShell final : public nsStubDocumentObserver,
   void SetAuthorStyleDisabled(bool aDisabled);
   bool GetAuthorStyleDisabled() const;
 
-  /**
-   * Update the style set somehow to take into account changed prefs which
-   * affect document styling.
-   */
-  void UpdatePreferenceStyles();
-
   // aSheetType is one of the nsIStyleSheetService *_SHEET constants.
   void NotifyStyleSheetServiceSheetAdded(StyleSheet* aSheet,
                                          uint32_t aSheetType);
@@ -1735,6 +1731,8 @@ class PresShell final : public nsStubDocumentObserver,
 
   bool GetZoomableByAPZ() const;
 
+  bool ReflowForHiddenContentIfNeeded();
+  void UpdateHiddenContentInForcedLayout(nsIFrame*);
   /**
    * If this frame has content hidden via `content-visibilty` that has a pending
    * reflow, force the content to reflow immediately.
@@ -1750,9 +1748,24 @@ class PresShell final : public nsStubDocumentObserver,
   void RegisterContentVisibilityAutoFrame(nsIFrame* aFrame) {
     mContentVisibilityAutoFrames.Insert(aFrame);
   }
+  bool HasContentVisibilityAutoFrames() const {
+    return !mContentVisibilityAutoFrames.IsEmpty();
+  }
 
   void UpdateRelevancyOfContentVisibilityAutoFrames();
   void ScheduleContentRelevancyUpdate(ContentRelevancyReason aReason);
+  void UpdateContentRelevancyImmediately(ContentRelevancyReason aReason);
+
+  // Determination of proximity to the viewport.
+  // Refer to "update the rendering: step 14", see
+  // https://html.spec.whatwg.org/#update-the-rendering
+  struct ProximityToViewportResult {
+    bool mHadInitialDetermination = false;
+    bool mAnyScrollIntoViewFlag = false;
+  };
+  ProximityToViewportResult DetermineProximityToViewport();
+
+  void ClearTemporarilyVisibleForScrolledIntoViewDescendantFlags() const;
 
  private:
   ~PresShell();
@@ -1875,7 +1888,6 @@ class PresShell final : public nsStubDocumentObserver,
   void AddUserSheet(StyleSheet*);
   void AddAgentSheet(StyleSheet*);
   void AddAuthorSheet(StyleSheet*);
-  void RemovePreferenceStyles();
 
   /**
    * Initialize cached font inflation preference values and do an initial
@@ -2879,8 +2891,6 @@ class PresShell final : public nsStubDocumentObserver,
   // call their can-run- script methods without local RefPtr variables.
   MOZ_KNOWN_LIVE RefPtr<Document> const mDocument;
   MOZ_KNOWN_LIVE RefPtr<nsPresContext> const mPresContext;
-  // The document's style set owns it but we maintain a ref, may be null.
-  RefPtr<StyleSheet> mPrefStyleSheet;
   UniquePtr<nsCSSFrameConstructor> mFrameConstructor;
   nsViewManager* mViewManager;  // [WEAK] docViewer owns it so I don't have to
   RefPtr<nsFrameSelection> mSelection;
@@ -2997,6 +3007,9 @@ class PresShell final : public nsStubDocumentObserver,
   // NS_UNCONSTRAINEDSIZE) if the mouse isn't over our window or there is no
   // last observed mouse location for some reason.
   nsPoint mMouseLocation;
+  // This is used for the synthetic mouse events too.  This is set when a mouse
+  // event is dispatched into the DOM.
+  static int16_t sMouseButtons;
   // The last observed pointer location relative to that root document in visual
   // coordinates.
   nsPoint mLastOverWindowPointerLocation;

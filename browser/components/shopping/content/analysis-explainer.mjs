@@ -27,6 +27,12 @@ class AnalysisExplainer extends MozLitElement {
     productUrl: { type: String, reflect: true },
   };
 
+  static get queries() {
+    return {
+      reviewQualityExplainerLink: "#review-quality-url",
+    };
+  }
+
   getGradesDescriptionTemplate() {
     return html`
       <section id="analysis-explainer-grades-wrapper">
@@ -102,6 +108,8 @@ class AnalysisExplainer extends MozLitElement {
     }
   }
 
+  // Bug 1857620: rather than manually set the utm parameters on the SUMO link,
+  // we should instead update moz-support-link to allow arbitrary utm parameters.
   render() {
     return html`
       <link
@@ -128,13 +136,16 @@ class AnalysisExplainer extends MozLitElement {
               })}"
             ></p>
             <p
-              data-l10n-id="shopping-analysis-explainer-learn-more"
+              data-l10n-id="shopping-analysis-explainer-learn-more2"
               @click=${this.handleReviewQualityUrlClicked}
             >
               <a
-                is="moz-support-link"
-                support-page="review-checker-review-quality"
+                id="review-quality-url"
                 data-l10n-name="review-quality-url"
+                target="_blank"
+                href="${window.RPMGetFormatURLPref(
+                  "app.support.baseURL"
+                )}review-checker-review-quality?as=u&utm_source=inproduct&utm_campaign=learn-more&utm_term=core-sidebar"
               ></a>
             </p>
           </div>

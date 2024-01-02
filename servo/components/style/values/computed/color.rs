@@ -4,13 +4,13 @@
 
 //! Computed color values.
 
+use crate::color::parsing::Color as CSSParserColor;
 use crate::color::AbsoluteColor;
 use crate::values::animated::ToAnimatedZero;
 use crate::values::computed::percentage::Percentage;
 use crate::values::generics::color::{
     GenericCaretColor, GenericColor, GenericColorMix, GenericColorOrAuto,
 };
-use crate::color::parsing::Color as CSSParserColor;
 use std::fmt;
 use style_traits::{CssWriter, ToCss};
 
@@ -18,9 +18,6 @@ pub use crate::values::specified::color::{ColorScheme, ForcedColorAdjust, PrintC
 
 /// The computed value of the `color` property.
 pub type ColorPropertyValue = AbsoluteColor;
-
-/// The computed value of `-moz-font-smoothing-background-color`.
-pub type MozFontSmoothingBackgroundColor = AbsoluteColor;
 
 /// A computed value for `<color>`.
 pub type Color = GenericColor<Percentage>;

@@ -85,7 +85,8 @@ struct ChannelMarker {
     using MS = MarkerSchema;
     MS schema(MS::Location::MarkerChart, MS::Location::MarkerTable);
     schema.SetTableLabel("{marker.name} - {marker.data.url}");
-    schema.AddKeyFormat("url", MS::Format::Url);
+    schema.AddKeyFormatSearchable("url", MS::Format::Url,
+                                  MS::Searchable::Searchable);
     schema.AddStaticLabelValue(
         "Description",
         "Timestamp capturing various phases of a network channel's lifespan.");
@@ -1333,7 +1334,7 @@ HttpChannelParent::OnStartRequest(nsIRequest* aRequest) {
       !mBgParent->OnStartRequest(
           *responseHead, useResponseHead,
           cleanedUpRequest ? cleanedUpRequestHeaders : requestHead->Headers(),
-          args, altDataSource)) {
+          args, altDataSource, chan->GetOnStartRequestStartTime())) {
     rv = NS_ERROR_UNEXPECTED;
   }
   requestHead->Exit();
@@ -1382,8 +1383,10 @@ HttpChannelParent::OnStopRequest(nsIRequest* aRequest, nsresult aStatusCode) {
   nsTArray<ConsoleReportCollected> consoleReports;
 
   RefPtr<HttpBaseChannel> httpChannel = do_QueryObject(mChannel);
+  TimeStamp onStopRequestStart;
   if (httpChannel) {
     httpChannel->StealConsoleReports(consoleReports);
+    onStopRequestStart = httpChannel->GetOnStopRequestStartTime();
   }
 
   // Either IPC channel is closed or background channel
@@ -1404,7 +1407,7 @@ HttpChannelParent::OnStopRequest(nsIRequest* aRequest, nsresult aStatusCode) {
       !mBgParent->OnStopRequest(
           aStatusCode, GetTimingAttributes(mChannel),
           responseTrailer ? *responseTrailer : nsHttpHeaderArray(),
-          consoleReports)) {
+          consoleReports, onStopRequestStart)) {
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -1498,10 +1501,12 @@ HttpChannelParent::OnDataAvailable(nsIRequest* aRequest,
 
   nsresult transportStatus = NS_NET_STATUS_RECEIVING_FROM;
   RefPtr<nsHttpChannel> httpChannelImpl = do_QueryObject(mChannel);
+  TimeStamp onDataAvailableStart = TimeStamp::Now();
   if (httpChannelImpl) {
     if (httpChannelImpl->IsReadingFromCache()) {
       transportStatus = NS_NET_STATUS_READING;
     }
+    onDataAvailableStart = httpChannelImpl->GetDataAvailableStartTime();
   }
 
   nsCString data;
@@ -1516,7 +1521,7 @@ HttpChannelParent::OnDataAvailable(nsIRequest* aRequest,
 
   if (mIPCClosed || !mBgParent ||
       !mBgParent->OnTransportAndData(channelStatus, transportStatus, aOffset,
-                                     aCount, data)) {
+                                     aCount, data, onDataAvailableStart)) {
     return NS_ERROR_UNEXPECTED;
   }
 

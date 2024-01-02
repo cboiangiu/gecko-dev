@@ -3,7 +3,6 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { GeckoViewModule } from "resource://gre/modules/GeckoViewModule.sys.mjs";
-import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -22,10 +21,14 @@ export class GeckoViewContent extends GeckoViewModule {
       "GeckoView:RestoreState",
       "GeckoView:ContainsFormData",
       "GeckoView:RequestCreateAnalysis",
+      "GeckoView:RequestAnalysisStatus",
       "GeckoView:RequestAnalysisCreationStatus",
       "GeckoView:PollForAnalysisCompleted",
+      "GeckoView:SendClickAttributionEvent",
+      "GeckoView:SendImpressionAttributionEvent",
       "GeckoView:RequestAnalysis",
       "GeckoView:RequestRecommendations",
+      "GeckoView:ReportBackInStock",
       "GeckoView:ScrollBy",
       "GeckoView:ScrollTo",
       "GeckoView:SetActive",
@@ -130,6 +133,39 @@ export class GeckoViewContent extends GeckoViewModule {
     }
   }
 
+  #sendDOMFullScreenEventToAllChildren(aEvent) {
+    let { browsingContext } = this.actor;
+
+    while (browsingContext) {
+      if (!browsingContext.currentWindowGlobal) {
+        break;
+      }
+
+      const currentPid = browsingContext.currentWindowGlobal.osPid;
+      const parentPid = browsingContext.parent?.currentWindowGlobal.osPid;
+
+      if (currentPid != parentPid) {
+        if (!browsingContext.parent) {
+          // Top level browsing context. Use origin actor (Bug 1505916).
+          const chromeBC = browsingContext.topChromeWindow?.browsingContext;
+          const requestOrigin = chromeBC?.fullscreenRequestOrigin?.get();
+          if (requestOrigin) {
+            requestOrigin.browsingContext.currentWindowGlobal
+              .getActor("GeckoViewContent")
+              .sendAsyncMessage(aEvent, {});
+            delete chromeBC.fullscreenRequestOrigin;
+            return;
+          }
+        }
+        const actor =
+          browsingContext.currentWindowGlobal.getActor("GeckoViewContent");
+        actor.sendAsyncMessage(aEvent, {});
+      }
+
+      browsingContext = browsingContext.parent;
+    }
+  }
+
   // Bundle event handler.
   onEvent(aEvent, aData, aCallback) {
     debug`onEvent: event=${aEvent}, data=${aData}`;
@@ -207,14 +243,26 @@ export class GeckoViewContent extends GeckoViewModule {
       case "GeckoView:RequestCreateAnalysis":
         this._requestCreateAnalysis(aData, aCallback);
         break;
+      case "GeckoView:RequestAnalysisStatus":
+        this._requestAnalysisStatus(aData, aCallback);
+        break;
       case "GeckoView:RequestAnalysisCreationStatus":
         this._requestAnalysisCreationStatus(aData, aCallback);
         break;
       case "GeckoView:PollForAnalysisCompleted":
         this._pollForAnalysisCompleted(aData, aCallback);
         break;
+      case "GeckoView:SendClickAttributionEvent":
+        this._sendAttributionEvent("click", aData, aCallback);
+        break;
+      case "GeckoView:SendImpressionAttributionEvent":
+        this._sendAttributionEvent("impression", aData, aCallback);
+        break;
       case "GeckoView:RequestRecommendations":
         this._requestRecommendations(aData, aCallback);
+        break;
+      case "GeckoView:ReportBackInStock":
+        this._reportBackInStock(aData, aCallback);
         break;
       case "GeckoView:IsPdfJs":
         aCallback.onSuccess(this.isPdfJs);
@@ -245,11 +293,15 @@ export class GeckoViewContent extends GeckoViewModule {
       case "MozDOMFullscreen:Entered":
         if (this.browser == aEvent.target) {
           // Remote browser; dispatch to content process.
-          this.sendToAllChildren("GeckoView:DOMFullscreenEntered");
+          this.#sendDOMFullScreenEventToAllChildren(
+            "GeckoView:DOMFullscreenEntered"
+          );
         }
         break;
       case "MozDOMFullscreen:Exited":
-        this.sendToAllChildren("GeckoView:DOMFullscreenExited");
+        this.#sendDOMFullScreenEventToAllChildren(
+          "GeckoView:DOMFullscreenExited"
+        );
         break;
       case "pagetitlechanged":
         this.eventDispatcher.sendRequest({
@@ -333,8 +385,23 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestAnalysis(aData, aCallback) {
-    if (!AppConstants.NIGHTLY_BUILD) {
-      aCallback.onError(`This API enabled for Nightly builds only.`);
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const analysis = {
+        analysis_url: "https://www.example.com/mock_analysis_url",
+        product_id: "ABCDEFG123",
+        grade: "B",
+        adjusted_rating: 4.5,
+        needs_analysis: true,
+        page_not_supported: true,
+        not_enough_reviews: true,
+        highlights: null,
+        last_analysis_time: 12345,
+        deleted_product_reported: true,
+        deleted_product: true,
+      };
+      aCallback.onSuccess({ analysis });
       return;
     }
     const url = Services.io.newURI(aData.url);
@@ -352,8 +419,11 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestCreateAnalysis(aData, aCallback) {
-    if (!AppConstants.NIGHTLY_BUILD) {
-      aCallback.onError(`This API enabled for Nightly builds only.`);
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const status = "pending";
+      aCallback.onSuccess(status);
       return;
     }
     const url = Services.io.newURI(aData.url);
@@ -371,8 +441,11 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestAnalysisCreationStatus(aData, aCallback) {
-    if (!AppConstants.NIGHTLY_BUILD) {
-      aCallback.onError(`This API enabled for Nightly builds only.`);
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const status = "in_progress";
+      aCallback.onSuccess(status);
       return;
     }
     const url = Services.io.newURI(aData.url);
@@ -393,11 +466,29 @@ export class GeckoViewContent extends GeckoViewModule {
     }
   }
 
-  async _pollForAnalysisCompleted(aData, aCallback) {
-    if (!AppConstants.NIGHTLY_BUILD) {
-      aCallback.onError(`This API enabled for Nightly builds only.`);
+  async _requestAnalysisStatus(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const status = { status: "in_progress", progress: 90.9 };
+      aCallback.onSuccess({ status });
       return;
     }
+    const url = Services.io.newURI(aData.url);
+    if (!lazy.isProductURL(url)) {
+      aCallback.onError(`Cannot requestAnalysisStatus on a non-product url.`);
+    } else {
+      const product = new lazy.ShoppingProduct(url);
+      const status = await product.requestAnalysisCreationStatus();
+      if (!status) {
+        aCallback.onError(`Status of product analysis returned null.`);
+        return;
+      }
+      aCallback.onSuccess({ status });
+    }
+  }
+
+  async _pollForAnalysisCompleted(aData, aCallback) {
     const url = Services.io.newURI(aData.url);
     if (!lazy.isProductURL(url)) {
       aCallback.onError(
@@ -416,9 +507,45 @@ export class GeckoViewContent extends GeckoViewModule {
     }
   }
 
+  async _sendAttributionEvent(aEvent, aData, aCallback) {
+    let result;
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      result = { TEST_AID: "TEST_AID_RESPONSE" };
+    } else {
+      result = await lazy.ShoppingProduct.sendAttributionEvent(
+        aEvent,
+        aData.aid,
+        "geckoview_android"
+      );
+    }
+    if (!result || !(aData.aid in result) || !result[aData.aid]) {
+      aCallback.onSuccess(false);
+      return;
+    }
+    aCallback.onSuccess(true);
+  }
+
   async _requestRecommendations(aData, aCallback) {
-    if (!AppConstants.NIGHTLY_BUILD) {
-      aCallback.onError(`This API enabled for Nightly builds only.`);
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const recommendations = [
+        {
+          name: "Mock Product",
+          url: "https://example.com/mock_url",
+          image_url: "https://example.com/mock_image_url",
+          price: "450",
+          currency: "USD",
+          grade: "C",
+          adjusted_rating: 3.5,
+          analysis_url: "https://example.com/mock_analysis_url",
+          sponsored: true,
+          aid: "mock_aid",
+        },
+      ];
+      aCallback.onSuccess({ recommendations });
       return;
     }
     const url = Services.io.newURI(aData.url);
@@ -432,6 +559,28 @@ export class GeckoViewContent extends GeckoViewModule {
         return;
       }
       aCallback.onSuccess({ recommendations });
+    }
+  }
+
+  async _reportBackInStock(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const message = "report created";
+      aCallback.onSuccess(message);
+      return;
+    }
+    const url = Services.io.newURI(aData.url);
+    if (!lazy.isProductURL(url)) {
+      aCallback.onError(`Cannot reportBackInStock on a non-product url.`);
+    } else {
+      const product = new lazy.ShoppingProduct(url);
+      const message = await product.sendReport();
+      if (!message) {
+        aCallback.onError(`Reporting back in stock returned null.`);
+        return;
+      }
+      aCallback.onSuccess(message.message);
     }
   }
 

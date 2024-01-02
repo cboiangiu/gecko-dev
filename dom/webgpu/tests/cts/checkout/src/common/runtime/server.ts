@@ -14,7 +14,7 @@ import { parseQuery } from '../internal/query/parseQuery.js';
 import { TestQueryWithExpectation } from '../internal/query/query.js';
 import { TestTreeLeaf } from '../internal/tree.js';
 import { Colors } from '../util/colors.js';
-import { setGPUProvider } from '../util/navigator_gpu.js';
+import { setDefaultRequestAdapterOptions, setGPUProvider } from '../util/navigator_gpu.js';
 
 import sys from './helper/sys.js';
 
@@ -23,6 +23,7 @@ function usage(rc: number): never {
   tools/run_${sys.type} [OPTIONS...]
 Options:
   --colors                  Enable ANSI colors in output.
+  --compat                  Run tests in compatibility mode.
   --coverage                Add coverage data to each result.
   --data                    Path to the data cache directory.
   --verbose                 Print result/log of every test as it runs.
@@ -84,6 +85,8 @@ for (let i = 0; i < sys.args.length; ++i) {
   if (a.startsWith('-')) {
     if (a === '--colors') {
       Colors.enabled = true;
+    } else if (a === '--compat') {
+      globalTestConfig.compatibility = true;
     } else if (a === '--coverage') {
       emitCoverage = true;
     } else if (a === '--data') {
@@ -100,12 +103,17 @@ for (let i = 0; i < sys.args.length; ++i) {
     } else if (a === '--verbose') {
       verbose = true;
     } else {
-      console.log(`unrecognised flag: ${a}`);
+      console.log(`unrecognized flag: ${a}`);
     }
   }
 }
 
 let codeCoverage: CodeCoverageProvider | undefined = undefined;
+
+if (globalTestConfig.compatibility) {
+  // MAINTENANCE_TODO: remove the cast once compatibilityMode is officially added
+  setDefaultRequestAdapterOptions({ compatibilityMode: true } as GPURequestAdapterOptions);
+}
 
 if (gpuProviderModule) {
   setGPUProvider(() => gpuProviderModule!.create(gpuProviderFlags));
@@ -125,8 +133,8 @@ Did you remember to build with code coverage instrumentation enabled?`
 if (dataPath !== undefined) {
   dataCache.setStore({
     load: (path: string) => {
-      return new Promise<string>((resolve, reject) => {
-        fs.readFile(`${dataPath}/${path}`, 'utf8', (err, data) => {
+      return new Promise<Uint8Array>((resolve, reject) => {
+        fs.readFile(`${dataPath}/${path}`, (err, data) => {
           if (err !== null) {
             reject(err.message);
           } else {
@@ -141,6 +149,7 @@ if (verbose) {
   dataCache.setDebugLogger(console.log);
 }
 
+// eslint-disable-next-line @typescript-eslint/require-await
 (async () => {
   Logger.globalDebugMode = verbose;
   const log = new Logger();

@@ -1,22 +1,22 @@
 # Targeting attributes
 
-When you create ASRouter messages such as snippets, contextual feature recommendations, or onboarding cards, you may choose to include **targeting information** with those messages.
+When you create ASRouter messages such as contextual feature recommendations or onboarding cards, you may choose to include **targeting information** with those messages.
 
 Targeting information must be captured in [an expression](./targeting-guide.md) that has access to the following attributes. You may combine and compare any of these attributes as needed.
 
-Please note that some targeting attributes require stricter controls on the telemetry than can be colleted, so when in doubt, ask for review.
+Please note that some targeting attributes require stricter controls on the telemetry than can be collected, so when in doubt, ask for review.
 
 ## Available attributes
 
 * [activeNotifications](#activenotifications)
 * [addonsInfo](#addonsinfo)
 * [addressesSaved](#addressessaved)
+* [archBits](#archbits)
 * [attachedFxAOAuthClients](#attachedfxaoauthclients)
 * [attributionData](#attributiondata)
 * [backgroundTaskName](#backgroundtaskname)
 * [blockedCountByType](#blockedcountbytype)
 * [browserSettings](#browsersettings)
-* [colorwaysActive](#colorwaysActive)
 * [creditCardsSaved](#creditcardssaved)
 * [currentDate](#currentdate)
 * [defaultPDFHandler](#defaultpdfhandler)
@@ -45,14 +45,17 @@ Please note that some targeting attributes require stricter controls on the tele
 * [isMajorUpgrade](#ismajorupgrade)
 * [isRTAMO](#isrtamo)
 * [isWhatsNewPanelEnabled](#iswhatsnewpanelenabled)
+* [launchOnLoginEnabled](#launchonloginenabled)
 * [locale](#locale)
 * [localeLanguageCode](#localelanguagecode)
+* [memoryMB](#memorymb)
 * [messageImpressions](#messageimpressions)
 * [needsUpdate](#needsupdate)
 * [newtabSettings](#newtabsettings)
 * [pinnedSites](#pinnedsites)
 * [platformName](#platformname)
 * [previousSessionEnd](#previoussessionend)
+* [primaryResolution](#primaryresolution)
 * [profileAgeCreated](#profileagecreated)
 * [profileAgeReset](#profileagereset)
 * [profileRestartCount](#profilerestartcount)
@@ -65,11 +68,10 @@ Please note that some targeting attributes require stricter controls on the tele
 * [topFrecentSites](#topfrecentsites)
 * [totalBlockedCount](#totalblockedcount)
 * [totalBookmarksCount](#totalbookmarkscount)
-* [userEnabledActiveColorway](#userEnabledActiveColorway)
 * [userId](#userid)
 * [userMonthlyActivity](#usermonthlyactivity)
 * [userPrefersReducedMotion](#userprefersreducedmotion)
-* [useEmbeddedMigrationWizard][#useembeddedmigrationwizard]
+* [useEmbeddedMigrationWizard](#useembeddedmigrationwizard)
 * [userPrefs](#userprefs)
 * [usesFirefoxSync](#usesfirefoxsync)
 * [xpinstallEnabled](#xpinstallEnabled)
@@ -287,6 +289,14 @@ firefoxVersion > 63
 declare const firefoxVersion: number;
 ```
 
+### `launchOnLoginEnabled`
+
+Is the launch on login option enabled?
+
+```ts
+declare const launchOnLoginEnabled: boolean;
+```
+
 ### `locale`
 The current locale of the browser including country code, e.g. `en-US`.
 
@@ -362,6 +372,19 @@ declare const previousSessionEnd: UnixEpochNumber;
 type UnixEpochNumber = number;
 ```
 
+### `primaryResolution`
+
+An object containing the available width and available height of the primary monitor in pixel values. The values take into account the existence of docks and task bars.
+
+#### Definition
+
+```ts
+interface primaryResolution {
+  width: number;
+  height: number;
+}
+```
+
 ### `profileAgeCreated`
 
 The date the profile was created as a UNIX Epoch timestamp.
@@ -398,9 +421,9 @@ type UnixEpochNumber = number;
 Information about cohort settings (from prefs, including shield studies) for each provider.
 
 #### Examples
-* Is the user in the "foo_test" cohort for snippets?
+* Is the user in the "foo_test" cohort for cfr?
 ```java
-providerCohorts.snippets == "foo_test"
+providerCohorts.cfr == "foo_test"
 ```
 
 #### Definition
@@ -567,6 +590,16 @@ addressesSaved > 1
 declare const addressesSaved: Promise<number>
 ```
 
+### `archBits`
+
+The number of bits used to represent a pointer in this build.
+
+#### Definition
+
+```ts
+declare const archBits: number;
+```
+
 ### `xpinstallEnabled`
 
 Pref used by system administrators to disallow add-ons from installed altogether.
@@ -648,7 +681,6 @@ userPrefs.cfrFeatures == false
 declare const userPrefs: {
   cfrFeatures: boolean;
   cfrAddons: boolean;
-  snippets: boolean;
 }
 ```
 
@@ -687,6 +719,16 @@ declare const attachedFxAOAuthClients: Promise<OAuthClient[]>
 
 ```
 declare const platformName = "linux" | "win" | "macosx" | "android" | "other";
+```
+
+### `memoryMB`
+
+The amount of RAM available to Firefox, in megabytes.
+
+#### Definition
+
+```ts
+declare const memoryMB = number;
 ```
 
 ### `messageImpressions`

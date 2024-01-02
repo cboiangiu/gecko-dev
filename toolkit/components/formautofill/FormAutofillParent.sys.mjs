@@ -524,7 +524,7 @@ export class FormAutofillParent extends JSWindowActorParent {
       { ignoreInvalid: true }
     );
 
-    let mergeableRecord = null;
+    let oldRecord = {};
     let mergeableFields = [];
 
     // Exams all stored record to determine whether to show the prompt or not.
@@ -562,7 +562,7 @@ export class FormAutofillParent extends JSWindowActorParent {
           .filter(v => ["superset", "similar"].includes(v[1]))
           .map(v => v[0]);
         if (!mergeableFields.length || mergeableFields.length > fields.length) {
-          mergeableRecord = record;
+          oldRecord = record;
           mergeableFields = fields;
         }
       }
@@ -575,13 +575,25 @@ export class FormAutofillParent extends JSWindowActorParent {
       return false;
     }
 
+    // Do not save address for regions that we don't support
+    if (
+      FormAutofill._isAutofillAddressesAvailable == "detect" &&
+      !FormAutofill.isAutofillAddressesAvailableInCountry(
+        newAddress.record.country
+      )
+    ) {
+      lazy.log.debug(
+        "Do not show the capture prompt for an unsupported region"
+      );
+      return false;
+    }
+
     return async () => {
       await lazy.FormAutofillPrompter.promptToSaveAddress(
         browser,
         storage,
-        newAddress.record,
         address.flowId,
-        { mergeableRecord, mergeableFields }
+        { oldRecord, newRecord: newAddress.record }
       );
     };
   }
@@ -610,12 +622,16 @@ export class FormAutofillParent extends JSWindowActorParent {
       return false;
     }
 
+    // Overwrite the guid if there is a duplicate
+    const duplicateRecord =
+      (await storage.getDuplicateRecords(creditCard.record).next()).value ?? {};
+
     return async () => {
       await lazy.FormAutofillPrompter.promptToSaveCreditCard(
         browser,
         storage,
-        creditCard.record,
-        creditCard.flowId
+        creditCard.flowId,
+        { oldRecord: duplicateRecord, newRecord: creditCard.record }
       );
     };
   }

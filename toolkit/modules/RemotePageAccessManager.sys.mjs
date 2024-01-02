@@ -123,9 +123,6 @@ export let RemotePageAccessManager = {
       RPMSendAsyncMessage: ["ActivityStream:ContentToMain"],
       RPMAddMessageListener: ["ActivityStream:MainToContent"],
     },
-    "about:plugins": {
-      RPMSendQuery: ["RequestPlugins"],
-    },
     "about:pocket-saved": {
       RPMSendAsyncMessage: ["*"],
       RPMAddMessageListener: ["*"],
@@ -158,7 +155,6 @@ export let RemotePageAccessManager = {
       ],
       RPMSendQuery: [
         "IsPromoBlocked",
-        "ShouldShowSearch",
         "ShouldShowSearchBanner",
         "ShouldShowPromo",
         "SpecialMessageActionDispatch",
@@ -199,6 +195,7 @@ export let RemotePageAccessManager = {
       RPMGetBoolPref: [
         "browser.contentblocking.report.lockwise.enabled",
         "browser.contentblocking.report.monitor.enabled",
+        "privacy.fingerprintingProtection",
         "privacy.socialtracking.block_cookies.enabled",
         "browser.contentblocking.report.proxy.enabled",
         "privacy.trackingprotection.cryptomining.enabled",

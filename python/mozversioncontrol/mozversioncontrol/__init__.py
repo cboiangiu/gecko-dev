@@ -95,7 +95,7 @@ class Repository(object):
     def __exit__(self, exc_type, exc_value, exc_tb):
         pass
 
-    def _run(self, *args, **runargs):
+    def _run(self, *args, encoding="utf-8", **runargs):
         return_codes = runargs.get("return_codes", [])
 
         cmd = (str(self._tool),) + args
@@ -108,7 +108,10 @@ class Repository(object):
         else:
             try:
                 return subprocess.check_output(
-                    cmd, cwd=self.path, env=self._env, universal_newlines=True
+                    cmd,
+                    cwd=self.path,
+                    env=self._env,
+                    encoding=encoding,
                 )
             except subprocess.CalledProcessError as e:
                 if e.returncode in return_codes:
@@ -684,10 +687,35 @@ class GitRepository(Repository):
     def head_ref(self):
         return self._run("rev-parse", "HEAD").strip()
 
+    def get_mozilla_upstream_remote(self) -> Optional[str]:
+        """Return the Mozilla-official upstream remote for this repo."""
+        out = self._run("remote", "-v")
+        if not out:
+            return None
+
+        remotes = out.splitlines()
+        if not remotes:
+            return None
+
+        # Prefer mozilla-unified, then find any other official-looking remote next.
+        for upstream in ("hg.mozilla.org/mozilla-unified", "hg.mozilla.org"):
+            for line in remotes:
+                name, url, action = line.split()
+
+                if upstream in url:
+                    return name
+
+        return None
+
     @property
     def base_ref(self):
+        official_remote = self.get_mozilla_upstream_remote()
+
+        # Limit remotes to official Firefox repos where possible.
+        remote_arg = f"--remotes={official_remote}" if official_remote else "--remotes"
+
         refs = self._run(
-            "rev-list", "HEAD", "--topo-order", "--boundary", "--not", "--remotes"
+            "rev-list", "HEAD", "--topo-order", "--boundary", "--not", remote_arg
         ).splitlines()
         if refs:
             return refs[-1][1:]  # boundary starts with a prefix `-`
@@ -859,7 +887,9 @@ class GitRepository(Repository):
     def get_commit_patches(self, nodes: List[str]) -> List[bytes]:
         """Return the contents of the patch `node` in the VCS' standard format."""
         return [
-            self._run("format-patch", node, "-1", "--stdout").encode("utf-8")
+            self._run("format-patch", node, "-1", "--always", "--stdout").encode(
+                "utf-8"
+            )
             for node in nodes
         ]
 

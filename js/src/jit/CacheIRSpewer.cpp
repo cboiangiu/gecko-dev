@@ -16,7 +16,7 @@
 #  include "jsapi.h"
 #  include "jsmath.h"
 
-#  include "js/ColumnNumber.h"  // JS::LimitedColumnNumberZeroOrigin
+#  include "js/ColumnNumber.h"  // JS::LimitedColumnNumberOneOrigin
 #  include "js/ScalarType.h"    // js::Scalar::Type
 #  include "util/GetPidProvider.h"
 #  include "util/Text.h"
@@ -114,6 +114,10 @@ class MOZ_RAII CacheIROpsJitSpewer {
   }
   void spewCompletionKindImm(const char* name, CompletionKind kind) {
     out_.printf("%s CompletionKind(%u)", name, unsigned(kind));
+  }
+  void spewRealmFuseIndexImm(const char* name, RealmFuses::FuseIndex index) {
+    out_.printf("%s RealmFuseIndex(%u=%s)", name, unsigned(index),
+                RealmFuses::getFuseName(index));
   }
 
  public:
@@ -247,6 +251,9 @@ class MOZ_RAII CacheIROpsJSONSpewer {
   void spewGuardClassKindImm(const char* name, GuardClassKind kind) {
     spewArgImpl(name, "Imm", unsigned(kind));
   }
+  void spewRealmFuseIndexImm(const char* name, RealmFuses::FuseIndex kind) {
+    spewArgImpl(name, "Imm", unsigned(kind));
+  }
   void spewWasmValTypeImm(const char* name, wasm::ValType::Kind kind) {
     spewArgImpl(name, "Imm", unsigned(kind));
   }
@@ -341,9 +348,9 @@ void CacheIRSpewer::beginCache(const IRGenerator& gen) {
   j.property("file", filename ? filename : "null");
   j.property("mode", int(gen.mode_));
   if (jsbytecode* pc = gen.pc_) {
-    JS::LimitedColumnNumberZeroOrigin column;
+    JS::LimitedColumnNumberOneOrigin column;
     j.property("line", PCToLineNumber(gen.script_, pc, &column));
-    j.property("column", column.zeroOriginValue());
+    j.property("column", column.oneOriginValue());
     j.formatProperty("pc", "%p", pc);
   }
 }
@@ -374,7 +381,7 @@ void CacheIRSpewer::valueProperty(const char* name, const Value& v) {
     j.formatProperty("value", "%p (shape: %p)", &object, object.shape());
 
     if (object.is<JSFunction>()) {
-      if (JSAtom* name = object.as<JSFunction>().displayAtom()) {
+      if (JSAtom* name = object.as<JSFunction>().maybePartialDisplayAtom()) {
         j.property("funName", name);
       }
     }

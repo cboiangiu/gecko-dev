@@ -172,7 +172,7 @@ class LitVal {
   Cell cell_;
 
  public:
-  LitVal() : type_(ValType()), cell_{} {}
+  LitVal() = default;
 
   explicit LitVal(ValType type) : type_(type) {
     switch (type.kind()) {
@@ -259,7 +259,7 @@ WASM_DECLARE_CACHEABLE_POD(LitVal::Cell);
 
 class MOZ_NON_PARAM Val : public LitVal {
  public:
-  Val() : LitVal() {}
+  Val() = default;
   explicit Val(ValType type) : LitVal(type) {}
   explicit Val(const LitVal& val);
   explicit Val(uint32_t i32) : LitVal(i32) {}
@@ -448,10 +448,13 @@ extern bool ToJSValue(JSContext* cx, const void* src, FieldType type,
                       MutableHandleValue dst,
                       CoercionLevel level = CoercionLevel::Spec);
 template <typename Debug = NoDebug>
+extern bool ToJSValueMayGC(FieldType type);
+template <typename Debug = NoDebug>
 extern bool ToJSValue(JSContext* cx, const void* src, ValType type,
                       MutableHandleValue dst,
                       CoercionLevel level = CoercionLevel::Spec);
-
+template <typename Debug = NoDebug>
+extern bool ToJSValueMayGC(ValType type);
 }  // namespace wasm
 
 template <>

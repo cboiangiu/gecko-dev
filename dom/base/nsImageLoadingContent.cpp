@@ -55,6 +55,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/intl/LocaleService.h"
 #include "mozilla/intl/Locale.h"
+#include "mozilla/dom/LargestContentfulPaint.h"
 #include "mozilla/net/UrlClassifierFeatureFactory.h"
 #include "mozilla/widget/TextRecognition.h"
 
@@ -254,9 +255,11 @@ void nsImageLoadingContent::OnLoadComplete(imgIRequest* aRequest,
     FireEvent(u"error"_ns);
   }
 
-  SVGObserverUtils::InvalidateDirectRenderingObservers(
-      AsContent()->AsElement());
+  Element* element = AsContent()->AsElement();
+  SVGObserverUtils::InvalidateDirectRenderingObservers(element);
   MaybeResolveDecodePromises();
+  LargestContentfulPaint::MaybeProcessImageForElementTiming(mCurrentRequest,
+                                                            element);
 }
 
 void nsImageLoadingContent::OnUnlockedDraw() {
@@ -347,8 +350,7 @@ already_AddRefed<Promise> nsImageLoadingContent::QueueDecodeAsync(
    public:
     QueueDecodeTask(nsImageLoadingContent* aOwner, Promise* aPromise,
                     uint32_t aRequestGeneration)
-        : MicroTaskRunnable(),
-          mOwner(aOwner),
+        : mOwner(aOwner),
           mPromise(aPromise),
           mRequestGeneration(aRequestGeneration) {}
 
@@ -1851,7 +1853,7 @@ nsLoadFlags nsImageLoadingContent::LoadFlags() {
   auto* image = HTMLImageElement::FromNode(AsContent());
   if (image && image->OwnerDoc()->IsScriptEnabled() &&
       !image->OwnerDoc()->IsStaticDocument() &&
-      image->LoadingState() == HTMLImageElement::Loading::Lazy) {
+      image->LoadingState() == Element::Loading::Lazy) {
     // Note that LOAD_BACKGROUND is not about priority of the load, but about
     // whether it blocks the load event (by bypassing the loadgroup).
     return nsIRequest::LOAD_BACKGROUND;

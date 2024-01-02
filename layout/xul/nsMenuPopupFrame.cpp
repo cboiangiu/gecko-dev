@@ -369,19 +369,20 @@ bool nsMenuPopupFrame::IsMouseTransparent() const {
   return ::IsMouseTransparent(*Style());
 }
 
-StyleWindowShadow nsMenuPopupFrame::GetShadowStyle() const {
+WindowShadow nsMenuPopupFrame::GetShadowStyle() const {
   StyleWindowShadow shadow = StyleUIReset()->mWindowShadow;
-  if (shadow != StyleWindowShadow::Default) {
-    return shadow;
+  if (shadow != StyleWindowShadow::Auto) {
+    MOZ_ASSERT(shadow == StyleWindowShadow::None);
+    return WindowShadow::None;
   }
 
   switch (StyleDisplay()->EffectiveAppearance()) {
     case StyleAppearance::Tooltip:
-      return StyleWindowShadow::Tooltip;
+      return WindowShadow::Tooltip;
     case StyleAppearance::Menupopup:
-      return StyleWindowShadow::Menu;
+      return WindowShadow::Menu;
     default:
-      return StyleWindowShadow::Default;
+      return WindowShadow::Menu;
   }
 }
 
@@ -689,7 +690,7 @@ void nsMenuPopupFrame::LayoutPopup(nsPresContext* aPresContext,
     // If there are no transitions, fire the popupshown event right away.
     nsCOMPtr<nsIRunnable> event =
         new nsXULPopupShownEvent(GetContent(), aPresContext);
-    mContent->OwnerDoc()->Dispatch(TaskCategory::Other, event.forget());
+    mContent->OwnerDoc()->Dispatch(event.forget());
   }
 }
 
@@ -991,10 +992,10 @@ void nsMenuPopupFrame::ShowPopup(bool aIsContextMenu) {
       menu->PopupOpened();
     }
 
-    // do we need an actual reflow here?
-    // is SetPopupPosition all that is needed?
-    PresShell()->FrameNeedsReflow(this, IntrinsicDirty::FrameAndAncestors,
-                                  NS_FRAME_IS_DIRTY);
+    // We skip laying out children if we're closed, so make sure that we do a
+    // full dirty reflow when opening to pick up any potential change.
+    PresShell()->FrameNeedsReflow(
+        this, IntrinsicDirty::FrameAncestorsAndDescendants, NS_FRAME_IS_DIRTY);
 
     if (mPopupType == PopupType::Menu) {
       nsCOMPtr<nsISound> sound(do_GetService("@mozilla.org/sound;1"));

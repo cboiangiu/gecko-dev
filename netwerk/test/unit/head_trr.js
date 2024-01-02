@@ -146,7 +146,7 @@ class TRRDNSListener {
         this.additionalInfo,
         this,
         currentThread,
-        {} // defaultOriginAttributes
+        this.options.originAttributes || {} // defaultOriginAttributes
       );
       Assert.ok(!this.options.expectEarlyFail, "asyncResolve ok");
     } catch (e) {
@@ -239,6 +239,44 @@ class TRRDNSListener {
       {}
     );
   }
+}
+
+// This is for reteriiving the raw bytes from a DNS answer.
+function answerHandler(req, resp) {
+  let searchParams = new URL(req.url, "http://example.com").searchParams;
+  console.log("req.searchParams:" + searchParams);
+  if (!searchParams.get("host")) {
+    resp.writeHead(400);
+    resp.end("Missing search parameter");
+    return;
+  }
+
+  function processRequest(req1, resp1) {
+    let domain = searchParams.get("host");
+    let type = searchParams.get("type");
+    let response = global.dns_query_answers[`${domain}/${type}`] || {};
+    let buf = global.dnsPacket.encode({
+      type: "response",
+      id: 0,
+      flags: 0,
+      questions: [],
+      answers: response.answers || [],
+      additionals: response.additionals || [],
+    });
+    let writeResponse = (resp2, buf2, context) => {
+      try {
+        let data = buf2.toString("hex");
+        resp2.setHeader("Content-Length", data.length);
+        resp2.writeHead(200, { "Content-Type": "plain/text" });
+        resp2.write(data);
+        resp2.end("");
+      } catch (e) {}
+    };
+
+    writeResponse(resp1, buf, response);
+  }
+
+  processRequest(req, resp);
 }
 
 /// This is the default handler for /dns-query
@@ -364,6 +402,7 @@ class TRRServer extends NodeHTTP2Server {
       global.http2 = require("http2");
     })()`);
     await this.registerPathHandler("/dns-query", trrQueryHandler);
+    await this.registerPathHandler("/dnsAnswer", answerHandler);
     await this.execute(getRequestCount);
   }
 
@@ -421,21 +460,16 @@ class TRRProxyCode {
     });
   }
 
-  static proxySessionCount() {
-    if (!global.proxy) {
-      return 0;
-    }
-    return global.proxy.proxy_session_count;
+  static proxyRequestCount() {
+    return global.proxy_stream_count;
   }
 
   static setupProxy() {
     if (!global.proxy) {
       throw new Error("proxy is null");
     }
-    global.proxy.proxy_session_count = 0;
-    global.proxy.on("session", () => {
-      ++global.proxy.proxy_session_count;
-    });
+
+    global.proxy_stream_count = 0;
 
     // We need to track active connections so we can forcefully close keep-alive
     // connections when shutting down the proxy.
@@ -461,7 +495,7 @@ class TRRProxyCode {
         stream.end();
         return;
       }
-
+      global.proxy_stream_count++;
       const net = require("net");
       const socket = net.connect(global.endServerPort, "127.0.0.1", () => {
         try {
@@ -491,7 +525,6 @@ class TRRProxy {
     await this.execute(TRRProxyCode);
     this.port = await this.execute(`TRRProxyCode.startServer(${port})`);
     Assert.notEqual(this.port, null);
-    this.initial_session_count = 0;
   }
 
   // Executes a command in the context of the node server
@@ -507,11 +540,11 @@ class TRRProxy {
     }
   }
 
-  async proxy_session_counter() {
+  async request_count() {
     let data = await NodeServer.execute(
       this.processId,
-      `TRRProxyCode.proxySessionCount()`
+      `TRRProxyCode.proxyRequestCount()`
     );
-    return parseInt(data) - this.initial_session_count;
+    return parseInt(data);
   }
 }

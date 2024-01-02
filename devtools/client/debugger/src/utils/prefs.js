@@ -17,6 +17,7 @@ if (isNode()) {
   pref("devtools.debugger.auto-pretty-print", false);
   pref("devtools.source-map.client-service.enabled", true);
   pref("devtools.chrome.enabled", false);
+  pref("devtools.debugger.pause-on-debugger-statement", true);
   pref("devtools.debugger.pause-on-exceptions", false);
   pref("devtools.debugger.pause-on-caught-exceptions", false);
   pref("devtools.debugger.ignore-caught-exceptions", true);
@@ -44,6 +45,8 @@ if (isNode()) {
   pref("devtools.debugger.log-actions", true);
   pref("devtools.debugger.log-event-breakpoints", false);
   pref("devtools.debugger.javascript-tracing-log-method", "console");
+  pref("devtools.debugger.javascript-tracing-values", false);
+  pref("devtools.debugger.javascript-tracing-on-next-interaction", false);
   pref("devtools.debugger.hide-ignored-sources", false);
   pref("devtools.debugger.source-map-ignore-list-enabled", true);
   pref("devtools.debugger.features.wasm", true);
@@ -64,6 +67,7 @@ export const prefs = new PrefsHelper("devtools", {
   autoPrettyPrint: ["Bool", "debugger.auto-pretty-print"],
   clientSourceMapsEnabled: ["Bool", "source-map.client-service.enabled"],
   chromeAndExtensionsEnabled: ["Bool", "chrome.enabled"],
+  pauseOnDebuggerStatement: ["Bool", "debugger.pause-on-debugger-statement"],
   pauseOnExceptions: ["Bool", "debugger.pause-on-exceptions"],
   pauseOnCaughtExceptions: ["Bool", "debugger.pause-on-caught-exceptions"],
   ignoreCaughtExceptions: ["Bool", "debugger.ignore-caught-exceptions"],
@@ -101,6 +105,11 @@ export const prefs = new PrefsHelper("devtools", {
   javascriptTracingLogMethod: [
     "String",
     "debugger.javascript-tracing-log-method",
+  ],
+  javascriptTracingValues: ["Bool", "debugger.javascript-tracing-values"],
+  javascriptTracingOnNextInteraction: [
+    "Bool",
+    "debugger.javascript-tracing-on-next-interaction",
   ],
   hideIgnoredSources: ["Bool", "debugger.hide-ignored-sources"],
   sourceMapIgnoreListEnabled: [

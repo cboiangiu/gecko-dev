@@ -273,7 +273,7 @@ export class SearchOneOffs {
   }
 
   /**
-   * The selected one-off, a xul:button, including the add-engine button
+   * The selected one-off including the add-engine button
    * and the search-settings button.
    *
    * @param {DOMElement|null} val
@@ -285,7 +285,7 @@ export class SearchOneOffs {
       previousButton.removeAttribute("selected");
     }
     if (val) {
-      val.setAttribute("selected", "true");
+      val.toggleAttribute("selected", true);
     }
     this._selectedButton = val;
 
@@ -483,10 +483,10 @@ export class SearchOneOffs {
       let button = this.document.createXULElement("button");
       button.engine = engine;
       button.id = this._buttonIDForEngine(engine);
-      let iconURI =
-        engine.iconURI?.spec ||
+      let iconURL =
+        engine.getIconURL() ||
         "chrome://browser/skin/search-engine-placeholder.png";
-      button.setAttribute("image", iconURI);
+      button.setAttribute("image", iconURL);
       button.setAttribute("class", "searchbar-engine-one-off-item");
       button.setAttribute("tabindex", "-1");
       this.setTooltipForEngineButton(button);
@@ -1042,11 +1042,10 @@ export class SearchOneOffs {
         // Make the target button of the context menu reflect the current
         // search engine first. Doing this as opposed to rebuilding all the
         // one-off buttons avoids flicker.
-        let uri = "chrome://browser/skin/search-engine-placeholder.png";
-        if (currentEngine.iconURI) {
-          uri = currentEngine.iconURI.spec;
-        }
-        button.setAttribute("image", uri);
+        let iconURL =
+          currentEngine.getIconURL() ||
+          "chrome://browser/skin/search-engine-placeholder.png";
+        button.setAttribute("image", iconURL);
         button.setAttribute("tooltiptext", currentEngine.name);
         button.engine = currentEngine;
       }
